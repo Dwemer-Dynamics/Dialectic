@@ -7,6 +7,44 @@ NPC interaction.
 - `Mod/Data/`: deployable ESP, MCM, JIP script-runner, UI, and voice assets.
 - `docs/`: native-runtime migration and validation records.
 
+## Requirements
+
+### Game and Runtime
+
+- [Fallout: New Vegas](https://store.steampowered.com/app/22380/Fallout_New_Vegas/).
+  [Tale of Two Wastelands](https://taleoftwowastelands.com/) is supported but
+  is not required; `Dialectic.esp` only has `FalloutNV.esm` as a master.
+- [xNVSE 6.3.3 or newer](https://github.com/xNVSE/NVSE/releases).
+- [JIP LN NVSE Plugin 57 or newer](https://www.nexusmods.com/newvegas/mods/58277).
+- [JohnnyGuitar NVSE 5.17 or newer](https://www.nexusmods.com/newvegas/mods/66927).
+- [ITR NVSE 1.0.0 or newer](https://www.nexusmods.com/newvegas/mods/96922).
+  Dialectic uses its dialogue and sound events to capture and suppress vanilla
+  dialogue correctly while AI speech is playing.
+- [Microsoft Visual C++ 2015-2022 Redistributable (x86)](https://aka.ms/vs/17/release/vc_redist.x86.exe).
+  The 32-bit runtime is required even on 64-bit Windows.
+
+### MCM
+
+The in-game configuration menu and hotkey binding require the current versions
+of:
+
+- [The Mod Configuration Menu](https://www.nexusmods.com/newvegas/mods/42507).
+- [MCM Extender](https://www.nexusmods.com/newvegas/mods/93642).
+- [ShowOff xNVSE](https://www.nexusmods.com/newvegas/mods/72541) and
+  [UIO](https://www.nexusmods.com/newvegas/mods/57174), which are requirements
+  of MCM Extender.
+
+Install these framework mods before Dialectic. Hotkeys are unbound by default,
+so MCM is part of the supported installation rather than an optional convenience.
+
+### Server
+
+Dialectic requires a running, matching-version
+[DialecticServer](https://github.com/Dwemer-Dynamics/DialecticServer), normally
+installed and managed through DwemerDistro. The client can use launcher
+autodiscovery or a manually configured server address in
+`dialectic_custom.ini`.
+
 ## Build
 
 ```powershell
