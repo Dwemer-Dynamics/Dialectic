@@ -1,0 +1,11 @@
+float fValue
+int iMenu
+int iSubmenu
+int iOption
+array_var aJSON
+
+Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    SetINIIntC "Tools:SendVoiceSamples" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    PrintC "[Dialectic] Uploading Fallout voice samples"
+    DialecticSendAllVoiceSamples
+End

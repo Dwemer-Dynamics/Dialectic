@@ -1,0 +1,119 @@
+ref rItem
+ref rBase
+ref rCell
+ref rCrosshair
+ref rHeld
+
+string_var sName
+string_var sRefID
+string_var sBaseID
+string_var sCellID
+
+float fDistance
+
+int iCount
+int iBaseType
+int iLookingAt
+int iHolding
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
+        return
+    endif
+
+    if eval (FileExists "NVSE\\Plugins\\dialectic_action_request.tmp")
+        CallAfterSeconds 0.05 (CompileScript "Dialectic/ActionCommandTick.txt") 0
+    endif
+
+    let rCrosshair := GetCrosshairRef
+    let rHeld := GetPlayerGrabbedRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_items.tmp" 0 "source=nearby_items%r"
+
+    if eval rHeld && IsFormValid rHeld
+        let sName := GetName rHeld
+        let sBaseID := sv_Construct "Unknown"
+        let iBaseType := 0
+        let rBase := rHeld.GetBaseForm
+        if eval rBase && IsFormValid rBase
+            sv_Destruct sBaseID
+            let sBaseID := GetFormIDString rBase
+            let iBaseType := GetType rBase
+            if eval (sv_Length sName) <= 0
+                sv_Destruct sName
+                let sName := GetName rBase
+            endif
+        endif
+        if eval (sv_Length sName) > 0
+            let sRefID := GetFormIDString rHeld
+            let sCellID := sv_Construct "Unknown"
+
+            let rCell := rHeld.GetParentCell
+            if eval rCell && IsFormValid rCell
+                sv_Destruct sCellID
+                let sCellID := GetFormIDString rCell
+            endif
+
+            let fDistance := PlayerRef.GetDistance rHeld
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_items.tmp" 1 "held=%z^%z^%z^%g^%.2f^%z%r" sRefID sBaseID sName iBaseType fDistance sCellID
+
+            sv_Destruct sRefID
+            sv_Destruct sCellID
+        endif
+        sv_Destruct sBaseID
+        sv_Destruct sName
+    endif
+
+    let iCount := 0
+    let rItem := GetFirstRef 201 1 0
+    while eval rItem && iCount < 96
+        if eval IsFormValid rItem
+            let sName := GetName rItem
+            let sBaseID := sv_Construct "Unknown"
+            let iBaseType := 0
+            let rBase := rItem.GetBaseForm
+            if eval rBase && IsFormValid rBase
+                sv_Destruct sBaseID
+            let sBaseID := GetFormIDString rBase
+            let iBaseType := GetType rBase
+            if eval (sv_Length sName) <= 0
+                sv_Destruct sName
+                let sName := GetName rBase
+            endif
+        endif
+            if eval (sv_Length sName) > 0
+                let sRefID := GetFormIDString rItem
+                let sCellID := sv_Construct "Unknown"
+
+                let rCell := rItem.GetParentCell
+                if eval rCell && IsFormValid rCell
+                    sv_Destruct sCellID
+                    let sCellID := GetFormIDString rCell
+                endif
+
+                let fDistance := PlayerRef.GetDistance rItem
+                let iLookingAt := 0
+                if eval rCrosshair && rCrosshair == rItem
+                    let iLookingAt := 1
+                endif
+
+                let iHolding := 0
+                if eval rHeld && rHeld == rItem
+                    let iHolding := 1
+                endif
+
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_items.tmp" 1 "item=%z^%z^%z^%g^%.2f^%z^%g^0^%g%r" sRefID sBaseID sName iBaseType fDistance sCellID iLookingAt iHolding
+
+                sv_Destruct sRefID
+                sv_Destruct sCellID
+                let iCount += 1
+            endif
+            sv_Destruct sBaseID
+            sv_Destruct sName
+        endif
+
+        let rItem := GetNextRef
+    loop
+
+    CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
+end

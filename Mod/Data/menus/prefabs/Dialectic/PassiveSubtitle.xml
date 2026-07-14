@@ -1,0 +1,35 @@
+<rect name="DialecticPassiveSubtitle">
+    <visible>0</visible>
+    <alpha>0</alpha>
+    <locus>1</locus>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>110</height>
+    <systemcolor>&hudmain;</systemcolor>
+
+    <text name="Text">
+        <visible>
+            <copy src="parent()" trait="visible"/>
+        </visible>
+        <alpha>
+            <copy src="parent()" trait="alpha"/>
+        </alpha>
+        <x>
+            <copy src="parent()" trait="width"/>
+            <div>2</div>
+        </x>
+        <y>0</y>
+        <width>800</width>
+        <height>110</height>
+        <string></string>
+        <justify>&center;</justify>
+        <font>7</font>
+        <wrapwidth>800</wrapwidth>
+        <red>255</red>
+        <green>255</green>
+        <blue>255</blue>
+        <systemcolor>&hudmain;</systemcolor>
+        <depth>3</depth>
+    </text>
+</rect>

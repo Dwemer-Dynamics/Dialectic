@@ -1,0 +1,64 @@
+ref rActor
+
+string_var sName
+string_var sRefID
+
+float fDistance
+
+int iCount
+int iDead
+int iInCombat
+int iIsMoving
+int iIsRunning
+int iIsSneaking
+int iIsSitting
+int iIsSleeping
+int iKnockedState
+int iUnconscious
+int iWeaponDrawn
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 2.0 (CompileScript "Dialectic/ActivityStatusTick.txt") 0
+        return
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_activity_status.tmp" 0 "source=activity_status\n"
+
+    let iCount := 0
+    let rActor := GetFirstRef 200 1 0
+    while eval rActor && iCount < 96
+        if eval rActor.IsActor
+            let sName := GetName rActor
+            if eval (sv_Length sName) > 0
+                let sRefID := GetFormIDString rActor
+                let fDistance := PlayerRef.GetDistance rActor
+
+                let iDead := rActor.GetDead
+                let iKnockedState := rActor.GetKnockedState
+                let iUnconscious := 0
+                if eval iKnockedState > 0
+                    let iUnconscious := 1
+                endif
+
+                let iInCombat := rActor.IsInCombat
+                let iIsMoving := rActor.IsMoving
+                let iIsRunning := rActor.IsRunning
+                let iIsSneaking := rActor.IsSneaking
+                let iIsSitting := rActor.GetSitting
+                let iIsSleeping := rActor.GetSleeping
+                let iWeaponDrawn := rActor.IsWeaponOut
+
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_activity_status.tmp" 1 "activity=%z^%z^%.2f^%g^%g^%g^%g^%g^%g^%g^%g^%g\n" sRefID sName fDistance iDead iUnconscious iInCombat iIsMoving iIsRunning iIsSneaking iIsSitting iIsSleeping iWeaponDrawn
+
+                sv_Destruct sRefID
+                let iCount += 1
+            endif
+            sv_Destruct sName
+        endif
+
+        let rActor := GetNextRef
+    loop
+
+    CallAfterSeconds 2.0 (CompileScript "Dialectic/ActivityStatusTick.txt") 0
+end

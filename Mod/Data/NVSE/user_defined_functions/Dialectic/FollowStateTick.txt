@@ -1,0 +1,167 @@
+string_var sActorRef
+string_var sActorMod
+string_var sActorLocal
+string_var sTargetRef
+string_var sTargetMod
+string_var sTargetLocal
+string_var sRequestId
+string_var sAction
+
+ref rActor
+ref rTarget
+ref rActorCell
+ref rTargetCell
+
+int iActorMod
+int iActorLocal
+int iTargetMod
+int iTargetLocal
+
+float fCombat
+float fMoved
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/FollowStateTick.txt") 0
+        return
+    endif
+
+    if eval !(FileExists "NVSE\\Plugins\\dialectic_follow_state.tmp")
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/FollowStateTick.txt") 0
+        return
+    endif
+
+    let sActorRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 1 1
+    let sActorMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 2 1
+    let sActorLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 3 1
+    let sTargetRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 4 1
+    let sTargetMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 5 1
+    let sTargetLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 6 1
+    let sRequestId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 7 1
+    let sAction := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 8 1
+
+    ; Old follow state files only stored actor/request/action and always meant PlayerRef.
+    if eval !(sRequestId) || sv_Length sRequestId <= 0
+        if sRequestId
+            sv_Destruct sRequestId
+        endif
+        if sAction
+            sv_Destruct sAction
+        endif
+        let sRequestId := sv_Construct "%z" sTargetRef
+        let sAction := sv_Construct "%z" sTargetMod
+        if sTargetRef
+            sv_Destruct sTargetRef
+        endif
+        if sTargetMod
+            sv_Destruct sTargetMod
+        endif
+        if sTargetLocal
+            sv_Destruct sTargetLocal
+        endif
+        let sTargetRef := sv_Construct "00000014"
+        let sTargetMod := sv_Construct "0"
+        let sTargetLocal := sv_Construct "0"
+    endif
+
+    if eval !(sActorRef) || sv_Length sActorRef <= 0
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/FollowStateTick.txt") 0
+        return
+    endif
+
+    let iActorMod := ToNumber sActorMod
+    let iActorLocal := ToNumber sActorLocal
+    let iTargetMod := 0
+    let iTargetLocal := 0
+    if eval sTargetMod && sv_Length sTargetMod > 0
+        let iTargetMod := ToNumber sTargetMod
+    endif
+    if eval sTargetLocal && sv_Length sTargetLocal > 0
+        let iTargetLocal := ToNumber sTargetLocal
+    endif
+    let rActor := 0
+    let rTarget := 0
+
+    if eval iActorLocal > 0
+        let rActor := BuildRef iActorMod iActorLocal
+        if eval rActor && !(rActor.IsActor)
+            let rActor := 0
+        endif
+    endif
+
+    if eval sTargetRef && (sv_Compare sTargetRef "00000014") == 0
+        let rTarget := PlayerRef
+    elseif eval iTargetLocal > 0
+        let rTarget := BuildRef iTargetMod iTargetLocal
+        if eval rTarget && rTarget != PlayerRef && !(rTarget.IsActor)
+            let rTarget := 0
+        endif
+    endif
+
+    if eval rActor
+        let fCombat := rActor.IsInCombat
+        let fMoved := 0
+
+        if eval !(rTarget)
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state_status.txt" 0 "actor=%z status=deferred reason=target_ref_not_loaded target=%z request=%z action=%z%r" sActorRef sTargetRef sRequestId sAction
+        elseif eval fCombat <= 0
+            let rActorCell := rActor.GetParentCell
+            let rTargetCell := rTarget.GetParentCell
+
+            if eval rActorCell && rTargetCell && rActorCell != rTargetCell
+                rActor.MoveTo rTarget
+                let fMoved := 1
+            endif
+
+            if eval rTarget == PlayerRef
+                rActor.SetPlayerTeammate 1
+            endif
+            rActor.SetRestrained 0
+            rActor.StopCombat
+            rActor.RemoveScriptPackage
+            rActor.RemoveFromFaction DialecticMoveToFaction
+            rActor.RemoveFromFaction DialecticTravelFaction
+            rActor.RemoveFromFaction DialecticWaitFaction
+            rActor.RemoveFromFaction DialecticSeatFaction
+            rActor.RemoveFromFaction DialecticAttackFaction
+            rActor.AddToFaction DialecticFollowFaction 0
+            SetPackageTargetReference DialecticFollowTargetPackage rTarget
+            SetPackageTargetDistance DialecticFollowTargetPackage 192
+            rActor.AddScriptPackage DialecticFollowTargetPackage
+            rActor.EvaluatePackage
+
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state_status.txt" 0 "actor=%z status=ok moved=%.0f target=%z request=%z action=%z%r" sActorRef fMoved sTargetRef sRequestId sAction
+        else
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state_status.txt" 0 "actor=%z status=deferred reason=combat request=%z action=%z%r" sActorRef sRequestId sAction
+        endif
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state_status.txt" 0 "actor=%z status=deferred reason=actor_ref_not_loaded request=%z action=%z%r" sActorRef sRequestId sAction
+    endif
+
+    if sActorRef
+        sv_Destruct sActorRef
+    endif
+    if sActorMod
+        sv_Destruct sActorMod
+    endif
+    if sActorLocal
+        sv_Destruct sActorLocal
+    endif
+    if sTargetRef
+        sv_Destruct sTargetRef
+    endif
+    if sTargetMod
+        sv_Destruct sTargetMod
+    endif
+    if sTargetLocal
+        sv_Destruct sTargetLocal
+    endif
+    if sRequestId
+        sv_Destruct sRequestId
+    endif
+    if sAction
+        sv_Destruct sAction
+    endif
+
+    CallAfterSeconds 1.0 (CompileScript "Dialectic/FollowStateTick.txt") 0
+end

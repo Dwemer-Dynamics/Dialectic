@@ -1,0 +1,72 @@
+ref rFurniture
+ref rBase
+ref rCell
+ref rCrosshair
+
+string_var sName
+string_var sRefID
+string_var sBaseID
+string_var sCellID
+
+float fDistance
+
+int iCount
+int iBaseType
+int iLookingAt
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
+        return
+    endif
+
+    let rCrosshair := GetCrosshairRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_furniture.tmp" 0 "source=nearby_furniture\n"
+
+    let iCount := 0
+    let rFurniture := GetFirstRef 39 1 0
+    while eval rFurniture && iCount < 64
+        if eval IsFormValid rFurniture
+            let sName := GetName rFurniture
+            if eval (sv_Length sName) <= 0
+                let sName := sv_Construct "Furniture"
+            endif
+
+            let sRefID := GetFormIDString rFurniture
+            let sBaseID := sv_Construct "Unknown"
+            let sCellID := sv_Construct "Unknown"
+            let iBaseType := 0
+
+            let rBase := rFurniture.GetBaseForm
+            if eval rBase && IsFormValid rBase
+                sv_Destruct sBaseID
+                let sBaseID := GetFormIDString rBase
+                let iBaseType := GetType rBase
+            endif
+
+            let rCell := rFurniture.GetParentCell
+            if eval rCell && IsFormValid rCell
+                sv_Destruct sCellID
+                let sCellID := GetFormIDString rCell
+            endif
+
+            let fDistance := PlayerRef.GetDistance rFurniture
+            let iLookingAt := 0
+            if eval rCrosshair && rCrosshair == rFurniture
+                let iLookingAt := 1
+            endif
+
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_furniture.tmp" 1 "furniture=%z^%z^%z^%g^%.2f^%g^%z\n" sRefID sBaseID sName iBaseType fDistance iLookingAt sCellID
+
+            sv_Destruct sName
+            sv_Destruct sRefID
+            sv_Destruct sBaseID
+            sv_Destruct sCellID
+            let iCount += 1
+        endif
+
+        let rFurniture := GetNextRef
+    loop
+
+    CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
+end

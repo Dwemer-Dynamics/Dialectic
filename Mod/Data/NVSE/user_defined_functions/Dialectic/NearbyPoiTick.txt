@@ -1,0 +1,92 @@
+ref rDoor
+ref rBase
+ref rCell
+ref rDestCell
+ref rCrosshair
+
+string_var sName
+string_var sRefID
+string_var sBaseID
+string_var sCellID
+string_var sDestCellID
+string_var sDestName
+
+float fDistance
+
+int iCount
+int iOpenState
+int iLookingAt
+int iLocked
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
+        return
+    endif
+
+    let rCrosshair := GetCrosshairRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_pois.tmp" 0 "source=nearby_pois%r"
+
+    let iCount := 0
+    let rDoor := GetFirstRef 28 0 0
+    while eval rDoor && iCount < 64
+        if eval IsFormValid rDoor
+            let sName := GetName rDoor
+            if eval (sv_Length sName) <= 0
+                let sName := sv_Construct "Door"
+            endif
+
+            let sRefID := GetFormIDString rDoor
+            let sBaseID := sv_Construct "Unknown"
+            let sCellID := sv_Construct "Unknown"
+            let sDestCellID := sv_Construct "Unknown"
+            let sDestName := sv_Construct "Unknown"
+
+            let rBase := rDoor.GetBaseForm
+            if eval rBase && IsFormValid rBase
+                sv_Destruct sBaseID
+                let sBaseID := GetFormIDString rBase
+            endif
+
+            let rCell := rDoor.GetParentCell
+            if eval rCell && IsFormValid rCell
+                sv_Destruct sCellID
+                let sCellID := GetFormIDString rCell
+            endif
+
+            let rDestCell := rDoor.GetTeleportCell
+            if eval rDestCell && IsFormValid rDestCell
+                sv_Destruct sDestCellID
+                let sDestCellID := GetFormIDString rDestCell
+                sv_Destruct sDestName
+                let sDestName := GetName rDestCell
+                if eval (sv_Length sDestName) <= 0
+                    sv_Destruct sDestName
+                    let sDestName := GetEditorID rDestCell
+                endif
+            endif
+
+            let fDistance := PlayerRef.GetDistance rDoor
+            let iOpenState := rDoor.GetOpenState
+            let iLookingAt := 0
+            if eval rCrosshair && rCrosshair == rDoor
+                let iLookingAt := 1
+            endif
+            let iLocked := rDoor.GetLocked
+
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_nearby_pois.tmp" 1 "poi=%z^%z^%z^%z^%z^%.2f^%z^%g^%g^%g%r" sRefID sBaseID sName sDestCellID sDestName fDistance sCellID iOpenState iLookingAt iLocked
+
+            sv_Destruct sName
+            sv_Destruct sRefID
+            sv_Destruct sBaseID
+            sv_Destruct sCellID
+            sv_Destruct sDestCellID
+            sv_Destruct sDestName
+            let iCount += 1
+        endif
+
+        let rDoor := GetNextRef
+    loop
+
+    CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
+end

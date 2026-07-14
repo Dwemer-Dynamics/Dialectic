@@ -1,0 +1,1089 @@
+{
+  "modName": "Dialectic",
+  "displayName": "Dialectic",
+  "description": "Configure Dialectic AI dialogue, activation, sound, hotkeys, and behavior settings.",
+  "saveFile": "../NVSE/Plugins/dialectic_custom.ini",
+  "minMCMVersion": 1,
+  "minModVersion": 1,
+  "requirements": [
+    {
+      "type": "file",
+      "file": "NVSE/Plugins/dialectic.dll",
+      "notify": 1
+    },
+    {
+      "type": "file",
+      "file": "NVSE/Plugins/dialectic.ini",
+      "notify": 1
+    }
+  ],
+  "submenus": {
+    "1": {
+      "listTitle": "Hotkeys",
+      "pageTitle": "Hotkeys",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "Conversation",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "Chatbox",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for opening the text chatbox to type messages to the targeted NPC. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:TalkToNPC",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "Voice Chat",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for push-to-talk voice input. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:ToggleVoice",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "4": {
+          "title": "Manual AI Activate",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for manually activating the targeted NPC as an AI agent. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:ManualActivate",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "5": {
+          "title": "Toggle Modes",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for opening the Dialectic mode selector.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:ToggleModes",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "6": {
+          "title": "Toggle LLM Model",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for opening the Standard/Fast/Powerful/Experimental LLM model selector.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:ToggleLLMModel",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "7": {
+          "title": "Halt AI Actions",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for the hard killswitch: stops AI dialogue, clears queues, cancels requests, and halts active NPC actions. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:StopTalking",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "8": {
+          "title": "Dynamic Profiles",
+          "enable": 1,
+          "type": 0
+        },
+        "9": {
+          "title": "Dynamic Profile Menu",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for choosing target, nearby, or narrator dynamic profile updates from one menu.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:DynamicProfileMenu",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        }
+      },
+      "active": 1
+    },
+    "2": {
+      "listTitle": "Auto Activate",
+      "pageTitle": "Auto Activate",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "Activation",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "Enable Auto Activate",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Automatically activates nearby eligible NPCs as Dialectic AI agents.",
+          "vars": [
+            {
+              "configINI": "AutoActivate:Enabled",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "Interior Auto Activate Distance",
+          "type": 2,
+          "enable": 1,
+          "suffix": " units",
+          "mouse": "AI actors within this distance in interiors are auto activated.",
+          "vars": [
+            {
+              "configINI": "Distance:ActivatingNpcInterior",
+              "default": 1200
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 100,
+            "valueMin": 200,
+            "valueMax": 4000,
+            "suffix": " units"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "4": {
+          "title": "Exterior Auto Activate Distance",
+          "type": 2,
+          "enable": 1,
+          "suffix": " units",
+          "mouse": "AI actors within this distance outside are auto activated.",
+          "vars": [
+            {
+              "configINI": "Distance:ActivatingNpcExterior",
+              "default": 2400
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 100,
+            "valueMin": 200,
+            "valueMax": 6000,
+            "suffix": " units"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "13": {
+          "title": "Spatial Hearing",
+          "enable": 1,
+          "type": 0
+        },
+        "14": {
+          "title": "Interior Spatial Hearing Distance",
+          "type": 2,
+          "enable": 1,
+          "suffix": " units",
+          "mouse": "How far AI actors can hear spoken dialogue in interiors.",
+          "vars": [
+            {
+              "configINI": "SpatialAudio:InteriorHearingDistance",
+              "default": 750
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 50,
+            "valueMin": 100,
+            "valueMax": 4000,
+            "suffix": " units"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "15": {
+          "title": "Exterior Spatial Hearing Distance",
+          "type": 2,
+          "enable": 1,
+          "suffix": " units",
+          "mouse": "How far AI actors can hear spoken dialogue outdoors.",
+          "vars": [
+            {
+              "configINI": "SpatialAudio:ExteriorHearingDistance",
+              "default": 1250
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 50,
+            "valueMin": 100,
+            "valueMax": 6000,
+            "suffix": " units"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "16": {
+          "title": "Auto Hearing Radius",
+          "type": 2,
+          "enable": 1,
+          "suffix": " units",
+          "mouse": "Default hearing radius used by automatic listener and rechat selection.",
+          "vars": [
+            {
+              "configINI": "SpatialAudio:AutoHearingDistance",
+              "default": 560
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 50,
+            "valueMin": 100,
+            "valueMax": 4000,
+            "suffix": " units"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "5": {
+          "title": "Policy",
+          "enable": 1,
+          "type": 0
+        },
+        "6": {
+          "title": "Add Hostile NPCs",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Allows hostile NPCs to be auto activated.",
+          "vars": [
+            {
+              "configINI": "AutoActivate:AutoAddHostile",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "7": {
+          "title": "Add All Races",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Allows auto activation for all race/form categories, including creatures. This may be unstable.",
+          "vars": [
+            {
+              "configINI": "AutoActivate:AutoAddCreatures",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "8": {
+          "title": "Combat",
+          "enable": 1,
+          "type": 0
+        },
+        "9": {
+          "title": "Allow Combat Dialogue",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Allows AI dialogue requests while the player or actor is in combat.",
+          "vars": [
+            {
+              "configINI": "Behavior:EnableCombatDialogue",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "10": {
+          "title": "Clear Dialogue Entering Combat",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Cancels active AI dialogue and queued AI responses when the player enters combat.",
+          "vars": [
+            {
+              "configINI": "Behavior:CancelDialogueOnCombat",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "11": {
+          "title": "Enable Combat Barks",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Allows nearby AI agents to make combat bark comments during active combat.",
+          "vars": [
+            {
+              "configINI": "RpgEvents:CombatBarksEnabled",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "12": {
+          "title": "Combat Bark Cooldown",
+          "type": 2,
+          "enable": 1,
+          "suffix": "s",
+          "mouse": "Seconds between combat bark event attempts while combat is active.",
+          "vars": [
+            {
+              "configINI": "RpgEvents:CombatBarkPeriodSeconds",
+              "default": 30
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 5,
+            "valueMax": 120,
+            "suffix": "s"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        }
+      }
+    },
+    "3": {
+      "listTitle": "Behavior",
+      "pageTitle": "Behavior",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "Dialogue",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "Connection Timeout",
+          "type": 2,
+          "enable": 1,
+          "suffix": "s",
+          "mouse": "Maximum response wait timeout in seconds.",
+          "vars": [
+            {
+              "configINI": "Behavior:AIResponseTimeout",
+              "default": 30
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 5,
+            "valueMax": 180,
+            "suffix": "s"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "Pause Dialogue in Menus",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Pauses active AI dialogue audio while menus or the Pip-Boy are open.",
+          "vars": [
+            {
+              "configINI": "Behavior:PauseDialogueOnMenu",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "4": {
+          "title": "Show AI Subtitles",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Displays passive Fallout-style subtitles while AI audio plays.",
+          "vars": [
+            {
+              "configINI": "Behavior:ShowAISubtitles",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "5": {
+          "title": "Scene Safety",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Avoids actors currently controlled by active scene or dialogue packages.",
+          "vars": [
+            {
+              "configINI": "Behavior:SceneSafety",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "6": {
+          "title": "Dynamic Profiles",
+          "enable": 1,
+          "type": 0
+        },
+        "7": {
+          "title": "Dynamic Profile Timer",
+          "type": 2,
+          "enable": 1,
+          "suffix": " min",
+          "mouse": "Minutes between automatic dynamic profile refreshes.",
+          "vars": [
+            {
+              "configINI": "DynamicProfile:TimerMinutes",
+              "default": 30
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 5,
+            "valueMax": 240,
+            "suffix": " min"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "8": {
+          "title": "Include Narrator",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Includes The Narrator in timer-triggered profile refreshes.",
+          "vars": [
+            {
+              "configINI": "DynamicProfile:IncludeNarrator",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "9": {
+          "title": "Bored Events",
+          "enable": 1,
+          "type": 0
+        },
+        "10": {
+          "title": "Bored Event Timer",
+          "type": 2,
+          "enable": 1,
+          "suffix": "s",
+          "mouse": "Seconds of quiet time before Dialectic may ask a nearby managed NPC for an idle comment.",
+          "vars": [
+            {
+              "configINI": "BoredEvents:TimerSeconds",
+              "default": 60
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 5,
+            "valueMax": 600,
+            "suffix": "s"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        }
+      }
+    },
+    "4": {
+      "listTitle": "Sound",
+      "pageTitle": "Sound",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "Basic",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "AI Voice Volume",
+          "type": 2,
+          "enable": 1,
+          "suffix": "%",
+          "mouse": "Set AI NPC speech volume.",
+          "vars": [
+            {
+              "configINI": "Audio:VoiceVolume",
+              "default": 75
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 0,
+            "valueMax": 100,
+            "suffix": "%"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "Enable 3D Audio Playback",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Controls player-heard 3D voice playback. Spatial dialogue awareness remains separate.",
+          "vars": [
+            {
+              "configINI": "Audio:Enable3DPlayback",
+              "default": 1
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "19": {
+          "title": "Camera Based Audio",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Use the camera direction for 3D voice panning instead of the player actor heading.",
+          "vars": [
+            {
+              "configINI": "Audio:CameraBasedAudio",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "4": {
+          "title": "AI Voice Distance Scale",
+          "type": 2.5,
+          "enable": 1,
+          "suffix": "x",
+          "mouse": "Adjust AI NPC voice volume at distance.",
+          "vars": [
+            {
+              "configINI": "Audio:DistanceScale",
+              "default": 2
+            }
+          ],
+          "scale": {
+            "valueDecimal": 1,
+            "valueIncrement": 0.1,
+            "valueMin": 0.1,
+            "valueMax": 20,
+            "suffix": "x"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "5": {
+          "title": "Interior Playback Dropoff",
+          "type": 2,
+          "enable": 1,
+          "suffix": "%",
+          "mouse": "Indoor playback dropoff aggressiveness. Lower values are less aggressive.",
+          "vars": [
+            {
+              "configINI": "Audio:PlaybackDropoffInteriorPercent",
+              "default": 70
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 25,
+            "valueMax": 200,
+            "suffix": "%"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "6": {
+          "title": "Exterior Playback Dropoff",
+          "type": 2,
+          "enable": 1,
+          "suffix": "%",
+          "mouse": "Outdoor playback dropoff aggressiveness. Lower values are less aggressive.",
+          "vars": [
+            {
+              "configINI": "Audio:PlaybackDropoffExteriorPercent",
+              "default": 70
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 25,
+            "valueMax": 200,
+            "suffix": "%"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "7": {
+          "title": "3D Sound Invert Heading",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Try this if 3D audio left/right direction is reversed.",
+          "vars": [
+            {
+              "configINI": "Audio:InvertHeading",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "8": {
+          "title": "Open Mic",
+          "enable": 1,
+          "type": 0
+        },
+        "20": {
+          "title": "Current Device",
+          "type": 1,
+          "enable": 1,
+          "mouse": "Current Windows recording device resolved by Dialectic.",
+          "vars": [
+            {
+              "configINI": "VoiceRecording:CurrentDevice",
+              "default": "Windows default"
+            }
+          ]
+        },
+        "9": {
+          "title": "Enable Open Mic",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Starts voice activity detection during active conversations.",
+          "vars": [
+            {
+              "configINI": "OpenMic:Enabled",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "10": {
+          "title": "Mute Open Mic",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Temporarily mutes open mic detection without disabling the setting.",
+          "vars": [
+            {
+              "configINI": "OpenMic:Muted",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "21": {
+          "title": "Open Mic Mute Hotkey",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for toggling open mic mute without disabling open mic. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:OpenMicMute",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "11": {
+          "title": "Open Mic Sensitivity",
+          "type": 2,
+          "enable": 1,
+          "mouse": "RMS threshold for starting open mic recording. Higher values require louder speech.",
+          "vars": [
+            {
+              "configINI": "OpenMic:Sensitivity",
+              "default": 1000
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 100,
+            "valueMin": 100,
+            "valueMax": 10000
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "12": {
+          "title": "Open Mic End Delay",
+          "type": 2.5,
+          "enable": 1,
+          "suffix": "s",
+          "mouse": "Seconds of silence before open mic recording is submitted.",
+          "vars": [
+            {
+              "configINI": "OpenMic:EndDelaySeconds",
+              "default": 1
+            }
+          ],
+          "scale": {
+            "valueDecimal": 1,
+            "valueIncrement": 0.1,
+            "valueMin": 0.1,
+            "valueMax": 5,
+            "suffix": "s"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "13": {
+          "title": "Advanced",
+          "enable": 1,
+          "type": 0
+        },
+        "14": {
+          "title": "Skip Milliseconds at Beginning",
+          "type": 2,
+          "enable": 1,
+          "suffix": "ms",
+          "mouse": "Skips silence at the beginning of generated voice clips.",
+          "vars": [
+            {
+              "configINI": "Audio:PreClipMs",
+              "default": 100
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 25,
+            "valueMin": 0,
+            "valueMax": 1000,
+            "suffix": "ms"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "15": {
+          "title": "Skip Milliseconds at End",
+          "type": 2,
+          "enable": 1,
+          "suffix": "ms",
+          "mouse": "Skips silence at the end of generated voice clips.",
+          "vars": [
+            {
+              "configINI": "Audio:PostClipMs",
+              "default": 100
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 25,
+            "valueMin": 0,
+            "valueMax": 1000,
+            "suffix": "ms"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "16": {
+          "title": "Resolution of Lip Animations",
+          "type": 2,
+          "enable": 1,
+          "suffix": "ms",
+          "mouse": "Lip animation resolution. Lower values use more CPU but update more often.",
+          "vars": [
+            {
+              "configINI": "Audio:AnimationResolution",
+              "default": 500
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 50,
+            "valueMin": 50,
+            "valueMax": 1500,
+            "suffix": "ms"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "17": {
+          "title": "Intensity of Lip Animations",
+          "type": 2.5,
+          "enable": 1,
+          "suffix": "x",
+          "mouse": "Lip modifier intensity. Lower it if the mouth opens too much.",
+          "vars": [
+            {
+              "configINI": "Audio:AnimationIntensity",
+              "default": 1
+            }
+          ],
+          "scale": {
+            "valueDecimal": 1,
+            "valueIncrement": 0.1,
+            "valueMin": 0,
+            "valueMax": 3,
+            "suffix": "x"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        }
+      }
+    },
+    "6": {
+      "listTitle": "Tools",
+      "pageTitle": "Tools",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "World Data",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "Send Faction and Location Info",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Sends Fallout factions and map marker locations to the Dialectic server.",
+          "vars": [
+            {
+              "configINI": "Tools:SendWorldData",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SyncWorldData.gek"
+          }
+        },
+        "3": {
+          "title": "Voice Samples",
+          "enable": 1,
+          "type": 0
+        },
+        "4": {
+          "title": "Send All Voice Samples",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Uploads every configured Fallout voice sample from Data/Dialectic/*_voices.csv to the Dialectic server.",
+          "vars": [
+            {
+              "configINI": "Tools:SendVoiceSamples",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SendVoiceSamples.gek"
+          }
+        }
+      }
+    },
+    "5": {
+      "listTitle": "AI Agents",
+      "pageTitle": "AI Agents",
+      "columns": 1,
+      "enable": 1,
+      "options": {
+        "1": {
+          "title": "Agent Management",
+          "enable": 1,
+          "type": 0
+        },
+        "2": {
+          "title": "Add Targeted NPC",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Manually activates the NPC under the crosshair as a Dialectic AI agent.",
+          "vars": [{ "configINI": "Tools:AgentAddTarget", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        },
+        "3": {
+          "title": "Add All Nearby NPCs",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Manually activates every eligible nearby NPC as a Dialectic AI agent.",
+          "vars": [{ "configINI": "Tools:AgentAddNearby", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        },
+        "4": {
+          "title": "Remove Targeted AI Agent",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Removes the targeted NPC from the active Dialectic AI agent registry.",
+          "vars": [{ "configINI": "Tools:AgentRemoveTarget", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        },
+        "5": {
+          "title": "Remove All AI Agents",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Removes every NPC from the active Dialectic AI agent registry. Auto Activate can add eligible NPCs again.",
+          "vars": [{ "configINI": "Tools:AgentRemoveAll", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        },
+        "6": {
+          "title": "Lists",
+          "enable": 1,
+          "type": 0
+        },
+        "7": {
+          "title": "List Active AI Agents",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Displays the currently active Dialectic AI agents in the in-game notification area and plugin log.",
+          "vars": [{ "configINI": "Tools:AgentListActive", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        },
+        "8": {
+          "title": "Refresh Nearby NPCs",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Scans and displays nearby NPCs that can be manually added as AI agents.",
+          "vars": [{ "configINI": "Tools:AgentListNearby", "default": 0 }],
+          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+string_var sRequestId
+string_var sDoneStatus
+string_var sInventoryItemName
+string_var sInventoryItemID
+
+ref rInventoryItem
+
+int iTradeMenuMode
+int iInventoryIndex
+int iInventoryCount
+int iInventoryItemCount
+int iInventoryItemType
+
+begin function {}
+    let sRequestId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_trade_session.tmp" 1 1
+    if eval !(sRequestId) || sv_Length sRequestId <= 0
+        return
+    endif
+
+    let sDoneStatus := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_trade_done.tmp" 1 1
+    if eval sDoneStatus && sv_Length sDoneStatus > 0
+        sv_Destruct sDoneStatus
+        return
+    endif
+    if sDoneStatus
+        sv_Destruct sDoneStatus
+    endif
+
+    let iTradeMenuMode := 0
+    if MenuMode 1008
+        let iTradeMenuMode := 1
+    endif
+    if MenuMode 1053
+        let iTradeMenuMode := 1
+    endif
+    if MenuMode 1016
+        let iTradeMenuMode := 1
+    endif
+
+    if iTradeMenuMode
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_status.txt" 0 "status=waiting_trade_menu%r"
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/TradeSessionTick.txt") 1
+        return
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_status.txt" 0 "status=finalizing%r"
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_post_player.tmp" 0 "%e"
+    let iInventoryCount := PlayerRef.GetNumItems
+    let iInventoryIndex := 0
+    while iInventoryIndex < iInventoryCount
+        let rInventoryItem := PlayerRef.GetInventoryObject iInventoryIndex
+        if eval rInventoryItem && IsFormValid rInventoryItem
+            let iInventoryItemCount := PlayerRef.GetItemCount rInventoryItem
+            if iInventoryItemCount > 0
+                let sInventoryItemName := GetName rInventoryItem
+                let sInventoryItemID := GetFormIDString rInventoryItem
+                let iInventoryItemType := GetType rInventoryItem
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_post_player.tmp" 1 "inventory=%z^%z^%g^%g%r" sInventoryItemName sInventoryItemID iInventoryItemCount iInventoryItemType
+                sv_Destruct sInventoryItemName
+                sv_Destruct sInventoryItemID
+            endif
+        endif
+        let iInventoryIndex += 1
+    loop
+    let iInventoryItemCount := PlayerRef.GetItemCount Caps001
+    if iInventoryItemCount > 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_post_player.tmp" 1 "inventory=Bottle Caps^0000000F^%g^31%r" iInventoryItemCount
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_done.tmp" 0 "status=ok%rsource=player_inventory_delta%rend=1%r"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_trade_status.txt" 0 "status=post_snapshot_done_player_delta%r"
+
+    if sRequestId
+        sv_Destruct sRequestId
+    endif
+end

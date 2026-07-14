@@ -1,0 +1,63 @@
+ref rActiveQuest
+
+string_var sQuestName
+string_var sQuestID
+string_var sEditorID
+string_var sObjectiveText
+
+array_var aObjectives
+array_var aObjectiveEntry
+
+int iObjectiveId
+
+begin function {}
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 0 "direct_start%r"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp" 0 "source=active_quest_direct%r"
+
+    let rActiveQuest := GetActiveQuest
+    if eval rActiveQuest && IsFormValid rActiveQuest
+        let sQuestID := GetFormIDString rActiveQuest
+        let sQuestName := GetName rActiveQuest
+        if eval (sv_Length sQuestName) <= 0
+            sv_Destruct sQuestName
+            let sQuestName := GetEditorID rActiveQuest
+        endif
+        if eval (sv_Length sQuestName) <= 0
+            sv_Destruct sQuestName
+            let sQuestName := sv_Construct "Quest"
+        endif
+
+        let sEditorID := GetEditorID rActiveQuest
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp" 1 "active=%z^%z^%z%r" sQuestID sQuestName sEditorID
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 1 "active=%z^%z^%z%r" sQuestID sQuestName sEditorID
+
+        let aObjectives := GetActiveObjectives
+        foreach aObjectiveEntry <- aObjectives
+            let iObjectiveId := aObjectiveEntry["value"]
+            let sObjectiveText := GetObjectiveText rActiveQuest iObjectiveId
+            if eval sObjectiveText && (sv_Length sObjectiveText) > 0
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp" 1 "objective=%z^%g^%z%r" sQuestID iObjectiveId sObjectiveText
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 1 "objective=%z^%g^%z%r" sQuestID iObjectiveId sObjectiveText
+            endif
+            if sObjectiveText
+                sv_Destruct sObjectiveText
+            endif
+        loop
+
+        if sQuestName
+            sv_Destruct sQuestName
+        endif
+        if sQuestID
+            sv_Destruct sQuestID
+        endif
+        if sEditorID
+            sv_Destruct sEditorID
+        endif
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp" 1 "active=0^none^none%r"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 1 "active=none%r"
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 1 "direct_end%r"
+    CallAfterSeconds 5.0 (CompileScript "Dialectic/ActiveQuestDirectTick.txt") 0
+end

@@ -1,0 +1,48 @@
+ref rTopicOrInfo
+ref rSpeaker
+ref rTarget
+
+string_var sSpeakerName
+string_var sSpeakerRef
+string_var sTopicRef
+
+begin Function {rTopicOrInfo}
+    let rSpeaker := this
+    if eval !(rSpeaker) || !(IsFormValid rSpeaker)
+        return
+    endif
+
+    let sSpeakerName := GetName rSpeaker
+    if eval !(sSpeakerName) || (sv_Length sSpeakerName) <= 0
+        if sSpeakerName
+            sv_Destruct sSpeakerName
+        endif
+        let sSpeakerName := sv_Construct "Unknown"
+    endif
+
+    let sSpeakerRef := GetFormIDString rSpeaker
+    let sTopicRef := sv_Construct "%e"
+    if eval rTopicOrInfo && IsFormValid rTopicOrInfo
+        sv_Destruct sTopicRef
+        let sTopicRef := GetFormIDString rTopicOrInfo
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp" 0 "speaker=%z\n" sSpeakerName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp" 1 "topic_refid=%z\n" sTopicRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp" 1 "end=1\n"
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_choice_debug.tmp" 0 "source=topic_event\n"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_choice_debug.tmp" 1 "speaker=%z\n" sSpeakerName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_choice_debug.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_choice_debug.tmp" 1 "topic_refid=%z\n" sTopicRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_choice_debug.tmp" 1 "state=speaker_attribution_only\n"
+
+    if eval rTopicOrInfo && IsFormValid rTopicOrInfo
+        DialecticCaptureDialoguePrompt rSpeaker rTopicOrInfo
+    endif
+
+    sv_Destruct sSpeakerName
+    sv_Destruct sSpeakerRef
+    sv_Destruct sTopicRef
+end

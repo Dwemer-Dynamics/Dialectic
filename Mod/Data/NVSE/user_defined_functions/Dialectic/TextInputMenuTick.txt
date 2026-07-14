@@ -1,0 +1,24 @@
+string_var sOpen
+
+begin function {}
+    if eval (FileExists "NVSE\\Plugins\\dialectic_open_text_input.tmp") && MenuMode
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "pending=1\nblocked=1\nreason=menu_mode\n"
+    elseif eval (FileExists "NVSE\\Plugins\\dialectic_open_text_input.tmp") && !MenuMode
+        let sOpen := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 1 1
+        if eval !(sOpen) || sv_Length sOpen <= 0
+            CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
+            return
+        endif
+
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "pending=1\nopening=1\n"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
+        PrintC "[Dialectic] Opening chatbox."
+        call (CompileScript "Dialectic/OpenTextInputMenu.txt")
+    endif
+
+    if sOpen
+        sv_Destruct sOpen
+    endif
+
+    CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
+end

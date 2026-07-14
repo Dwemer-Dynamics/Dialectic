@@ -1,0 +1,19 @@
+int iButton
+
+Begin Function {iButton}
+    if eval iButton < 0 || iButton > 3
+        return
+    endif
+
+    if eval iButton == 0
+        DialecticSendSetConf "dialectic_profile_model@1"
+    elseif eval iButton == 1
+        DialecticSendSetConf "dialectic_profile_model@2"
+    elseif eval iButton == 2
+        DialecticSendSetConf "dialectic_profile_model@3"
+    elseif eval iButton == 3
+        DialecticSendSetConf "dialectic_profile_model@4"
+    endif
+
+    PrintC "[Dialectic] LLM model selection sent."
+End

@@ -1,0 +1,13 @@
+; Optional Dialectic manual server override.
+; Copy this file to dialectic_custom.ini to force a specific server instead of using DwemerDistro auto-discovery.
+;
+; CHIM-style flat keys are supported:
+; SERVER=192.168.1.50
+; PORT=8085
+; PATH=DialecticServer/main.php
+;
+; Dialectic-style section keys are also supported:
+; [Server]
+; Host=192.168.1.50
+; Port=8085
+; Path=DialecticServer/main.php

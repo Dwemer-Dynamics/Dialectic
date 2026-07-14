@@ -1,0 +1,11 @@
+float fValue
+int iMenu
+int iSubmenu
+int iOption
+array_var aJSON
+
+Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    SetINIIntC "Tools:SendWorldData" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    PrintC "[Dialectic] Sending Fallout faction and location info"
+    DialecticSyncWorldData
+End

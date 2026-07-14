@@ -1,0 +1,14 @@
+string_var sResponse
+string_var sVoicePath
+
+int iEmotionID
+int iEmotionValue
+int iResponseNumber
+
+begin Function {sResponse, sVoicePath, iEmotionID, iEmotionValue, iResponseNumber}
+    if eval !(sResponse) || (sv_Length sResponse) <= 0
+        return
+    endif
+
+    DialecticCaptureDialogue "dialogue_menu_npc" "Unknown" "%e" "Player" "00000014" sResponse 0 1 iResponseNumber
+end

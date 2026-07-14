@@ -1,0 +1,20 @@
+ref rLockedRef
+string_var sName
+string_var sPlayerName
+
+begin function {rLockedRef}
+    let sName := GetName rLockedRef
+    if eval !(sName) || sv_Length sName <= 0
+        let sName := sv_Construct "locked object"
+    endif
+
+    let sPlayerName := GetName PlayerRef
+    if eval !(sPlayerName) || sv_Length sPlayerName <= 0
+        let sPlayerName := sv_Construct "The Courier"
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "lockpicked|%z picked the lock on %z\n" sPlayerName sName
+
+    sv_Destruct sPlayerName
+    sv_Destruct sName
+end

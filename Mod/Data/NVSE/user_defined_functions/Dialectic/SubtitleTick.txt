@@ -1,0 +1,65 @@
+string_var sSubtitle
+string_var sAppliedSubtitle
+
+begin function {}
+    if IsComponentLoaded "HUDMainMenu\DialecticPassiveSubtitle"
+        UnloadUIComponent "HUDMainMenu\DialecticPassiveSubtitle"
+    endif
+    if eval !(IsComponentLoaded "HUDMainMenu\Subtitles\DialecticPassiveSubtitle")
+        InjectUIXML "HUDMainMenu\Subtitles" "data\menus\prefabs\Dialectic\PassiveSubtitle.xml"
+    endif
+
+    if FileExists "NVSE\\Plugins\\dialectic_subtitle.txt"
+        let sSubtitle := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_subtitle.txt" 1 1
+        let sAppliedSubtitle := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_subtitle_status.txt" 1 1
+        if sSubtitle && sv_Length sSubtitle > 0
+            if eval !(sAppliedSubtitle) || (sv_Compare sSubtitle sAppliedSubtitle) != 0
+                SetUIStringAlt "HUDSubtitle\subtitle_text" "%z" sSubtitle
+                SetUIStringAlt "HUDSubtitle\text" "%z" sSubtitle
+                SetUIStringAlt "HUDMainMenu\Subtitles\string" "%z" sSubtitle
+                SetUIStringAlt "HUDMainMenu\Subtitles\justify_center_text\string" "%z" sSubtitle
+                SetUIFloatAlt "HUDMainMenu\_Script+Subtitle" 255
+                SetUIStringAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\Text\string" "%z" sSubtitle
+                SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\visible" 1
+                SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\alpha" 255
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_subtitle_status.txt" 0 "%z" sSubtitle
+            endif
+        else
+            if eval !(sAppliedSubtitle) || (sv_Compare sAppliedSubtitle "cleared=1") != 0
+                SetUIStringAlt "HUDSubtitle\subtitle_text" "%e"
+                SetUIStringAlt "HUDSubtitle\text" "%e"
+                SetUIStringAlt "HUDMainMenu\Subtitles\string" "%e"
+                SetUIStringAlt "HUDMainMenu\Subtitles\justify_center_text\string" "%e"
+                SetUIFloatAlt "HUDMainMenu\_Script+Subtitle" 0
+                SetUIStringAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\Text\string" "%e"
+                SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\visible" 0
+                SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\alpha" 0
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_subtitle_status.txt" 0 "cleared=1"
+            endif
+        endif
+        if sSubtitle
+            sv_Destruct sSubtitle
+        endif
+        if sAppliedSubtitle
+            sv_Destruct sAppliedSubtitle
+        endif
+    else
+        let sAppliedSubtitle := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_subtitle_status.txt" 1 1
+        if eval !(sAppliedSubtitle) || (sv_Compare sAppliedSubtitle "cleared=1") != 0
+            SetUIStringAlt "HUDSubtitle\subtitle_text" "%e"
+            SetUIStringAlt "HUDSubtitle\text" "%e"
+            SetUIStringAlt "HUDMainMenu\Subtitles\string" "%e"
+            SetUIStringAlt "HUDMainMenu\Subtitles\justify_center_text\string" "%e"
+            SetUIFloatAlt "HUDMainMenu\_Script+Subtitle" 0
+            SetUIStringAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\Text\string" "%e"
+            SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\visible" 0
+            SetUIFloatAlt "HUDMainMenu\Subtitles\DialecticPassiveSubtitle\alpha" 0
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_subtitle_status.txt" 0 "cleared=1"
+        endif
+        if sAppliedSubtitle
+            sv_Destruct sAppliedSubtitle
+        endif
+    endif
+
+    CallAfterSeconds 0.10 (CompileScript "Dialectic/SubtitleTick.txt") 0
+end

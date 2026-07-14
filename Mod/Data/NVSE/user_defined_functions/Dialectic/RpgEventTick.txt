@@ -1,0 +1,79 @@
+float fInitialized
+float fPreviousLevel
+float fPreviousCombat
+float fPreviousSleeping
+float fCombatBarkCooldown
+float fCombatBarksEnabled
+float fCombatBarkPeriodSeconds
+float fLevel
+float fCombat
+float fSleeping
+string_var sPlayerName
+
+begin function {}
+    let fLevel := PlayerRef.GetLevel
+    let fCombat := PlayerRef.IsInCombat
+    let fSleeping := PlayerRef.GetSleeping
+    let sPlayerName := GetName PlayerRef
+    if eval !(sPlayerName) || sv_Length sPlayerName <= 0
+        let sPlayerName := sv_Construct "The Courier"
+    endif
+
+    set fInitialized to GetINIFloat_Cached "RpgEventsState:Initialized" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fPreviousLevel to GetINIFloat_Cached "RpgEventsState:LastLevel" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fPreviousCombat to GetINIFloat_Cached "RpgEventsState:WasInCombat" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fPreviousSleeping to GetINIFloat_Cached "RpgEventsState:WasSleeping" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fCombatBarkCooldown to GetINIFloat_Cached "RpgEventsState:CombatBarkCooldown" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fCombatBarksEnabled to GetINIFloat_Cached "RpgEvents:CombatBarksEnabled" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 1
+    set fCombatBarkPeriodSeconds to GetINIFloat_Cached "RpgEvents:CombatBarkPeriodSeconds" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 30
+
+    if eval fCombatBarkPeriodSeconds < 1
+        let fCombatBarkPeriodSeconds := 30
+    endif
+
+    if eval fInitialized <= 0
+        SetINIIntC "RpgEventsState:Initialized" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "RpgEventsState:LastLevel" fLevel "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "RpgEventsState:WasInCombat" fCombat "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "RpgEventsState:WasSleeping" fSleeping "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "RpgEventsState:CombatBarkCooldown" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        sv_Destruct sPlayerName
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/RpgEventTick.txt") 0
+        return
+    endif
+
+    if eval fLevel > fPreviousLevel
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "rpg_lvlup|%z reached level %.0f\n" sPlayerName fLevel
+    endif
+
+    if eval fPreviousCombat > 0 && fCombat <= 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "combatend|Combat has ended near %z\n" sPlayerName
+    endif
+
+    if eval fCombat > 0
+        if eval fCombatBarksEnabled > 0
+            if eval fCombatBarkCooldown <= 0
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "combatbark|Combat is underway near %z\n" sPlayerName
+                let fCombatBarkCooldown := fCombatBarkPeriodSeconds
+            else
+                let fCombatBarkCooldown -= 1
+            endif
+        else
+            let fCombatBarkCooldown := 0
+        endif
+    else
+        let fCombatBarkCooldown := 0
+    endif
+
+    if eval fPreviousSleeping > 0 && fSleeping <= 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "goodmorning|%z wakes up from sleeping\n" sPlayerName
+    endif
+
+    SetINIIntC "RpgEventsState:LastLevel" fLevel "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    SetINIIntC "RpgEventsState:WasInCombat" fCombat "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    SetINIIntC "RpgEventsState:WasSleeping" fSleeping "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    SetINIIntC "RpgEventsState:CombatBarkCooldown" fCombatBarkCooldown "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+
+    sv_Destruct sPlayerName
+    CallAfterSeconds 1.0 (CompileScript "Dialectic/RpgEventTick.txt") 0
+end

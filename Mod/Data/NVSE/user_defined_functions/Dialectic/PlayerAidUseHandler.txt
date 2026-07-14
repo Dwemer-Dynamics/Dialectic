@@ -1,0 +1,37 @@
+ref rAidItem
+ref rActor
+string_var sActorName
+string_var sItemName
+string_var sItemID
+
+begin function {rAidItem}
+    let rActor := this
+    if eval !rActor || !rAidItem
+        return
+    endif
+
+    if eval !(rActor.GetIsReference PlayerRef)
+        return
+    endif
+
+    let sActorName := GetName PlayerRef
+    if eval !(sActorName) || sv_Length sActorName <= 0
+        let sActorName := sv_Construct "The Courier"
+    endif
+
+    let sItemName := GetName rAidItem
+    if eval !(sItemName) || sv_Length sItemName <= 0
+        let sItemName := sv_Construct "aid item"
+    endif
+
+    let sItemID := GetFormIDString rAidItem
+    if eval !(sItemID) || sv_Length sItemID <= 0
+        let sItemID := sv_Construct "Unknown"
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "player_consumed|%z consumed %z|%z|%z\n" sActorName sItemName sItemID sItemName
+
+    sv_Destruct sItemID
+    sv_Destruct sItemName
+    sv_Destruct sActorName
+end

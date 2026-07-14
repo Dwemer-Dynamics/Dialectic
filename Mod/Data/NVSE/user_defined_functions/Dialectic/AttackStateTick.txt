@@ -1,0 +1,207 @@
+string_var sRequestId
+string_var sSpeakerRef
+string_var sTargetRef
+string_var sSpeakerMod
+string_var sSpeakerLocal
+string_var sTargetMod
+string_var sTargetLocal
+string_var sSpeakerTeamBefore
+string_var sTargetTeamBefore
+string_var sSpeakerAggBefore
+string_var sSpeakerConfBefore
+string_var sSpeakerAssistBefore
+string_var sTargetAggBefore
+string_var sTargetConfBefore
+string_var sTargetAssistBefore
+
+ref rSpeaker
+ref rTarget
+
+float fSpeakerTeamBefore
+float fTargetTeamBefore
+float fSpeakerAggBefore
+float fSpeakerConfBefore
+float fSpeakerAssistBefore
+float fTargetAggBefore
+float fTargetConfBefore
+float fTargetAssistBefore
+float fSpeakerTeamAfter
+float fSpeakerCombatAfter
+float fTargetTeamAfter
+float fTargetCombatAfter
+
+int iSpeakerMod
+int iSpeakerLocal
+int iTargetMod
+int iTargetLocal
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/AttackStateTick.txt") 0
+        return
+    endif
+
+    if eval !(FileExists "NVSE\\Plugins\\dialectic_attack_state.tmp")
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/AttackStateTick.txt") 0
+        return
+    endif
+
+    let sRequestId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 1 1
+    let sSpeakerRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 2 1
+    let sTargetRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 3 1
+    let sSpeakerMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 4 1
+    let sSpeakerLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 5 1
+    let sTargetMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 6 1
+    let sTargetLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 7 1
+    let sSpeakerTeamBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 8 1
+    let sTargetTeamBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 9 1
+    let sSpeakerAggBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 10 1
+    let sSpeakerConfBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 11 1
+    let sSpeakerAssistBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 12 1
+    let sTargetAggBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 13 1
+    let sTargetConfBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 14 1
+    let sTargetAssistBefore := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 15 1
+
+    if eval !(sRequestId) || sv_Length sRequestId <= 0 || !(sSpeakerRef) || sv_Length sSpeakerRef <= 0 || !(sTargetRef) || sv_Length sTargetRef <= 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/AttackStateTick.txt") 0
+        return
+    endif
+
+    let iSpeakerMod := ToNumber sSpeakerMod
+    let iSpeakerLocal := ToNumber sSpeakerLocal
+    let iTargetMod := ToNumber sTargetMod
+    let iTargetLocal := ToNumber sTargetLocal
+    let fSpeakerTeamBefore := ToNumber sSpeakerTeamBefore
+    let fTargetTeamBefore := ToNumber sTargetTeamBefore
+    let fSpeakerAggBefore := ToNumber sSpeakerAggBefore
+    let fSpeakerConfBefore := ToNumber sSpeakerConfBefore
+    let fSpeakerAssistBefore := ToNumber sSpeakerAssistBefore
+    let fTargetAggBefore := ToNumber sTargetAggBefore
+    let fTargetConfBefore := ToNumber sTargetConfBefore
+    let fTargetAssistBefore := ToNumber sTargetAssistBefore
+
+    let rSpeaker := 0
+    let rTarget := 0
+
+    if eval iSpeakerLocal > 0
+        let rSpeaker := BuildRef iSpeakerMod iSpeakerLocal
+        if eval rSpeaker && !(rSpeaker.IsActor)
+            let rSpeaker := 0
+        endif
+    endif
+
+    if eval iTargetLocal > 0
+        let rTarget := BuildRef iTargetMod iTargetLocal
+        if eval rTarget && !(rTarget.IsActor)
+            let rTarget := 0
+        endif
+    endif
+
+    if eval sTargetRef && (sv_Compare sTargetRef "00000014") == 0
+        let rTarget := PlayerRef
+    endif
+
+    if eval rSpeaker && rTarget
+        rSpeaker.SetPlayerTeammate 0
+        rSpeaker.SetRestrained 0
+        rSpeaker.SetAV Aggression 3
+        rSpeaker.SetAV Confidence 4
+        rSpeaker.SetAV Assistance 0
+        rSpeaker.ForceActorDetectionValue 100
+        rSpeaker.SetWeaponOut 1
+        rSpeaker.RemoveScriptPackage
+        rSpeaker.StopCombat
+        rSpeaker.AddToFaction DialecticAttackFaction 0
+
+        if eval rTarget != PlayerRef
+            rTarget.SetPlayerTeammate 0
+            rTarget.SetRestrained 0
+            rTarget.SetAV Aggression 3
+            rTarget.SetAV Confidence 4
+            rTarget.SetAV Assistance 0
+            rTarget.ForceActorDetectionValue 100
+            rTarget.AddToFaction DialecticWaitFaction 0
+            rTarget.RemoveScriptPackage
+            rTarget.StopCombat
+        endif
+
+        SetEnemy DialecticAttackFaction DialecticWaitFaction 0 0
+        SetPackageLocationReference DialecticAttackPackage rTarget
+        SetPackageTargetReference DialecticAttackPackage rTarget
+        SetPackageTargetDistance DialecticAttackPackage 512
+        rSpeaker.AddScriptPackage DialecticAttackPackage
+        if eval rTarget != PlayerRef
+            rTarget.StartCombat rSpeaker
+            rTarget.EvaluatePackage
+        endif
+        rSpeaker.StartCombat rTarget
+        rSpeaker.EvaluatePackage
+
+        let fSpeakerTeamAfter := rSpeaker.GetPlayerTeammate
+        let fSpeakerCombatAfter := rSpeaker.IsInCombat
+        let fTargetTeamAfter := rTarget.GetPlayerTeammate
+        let fTargetCombatAfter := rTarget.IsInCombat
+
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 0 "%z%r%z%r%z%r%g%r%g%r%g%r%g%r" sRequestId sSpeakerRef sTargetRef iSpeakerMod iSpeakerLocal iTargetMod iTargetLocal
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 1 "%.0f%r%.0f%r" fSpeakerTeamBefore fTargetTeamBefore
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 1 "%.2f%r%.2f%r%.2f%r" fSpeakerAggBefore fSpeakerConfBefore fSpeakerAssistBefore
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 1 "%.2f%r%.2f%r%.2f%rend%r" fTargetAggBefore fTargetConfBefore fTargetAssistBefore
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state_status.txt" 0 "id=%z speaker=%z target_ref=%z direct_ref=1 retry=1%r" sRequestId sSpeakerRef sTargetRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_diagnostics.txt" 1 "id=%z phase=retry speaker=%z target_ref=%z direct_ref=1%r" sRequestId sSpeakerRef sTargetRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_diagnostics.txt" 1 "speaker team %.0f combat %.0f target team %.0f combat %.0f%r" fSpeakerTeamAfter fSpeakerCombatAfter fTargetTeamAfter fTargetCombatAfter
+        CallAfterSeconds 12.00 (CompileScript "Dialectic/AttackCleanupTick.txt") 0
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state_status.txt" 0 "id=%z speaker=%z target_ref=%z error=actor_ref_not_loaded%r" sRequestId sSpeakerRef sTargetRef
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"
+
+    if sRequestId
+        sv_Destruct sRequestId
+    endif
+    if sSpeakerRef
+        sv_Destruct sSpeakerRef
+    endif
+    if sTargetRef
+        sv_Destruct sTargetRef
+    endif
+    if sSpeakerMod
+        sv_Destruct sSpeakerMod
+    endif
+    if sSpeakerLocal
+        sv_Destruct sSpeakerLocal
+    endif
+    if sTargetMod
+        sv_Destruct sTargetMod
+    endif
+    if sTargetLocal
+        sv_Destruct sTargetLocal
+    endif
+    if sSpeakerTeamBefore
+        sv_Destruct sSpeakerTeamBefore
+    endif
+    if sTargetTeamBefore
+        sv_Destruct sTargetTeamBefore
+    endif
+    if sSpeakerAggBefore
+        sv_Destruct sSpeakerAggBefore
+    endif
+    if sSpeakerConfBefore
+        sv_Destruct sSpeakerConfBefore
+    endif
+    if sSpeakerAssistBefore
+        sv_Destruct sSpeakerAssistBefore
+    endif
+    if sTargetAggBefore
+        sv_Destruct sTargetAggBefore
+    endif
+    if sTargetConfBefore
+        sv_Destruct sTargetConfBefore
+    endif
+    if sTargetAssistBefore
+        sv_Destruct sTargetAssistBefore
+    endif
+
+    CallAfterSeconds 0.25 (CompileScript "Dialectic/AttackStateTick.txt") 0
+end

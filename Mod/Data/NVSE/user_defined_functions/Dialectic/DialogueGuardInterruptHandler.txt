@@ -1,0 +1,129 @@
+ref rSpeaker
+ref rTopic
+ref rTopicInfo
+
+string_var sText
+string_var sVoicePath
+string_var sSpeakerRef
+string_var sGuardRef
+string_var sSpeakerName
+string_var sTargetName
+string_var sTargetRef
+string_var sDialecticSubtitle
+
+int iLine
+int iMatched
+int iSkipCapture
+int iCaptureSeq
+int iMenuMode
+
+begin Function {rSpeaker, rTopic, rTopicInfo, sText, sVoicePath}
+    if eval !(rSpeaker)
+        return
+    endif
+
+    if eval (IsFormValid rSpeaker) == 0
+        return
+    endif
+
+    let sSpeakerRef := GetFormIDString rSpeaker
+    if eval !(sSpeakerRef)
+        return
+    endif
+
+    let iMatched := 0
+    if FileExists "NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt"
+        let iLine := 1
+        while eval iLine <= 12
+            let sGuardRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt" iLine 1
+            if eval sGuardRef && (sv_Length sGuardRef) > 0
+                if eval (sv_Compare sSpeakerRef sGuardRef) == 0
+                    let iMatched := 1
+                endif
+            endif
+            if sGuardRef
+                sv_Destruct sGuardRef
+            endif
+            let iLine += 1
+        loop
+    endif
+
+    ; Capture real vanilla/radiant dialogue from the dialogue-text event.
+    ; Skip while Dialectic AI playback is active or while this actor is guarded,
+    ; otherwise blocked vanilla lines can contaminate AI dialogue history.
+    let iSkipCapture := 0
+    if eval iMatched == 1
+        let iSkipCapture := 1
+    endif
+    if FileExists "NVSE\\Plugins\\dialectic_subtitle.txt"
+        let sDialecticSubtitle := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_subtitle.txt" 1 1
+        if eval sDialecticSubtitle && (sv_Length sDialecticSubtitle) > 0
+            let iSkipCapture := 1
+        endif
+        if sDialecticSubtitle
+            sv_Destruct sDialecticSubtitle
+        endif
+    endif
+
+    if eval iSkipCapture == 0 && sText && (sv_Length sText) > 0
+        let sSpeakerName := GetName rSpeaker
+        if eval !(sSpeakerName) || (sv_Length sSpeakerName) <= 0
+            if sSpeakerName
+                sv_Destruct sSpeakerName
+            endif
+            let sSpeakerName := sv_Construct "Unknown"
+        endif
+
+        let sTargetName := GetName PlayerRef
+        if eval !(sTargetName) || (sv_Length sTargetName) <= 0
+            if sTargetName
+                sv_Destruct sTargetName
+            endif
+            let sTargetName := sv_Construct "Player"
+        endif
+        let sTargetRef := GetFormIDString PlayerRef
+
+        let iCaptureSeq += 1
+        let iMenuMode := 0
+        if MenuMode
+            let iMenuMode := 1
+            DialecticCaptureDialogue "dialogue_menu_npc" "Unknown" "%e" "Player" "00000014" sText 0 1 iCaptureSeq
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 0 "source=dialogue_menu_npc\n"
+        else
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 0 "source=radiant\n"
+        endif
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "speaker=%z\n" sSpeakerName
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "target=%z\n" sTargetName
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "target_refid=%z\n" sTargetRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "text=%z\n" sText
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "is_player_line=0\n"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "menu_mode=%g\n" iMenuMode
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "capture_id=%g\n" iCaptureSeq
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "end=1\n"
+
+        sv_Destruct sSpeakerName
+        sv_Destruct sTargetName
+        sv_Destruct sTargetRef
+    endif
+
+    if eval iMatched == 0
+        sv_Destruct sSpeakerRef
+        return
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_interrupt_status.txt" 0 "event=OnDialogueText matched=1 ref=%z%r" sSpeakerRef
+
+    if eval sVoicePath && (sv_Length sVoicePath) > 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_blocked_voice.txt" 0 "%z%r" sVoicePath
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_interrupt_status.txt" 1 "blocked=1 ref=%z%r" sSpeakerRef
+        if eval sText && (sv_Length sText) > 0
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_interrupt_status.txt" 1 "text=%z%r" sText
+        endif
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_interrupt_status.txt" 1 "voice=%z%r" sVoicePath
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_interrupt_status.txt" 1 "blocked=0 ref=%z no_voice_path=1%r" sSpeakerRef
+    endif
+
+    sv_Destruct sSpeakerRef
+end

@@ -1,0 +1,65 @@
+ref rTarget
+string_var sTargetName
+string_var sHintTarget
+float fNarratorMode
+float fModeIndex
+
+begin function {}
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1\n"
+    if MenuMode
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1\nblocked=1\nreason=menu_mode\n"
+        return
+    endif
+
+    set fNarratorMode to GetINIFloat "Narrator:Mode" "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    set fModeIndex to GetINIFloat "Modes:CurrentIndex" "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    if eval fNarratorMode > 0 || fModeIndex == 3
+        let sTargetName := sv_Construct "The Narrator"
+    else
+        let sHintTarget := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_textinput_target.tmp" 1 1
+        if eval sHintTarget && (sv_Length sHintTarget) > 0
+            let sTargetName := sv_Construct "%z" sHintTarget
+        else
+            let rTarget := GetCrosshairRef
+        endif
+        if eval !(sTargetName) && rTarget && IsFormValid rTarget && rTarget.IsActor
+            call (CompileScript "Dialectic/CollectActorSnapshot.txt")
+            let sTargetName := GetName rTarget
+        endif
+    endif
+
+    if eval sTargetName && (sv_Length sTargetName) > 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=%z\n" sTargetName
+        ShowTextInputMenu (begin function {string_var sTextInputMenu}
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
+            PrintC "[Dialectic] Wrote text input bridge file."
+            sv_Destruct sTextInputMenu
+        end) 600 105 "Talking to %z" sTargetName
+        SetTextInputExtendedProps 0 0 0 32767 2
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/red" 255
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/green" 255
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/blue" 255
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=fallback\n"
+        ShowTextInputMenu (begin function {string_var sTextInputMenu}
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
+            PrintC "[Dialectic] Wrote text input bridge file."
+            sv_Destruct sTextInputMenu
+        end) 600 105 "Talking to target"
+        SetTextInputExtendedProps 0 0 0 32767 2
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/red" 255
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/green" 255
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/blue" 255
+    endif
+
+    if eval sTargetName
+        sv_Destruct sTargetName
+    endif
+    if eval sHintTarget
+        sv_Destruct sHintTarget
+    endif
+end

@@ -1,0 +1,27 @@
+string_var sRef
+string_var sCommand
+float fPrid
+float fResult
+
+begin function {}
+    if FileExists "NVSE\\Plugins\\dialectic_lipsync_command.txt"
+        let sRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_lipsync_ref.txt" 1 1
+        let sCommand := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_lipsync_command.txt" 1 1
+        if sRef && sv_Length sRef > 0 && sCommand && sv_Length sCommand > 0
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_lipsync_status.txt" 0 "status=script_applying ref=%z command=%z%r" sRef sCommand
+            set fPrid to Console "prid %z" sRef
+            set fResult to Console "%z" sCommand
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_lipsync_status.txt" 0 "status=script_applied prid=%.0f mfg=%.0f ref=%z command=%z%r" fPrid fResult sRef sCommand
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_lipsync_command.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_lipsync_ref.txt" 0 "%e"
+        endif
+        if sRef
+            sv_Destruct sRef
+        endif
+        if sCommand
+            sv_Destruct sCommand
+        endif
+    endif
+
+    CallAfterSeconds 0.05 (CompileScript "Dialectic/LipSyncCommandTick.txt") 0
+end

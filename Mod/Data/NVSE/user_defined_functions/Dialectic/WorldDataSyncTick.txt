@@ -1,0 +1,12 @@
+float fSend
+
+begin function {}
+    set fSend to GetINIFloat_Cached "Tools:SendWorldData" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    if eval fSend > 0
+        SetINIIntC "Tools:SendWorldData" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        PrintC "[Dialectic] Sending Fallout faction and location info"
+        DialecticSyncWorldData
+    endif
+
+    CallAfterSeconds 5.0 (CompileScript "Dialectic/WorldDataSyncTick.txt") 0
+end

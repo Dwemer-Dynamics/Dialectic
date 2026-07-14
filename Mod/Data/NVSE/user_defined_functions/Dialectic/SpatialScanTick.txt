@@ -1,0 +1,197 @@
+ref rActor
+ref rBase
+ref rCell
+ref rDoor
+ref rRace
+ref rVoice
+ref rCurrentPackage
+ref rStablePackage
+
+string_var sPath
+string_var sName
+string_var sRefID
+string_var sCellID
+string_var sDoorRefID
+string_var sDoorCellID
+string_var sBaseID
+string_var sGender
+string_var sRace
+string_var sVoiceID
+string_var sVoiceFormID
+string_var sVoiceName
+
+float fX
+float fY
+float fZ
+float fYaw
+float fLevel
+
+int iCount
+int iAppend
+int iActorInInterior
+int iActorHasLosToPlayer
+int iBaseType
+int iDoorCount
+int iDoorState
+int iPlayerHasLosToActor
+int iPlayerTeammate
+int iSceneBusy
+int iDisabled
+int iDead
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 2.0 (CompileScript "Dialectic/SpatialScanTick.txt") 0
+        return
+    endif
+
+    let sPath := sv_Construct "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 0 "source=spatial_scan%r"
+    if PlayerRef.IsSneaking
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 1 "player_sneaking=1%r"
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 1 "player_sneaking=0%r"
+    endif
+
+    let iCount := 0
+    let iAppend := 1
+    let rActor := GetFirstRef 200 1 0
+
+    while eval rActor && iCount < 64
+        if eval rActor.IsActor
+            let sName := GetName rActor
+            let sRefID := GetFormIDString rActor
+            let sCellID := sv_Construct "Unknown"
+            let sBaseID := sv_Construct "Unknown"
+            let sGender := sv_Construct "Unknown"
+            let sRace := sv_Construct "Unknown"
+            let sVoiceID := sv_Construct "Unknown"
+            let sVoiceFormID := sv_Construct "Unknown"
+            let sVoiceName := sv_Construct "Unknown"
+            let iBaseType := 0
+
+            let rBase := rActor.GetBaseForm
+            if eval rBase && IsFormValid rBase
+                sv_Destruct sBaseID
+                let sBaseID := GetFormIDString rBase
+                let iBaseType := GetType rBase
+            endif
+
+            if rActor.GetIsSex Female
+                sv_Destruct sGender
+                let sGender := sv_Construct "Female"
+            elseif rActor.GetIsSex Male
+                sv_Destruct sGender
+                let sGender := sv_Construct "Male"
+            endif
+
+            let rRace := rActor.GetRace
+            if eval rRace && IsFormValid rRace
+                sv_Destruct sRace
+                let sRace := GetName rRace
+            endif
+
+            let rCell := rActor.GetParentCell
+            if eval rCell && IsFormValid rCell
+                sv_Destruct sCellID
+                let sCellID := GetFormIDString rCell
+            endif
+
+            let rVoice := rActor.GetActorVoiceType
+            if eval rVoice && IsFormValid rVoice
+                sv_Destruct sVoiceFormID
+                let sVoiceFormID := GetFormIDString rVoice
+                sv_Destruct sVoiceName
+                let sVoiceName := GetName rVoice
+                sv_Destruct sVoiceID
+                let sVoiceID := GetEditorID rVoice
+                if eval (sv_Length sVoiceID) <= 0
+                    sv_Destruct sVoiceID
+                    let sVoiceID := sv_Construct "%z" sVoiceName
+                endif
+            endif
+
+            let fX := rActor.GetPos X
+            let fY := rActor.GetPos Y
+            let fZ := rActor.GetPos Z
+            let fYaw := rActor.GetAngle Z
+            let iActorInInterior := 0
+            let iActorHasLosToPlayer := 0
+            let iPlayerHasLosToActor := 0
+            let iPlayerTeammate := 0
+            let iSceneBusy := 0
+            let iDisabled := 0
+            let iDead := 0
+            let fLevel := rActor.GetLevel
+            if rActor.IsInInterior
+                let iActorInInterior := 1
+            endif
+            if rActor.GetLOS PlayerRef
+                let iActorHasLosToPlayer := 1
+            endif
+            if PlayerRef.GetLOS rActor
+                let iPlayerHasLosToActor := 1
+            endif
+            if rActor.GetPlayerTeammate
+                let iPlayerTeammate := 1
+            endif
+            if rActor.GetDisabled
+                let iDisabled := 1
+            endif
+            if rActor.GetDead
+                let iDead := 1
+            endif
+            let rCurrentPackage := rActor.GetCurrentPackage
+            let rStablePackage := rActor.GetCurrentStablePackage
+            if eval rCurrentPackage && rStablePackage && IsFormValid rCurrentPackage && IsFormValid rStablePackage
+                if eval rCurrentPackage != rStablePackage
+                    let iSceneBusy := 1
+                endif
+            endif
+
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 1 "disabled=%z^%g%r" sRefID iDisabled
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 1 "dead=%z^%g%r" sRefID iDead
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" iAppend "position=%z^%z^%.2f^%.2f^%.2f^%.4f^%z^%z^%z^%z^%z^%z^%z^%g^%g^%g^%g^%.0f^%g^%g%r" sRefID sName fX fY fZ fYaw sCellID sVoiceID sVoiceFormID sVoiceName sBaseID sGender sRace iActorInInterior iActorHasLosToPlayer iPlayerHasLosToActor iBaseType fLevel iPlayerTeammate iSceneBusy
+
+            sv_Destruct sName
+            sv_Destruct sRefID
+            sv_Destruct sCellID
+            sv_Destruct sBaseID
+            sv_Destruct sGender
+            sv_Destruct sRace
+            sv_Destruct sVoiceID
+            sv_Destruct sVoiceFormID
+            sv_Destruct sVoiceName
+            let iCount += 1
+        endif
+
+        let rActor := GetNextRef
+    loop
+
+    let iDoorCount := 0
+    let rDoor := GetFirstRef 28 0 0
+    while eval rDoor && iDoorCount < 64
+        let sDoorRefID := GetFormIDString rDoor
+        let sDoorCellID := sv_Construct "Unknown"
+        let rCell := rDoor.GetParentCell
+        if eval rCell && IsFormValid rCell
+            sv_Destruct sDoorCellID
+            let sDoorCellID := GetFormIDString rCell
+        endif
+
+        let fX := rDoor.GetPos X
+        let fY := rDoor.GetPos Y
+        let fZ := rDoor.GetPos Z
+        let iDoorState := rDoor.GetOpenState
+
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_positions.tmp" 1 "door=%z^%.2f^%.2f^%.2f^%g^%z%r" sDoorRefID fX fY fZ iDoorState sDoorCellID
+
+        sv_Destruct sDoorRefID
+        sv_Destruct sDoorCellID
+        let iDoorCount += 1
+        let rDoor := GetNextRef
+    loop
+
+    sv_Destruct sPath
+    CallAfterSeconds 2.0 (CompileScript "Dialectic/SpatialScanTick.txt") 0
+end

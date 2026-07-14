@@ -1,0 +1,54 @@
+string_var sLastNotificationId
+string_var sNotificationId
+string_var sIcon
+string_var sMessage
+
+begin function {}
+    if eval !(FileExists "NVSE\\Plugins\\dialectic_notification.tmp")
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
+        return
+    endif
+
+    let sNotificationId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 1 1
+    let sIcon := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 2 1
+    let sMessage := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 3 1
+
+    if eval !(sNotificationId) || sv_Length sNotificationId <= 0 || !(sMessage) || sv_Length sMessage <= 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 0 "%e"
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
+        return
+    endif
+
+    if eval sLastNotificationId && (sv_Compare sNotificationId sLastNotificationId) == 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 0 "%e"
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
+        return
+    endif
+
+    if sLastNotificationId
+        sv_Destruct sLastNotificationId
+    endif
+    let sLastNotificationId := sv_Construct "%z" sNotificationId
+
+    if eval !(sIcon) || sv_Length sIcon <= 0
+        if sIcon
+            sv_Destruct sIcon
+        endif
+        let sIcon := sv_Construct "#3"
+    endif
+
+    MessageExAlt 4 "%z|%z" sIcon sMessage
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_notification.tmp" 0 "%e"
+
+    if sNotificationId
+        sv_Destruct sNotificationId
+    endif
+    if sIcon
+        sv_Destruct sIcon
+    endif
+    if sMessage
+        sv_Destruct sMessage
+    endif
+
+    CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
+end

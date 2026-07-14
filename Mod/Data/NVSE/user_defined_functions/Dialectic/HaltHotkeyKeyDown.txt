@@ -1,0 +1,11 @@
+int iButton
+
+begin function {iButton}
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_last_hotkey.tmp" 0 "handler=halt key=%g%r" iButton
+
+    if eval !MenuMode
+        DialecticHandleHaltHotkey iButton
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_last_hotkey.tmp" 1 "ignored=menu%r"
+    endif
+end

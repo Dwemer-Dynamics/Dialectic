@@ -1,0 +1,17 @@
+ref rAidUseHandler
+ref rAidItemList
+float fCount
+
+begin function {}
+    let rAidUseHandler := CompileScript "Dialectic/PlayerAidUseHandler.txt"
+    let rAidItemList := GetFormFromMod "Dialectic.esp" "1663"
+    if eval !rAidUseHandler || !rAidItemList
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_aid_use_status.txt" 0 "registered=0 reason=missing_handler_or_list\n"
+        return
+    endif
+
+    GetLoadedType rAidItemList 47
+    let fCount := ListGetCount rAidItemList
+    SetOnUseAidItemEventHandler rAidUseHandler 1 rAidItemList
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_aid_use_status.txt" 0 "registered=1 count=%.0f\n" fCount
+end

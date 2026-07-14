@@ -1,0 +1,116 @@
+ref rCell
+ref rWorld
+ref rWeather
+
+string_var sCellName
+string_var sCellID
+string_var sWorldName
+string_var sWorldID
+string_var sWeatherName
+string_var sWeatherID
+string_var sWeatherEditorID
+
+float fGameDaysPassed
+float fGameHour
+float fGameTs
+float fPlayerX
+float fPlayerY
+float fPlayerZ
+
+int iInterior
+int iGameYear
+int iGameMonth
+int iGameDay
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 2.0 (CompileScript "Dialectic/WorldContextTick.txt") 0
+        return
+    endif
+
+    let sCellName := sv_Construct "Unknown Location"
+    let sCellID := sv_Construct "Unknown"
+    let sWorldName := sv_Construct "Unknown"
+    let sWorldID := sv_Construct "Unknown"
+    let sWeatherName := sv_Construct "Unknown"
+    let sWeatherID := sv_Construct "Unknown"
+    let sWeatherEditorID := sv_Construct "Unknown"
+
+    let rCell := PlayerRef.GetParentCell
+    if eval rCell && IsFormValid rCell
+        sv_Destruct sCellName
+        let sCellName := GetName rCell
+        if eval (sv_Length sCellName) <= 0
+            sv_Destruct sCellName
+            let sCellName := GetEditorID rCell
+        endif
+        sv_Destruct sCellID
+        let sCellID := GetFormIDString rCell
+    endif
+
+    let rWorld := PlayerRef.GetParentWorldspace
+    if eval rWorld && IsFormValid rWorld
+        sv_Destruct sWorldName
+        let sWorldName := GetName rWorld
+        if eval (sv_Length sWorldName) <= 0
+            sv_Destruct sWorldName
+            let sWorldName := GetEditorID rWorld
+        endif
+        sv_Destruct sWorldID
+        let sWorldID := GetFormIDString rWorld
+    endif
+
+    let rWeather := GetCurrentWeather
+    if eval rWeather && IsFormValid rWeather
+        sv_Destruct sWeatherName
+        let sWeatherName := GetName rWeather
+        sv_Destruct sWeatherID
+        let sWeatherID := GetFormIDString rWeather
+        sv_Destruct sWeatherEditorID
+        let sWeatherEditorID := GetEditorID rWeather
+    endif
+
+    let iInterior := 0
+    if PlayerRef.IsInInterior
+        let iInterior := 1
+    endif
+
+    let iGameYear := GameYear
+    let iGameMonth := GameMonth + 1
+    let iGameDay := GameDay
+    let fGameHour := GameHour
+    let fGameDaysPassed := GameDaysPassed
+    let fGameTs := fGameDaysPassed * 10000000
+    let fPlayerX := PlayerRef.GetPos X
+    let fPlayerY := PlayerRef.GetPos Y
+    let fPlayerZ := PlayerRef.GetPos Z
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 0 "source=world_context%r"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "location=%z%r" sCellName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "cell_formid=%z%r" sCellID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "worldspace=%z%r" sWorldName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "worldspace_formid=%z%r" sWorldID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "is_interior=%g%r" iInterior
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "weather_name=%z%r" sWeatherName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "weather_editorid=%z%r" sWeatherEditorID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "weather_formid=%z%r" sWeatherID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "game_year=%g%r" iGameYear
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "game_month=%g%r" iGameMonth
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "game_day=%g%r" iGameDay
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "game_hour=%.4f%r" fGameHour
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "game_days_passed=%.4f%r" fGameDaysPassed
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "gamets=%.0f%r" fGameTs
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "player_x=%.2f%r" fPlayerX
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "player_y=%.2f%r" fPlayerY
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_world_context.tmp" 1 "player_z=%.2f%r" fPlayerZ
+
+    sv_Destruct sCellName
+    sv_Destruct sCellID
+    sv_Destruct sWorldName
+    sv_Destruct sWorldID
+    sv_Destruct sWeatherName
+    sv_Destruct sWeatherID
+    sv_Destruct sWeatherEditorID
+
+    CallAfterSeconds 2.0 (CompileScript "Dialectic/WorldContextTick.txt") 0
+end

@@ -1,0 +1,207 @@
+string_var sActorRef
+string_var sActorMod
+string_var sActorLocal
+string_var sTargetRef
+string_var sTargetMod
+string_var sTargetLocal
+string_var sRequestId
+string_var sAction
+string_var sAttempts
+
+ref rActor
+ref rTarget
+ref rActorCell
+ref rTargetCell
+
+int iActorMod
+int iActorLocal
+int iTargetMod
+int iTargetLocal
+int iAttempts
+
+float fCombat
+float fDistance
+float fMoved
+
+begin function {}
+    if MenuMode
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/MoveStateTick.txt") 0
+        return
+    endif
+
+    if eval !(FileExists "NVSE\\Plugins\\dialectic_move_state.tmp")
+        return
+    endif
+
+    let sActorRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 1
+    let sActorMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 2 1
+    let sActorLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 3 1
+    let sTargetRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 4 1
+    let sTargetMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 5 1
+    let sTargetLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 6 1
+    let sRequestId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 7 1
+    let sAction := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 8 1
+    let sAttempts := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 9 1
+
+    if eval !(sActorRef) || sv_Length sActorRef <= 0 || !(sRequestId) || sv_Length sRequestId <= 0
+        return
+    endif
+
+    let iActorMod := ToNumber sActorMod
+    let iActorLocal := ToNumber sActorLocal
+    let iTargetMod := ToNumber sTargetMod
+    let iTargetLocal := ToNumber sTargetLocal
+    let iAttempts := 0
+    if eval sAttempts && sv_Length sAttempts > 0
+        let iAttempts := ToNumber sAttempts
+    endif
+
+    let rActor := 0
+    let rTarget := 0
+    if eval iActorLocal > 0
+        let rActor := BuildRef iActorMod iActorLocal
+        if eval rActor && !(rActor.IsActor)
+            let rActor := 0
+        endif
+    endif
+    if eval sTargetRef && (sv_Compare sTargetRef "00000014") == 0
+        let rTarget := PlayerRef
+    elseif eval iTargetLocal > 0
+        let rTarget := BuildRef iTargetMod iTargetLocal
+        if eval rTarget && rTarget != PlayerRef && !(rTarget.IsActor)
+            let rTarget := 0
+        endif
+    endif
+
+    if eval !(rActor)
+        if eval iAttempts >= 30
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=actor_ref_not_loaded speaker=%z target_ref=%z%r" sRequestId sAction sActorRef sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 ""
+        else
+            let iAttempts += 1
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%z%r" sActorRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sRequestId
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sAction
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%rend%r" iAttempts
+            CallAfterSeconds 1.0 (CompileScript "Dialectic/MoveStateTick.txt") 0
+        endif
+        return
+    endif
+
+    if eval !(rTarget)
+        if eval iAttempts >= 30
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=target_ref_not_loaded speaker=%z target_ref=%z%r" sRequestId sAction sActorRef sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 ""
+        else
+            let iAttempts += 1
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%z%r" sActorRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sRequestId
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sAction
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%rend%r" iAttempts
+            CallAfterSeconds 1.0 (CompileScript "Dialectic/MoveStateTick.txt") 0
+        endif
+        return
+    endif
+
+    let fCombat := rActor.IsInCombat
+    if eval fCombat > 0
+        if eval iAttempts >= 30
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=actor_in_combat speaker=%z target_ref=%z%r" sRequestId sAction sActorRef sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 ""
+        else
+            let iAttempts += 1
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%z%r" sActorRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sTargetRef
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetMod
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetLocal
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sRequestId
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sAction
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%rend%r" iAttempts
+            CallAfterSeconds 1.0 (CompileScript "Dialectic/MoveStateTick.txt") 0
+        endif
+        return
+    endif
+
+    let fMoved := 0
+    let rActorCell := rActor.GetParentCell
+    let rTargetCell := rTarget.GetParentCell
+    if eval rActorCell && rTargetCell && rActorCell != rTargetCell
+        rActor.MoveTo rTarget
+        let fMoved := 1
+    endif
+
+    let fDistance := rActor.GetDistance rTarget
+    if eval fDistance <= 128
+        rActor.RemoveScriptPackage
+        rActor.RemoveFromFaction DialecticMoveToFaction
+        rActor.EvaluatePackage
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok speaker=%z target_ref=%z distance=%.0f moved=%.0f%r" sRequestId sAction sActorRef sTargetRef fDistance fMoved
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 ""
+    elseif eval iAttempts >= 30
+        rActor.RemoveScriptPackage
+        rActor.RemoveFromFaction DialecticMoveToFaction
+        rActor.EvaluatePackage
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=move_timeout speaker=%z target_ref=%z distance=%.0f%r" sRequestId sAction sActorRef sTargetRef fDistance
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 ""
+    else
+        rActor.SetRestrained 0
+        rActor.RemoveScriptPackage
+        rActor.AddToFaction DialecticMoveToFaction 0
+        SetPackageLocationReference DialecticMoveToTargetPackage rTarget
+        SetPackageTargetDistance DialecticMoveToTargetPackage 96
+        rActor.AddScriptPackage DialecticMoveToTargetPackage
+        rActor.EvaluatePackage
+        let iAttempts += 1
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%z%r" sActorRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorMod
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iActorLocal
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sTargetRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetMod
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%r" iTargetLocal
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sRequestId
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%z%r" sAction
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 1 "%g%rend%r" iAttempts
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state_status.txt" 0 "actor=%z status=pending target=%z request=%z action=%z distance=%.0f attempts=%g%r" sActorRef sTargetRef sRequestId sAction fDistance iAttempts
+        CallAfterSeconds 1.0 (CompileScript "Dialectic/MoveStateTick.txt") 0
+    endif
+
+    if sActorRef
+        sv_Destruct sActorRef
+    endif
+    if sActorMod
+        sv_Destruct sActorMod
+    endif
+    if sActorLocal
+        sv_Destruct sActorLocal
+    endif
+    if sTargetRef
+        sv_Destruct sTargetRef
+    endif
+    if sTargetMod
+        sv_Destruct sTargetMod
+    endif
+    if sTargetLocal
+        sv_Destruct sTargetLocal
+    endif
+    if sRequestId
+        sv_Destruct sRequestId
+    endif
+    if sAction
+        sv_Destruct sAction
+    endif
+    if sAttempts
+        sv_Destruct sAttempts
+    endif
+end

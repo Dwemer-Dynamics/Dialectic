@@ -1,0 +1,227 @@
+string_var sGuardRef
+string_var sGuardMod
+string_var sGuardLocal
+string_var sMutedActor
+string_var sMutedVoice
+string_var sMutedActorMod
+string_var sMutedActorLocal
+string_var sMutedVoiceMod
+string_var sMutedVoiceLocal
+string_var sVoiceRef
+
+ref rGuardActor
+ref rGuardBase
+ref rOriginalVoice
+ref rMutedActor
+ref rMutedBase
+ref rRestoreVoice
+
+int iGuardMod
+int iGuardLocal
+int iMutedActorMod
+int iMutedActorLocal
+int iMutedVoiceMod
+int iMutedVoiceLocal
+int iOriginalVoiceMod
+int iOriginalVoiceLocal
+int iMutedCount
+int iRestoredCount
+int iConsoleRestoreAttempt
+
+float fPrid
+float fRestore
+
+begin function {}
+    let sGuardRef := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt" 1 1
+    let sMutedActor := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor.txt" 1 1
+    let sMutedVoice := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_original.txt" 1 1
+    let sMutedActorMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_mod.txt" 1 1
+    let sMutedActorLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_local.txt" 1 1
+    let sMutedVoiceMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_mod.txt" 1 1
+    let sMutedVoiceLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_local.txt" 1 1
+
+    if eval !(sGuardRef) || (sv_Length sGuardRef) <= 0
+        if eval !(sMutedActor) || (sv_Length sMutedActor) <= 0
+            if sGuardRef
+                sv_Destruct sGuardRef
+            endif
+            if sMutedActor
+                sv_Destruct sMutedActor
+            endif
+            if sMutedVoice
+                sv_Destruct sMutedVoice
+            endif
+            if sMutedActorMod
+                sv_Destruct sMutedActorMod
+            endif
+            if sMutedActorLocal
+                sv_Destruct sMutedActorLocal
+            endif
+            if sMutedVoiceMod
+                sv_Destruct sMutedVoiceMod
+            endif
+            if sMutedVoiceLocal
+                sv_Destruct sMutedVoiceLocal
+            endif
+
+            CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardTick.txt") 0
+            return
+        endif
+
+        let iRestoredCount := 0
+        let iConsoleRestoreAttempt := 0
+        if eval sMutedActor && (sv_Length sMutedActor) > 0 && sMutedVoice && (sv_Length sMutedVoice) > 0
+            set fRestore to Console "%z.SetActorVoiceType %z" sMutedActor sMutedVoice
+            let iRestoredCount := 1
+            let iConsoleRestoreAttempt := 1
+        endif
+
+        if eval iRestoredCount > 0 || !(sMutedActor) || (sv_Length sMutedActor) <= 0
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_original.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_mod.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_local.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_mod.txt" 0 "%e"
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_local.txt" 0 "%e"
+        endif
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_status.txt" 0 "active=0 matched=0 muted=0 restored=%g console_attempt=%g actor=%z voice=%z heartbeat=1%r" iRestoredCount iConsoleRestoreAttempt sMutedActor sMutedVoice
+
+        if sGuardRef
+            sv_Destruct sGuardRef
+        endif
+        if sMutedActor
+            sv_Destruct sMutedActor
+        endif
+        if sMutedVoice
+            sv_Destruct sMutedVoice
+        endif
+        if sMutedActorMod
+            sv_Destruct sMutedActorMod
+        endif
+        if sMutedActorLocal
+            sv_Destruct sMutedActorLocal
+        endif
+        if sMutedVoiceMod
+            sv_Destruct sMutedVoiceMod
+        endif
+        if sMutedVoiceLocal
+            sv_Destruct sMutedVoiceLocal
+        endif
+
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardTick.txt") 0
+        return
+    endif
+
+    ; The guard is edge-triggered. Do not restore and reapply the same actor's
+    ; voice every poll while an AI line is playing.
+    if eval sMutedActor && (sv_Length sMutedActor) > 0 && (sv_Compare sMutedActor sGuardRef) == 0
+        sv_Destruct sGuardRef
+        sv_Destruct sMutedActor
+        if sMutedVoice
+            sv_Destruct sMutedVoice
+        endif
+        if sMutedActorMod
+            sv_Destruct sMutedActorMod
+        endif
+        if sMutedActorLocal
+            sv_Destruct sMutedActorLocal
+        endif
+        if sMutedVoiceMod
+            sv_Destruct sMutedVoiceMod
+        endif
+        if sMutedVoiceLocal
+            sv_Destruct sMutedVoiceLocal
+        endif
+
+        CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardTick.txt") 0
+        return
+    endif
+
+    let iRestoredCount := 0
+    let iConsoleRestoreAttempt := 0
+    if eval sMutedActor && (sv_Length sMutedActor) > 0 && sMutedVoice && (sv_Length sMutedVoice) > 0
+        set fRestore to Console "%z.SetActorVoiceType %z" sMutedActor sMutedVoice
+        let iRestoredCount := 1
+        let iConsoleRestoreAttempt := 1
+    endif
+
+    let iGuardMod := 0
+    let iGuardLocal := 0
+    let sGuardMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_mod.txt" 1 1
+    let sGuardLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_local.txt" 1 1
+    if eval sGuardMod && (sv_Length sGuardMod) > 0
+        let iGuardMod := ToNumber sGuardMod
+    endif
+    if eval sGuardLocal && (sv_Length sGuardLocal) > 0
+        let iGuardLocal := ToNumber sGuardLocal
+    endif
+
+    let rGuardActor := 0
+    if eval iGuardLocal > 0
+        let rGuardActor := BuildRef iGuardMod iGuardLocal
+    endif
+
+    if eval rGuardActor && rGuardActor.IsActor
+        let rGuardBase := rGuardActor.GetBaseObject
+        let rOriginalVoice := rGuardActor.GetActorVoiceType rGuardBase
+        if eval !(rOriginalVoice) || !(IsFormValid rOriginalVoice)
+            let rOriginalVoice := rGuardActor.GetActorVoiceType
+        endif
+        let sVoiceRef := sv_Construct "%e"
+        if eval rOriginalVoice && IsFormValid rOriginalVoice
+            sv_Destruct sVoiceRef
+            let sVoiceRef := GetFormIDString rOriginalVoice
+            let iOriginalVoiceMod := GetSourceModIndex rOriginalVoice
+            let iOriginalVoiceLocal := GetLocalRefIndex rOriginalVoice
+        endif
+
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor.txt" 0 "%z%r" sGuardRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_original.txt" 0 "%z%r" sVoiceRef
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_mod.txt" 0 "%g%r" iGuardMod
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_local.txt" 0 "%g%r" iGuardLocal
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_mod.txt" 0 "%g%r" iOriginalVoiceMod
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_local.txt" 0 "%g%r" iOriginalVoiceLocal
+        if eval sVoiceRef && (sv_Length sVoiceRef) > 0
+            rGuardActor.SetActorVoiceType NVDLC01FemaleUnqueNoDialogue
+            let iMutedCount := 1
+        else
+            let iMutedCount := 0
+        endif
+        sv_Destruct sVoiceRef
+    else
+        set fPrid to Console "prid %z" sGuardRef
+        let iMutedCount := 0
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_status.txt" 0 "active=1 locked=1 matched=%g muted=%g restored=%g package_flags=0 heartbeat=1%r" iMutedCount iMutedCount iRestoredCount
+
+    if sGuardRef
+        sv_Destruct sGuardRef
+    endif
+    if sGuardMod
+        sv_Destruct sGuardMod
+    endif
+    if sGuardLocal
+        sv_Destruct sGuardLocal
+    endif
+    if sMutedActor
+        sv_Destruct sMutedActor
+    endif
+    if sMutedVoice
+        sv_Destruct sMutedVoice
+    endif
+    if sMutedActorMod
+        sv_Destruct sMutedActorMod
+    endif
+    if sMutedActorLocal
+        sv_Destruct sMutedActorLocal
+    endif
+    if sMutedVoiceMod
+        sv_Destruct sMutedVoiceMod
+    endif
+    if sMutedVoiceLocal
+        sv_Destruct sMutedVoiceLocal
+    endif
+
+    CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardTick.txt") 0
+end

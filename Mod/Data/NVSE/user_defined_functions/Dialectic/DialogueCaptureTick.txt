@@ -1,0 +1,147 @@
+ref rSpeaker
+ref rTarget
+
+string_var sSubtitle
+string_var sDialecticSubtitle
+string_var sSpeakerName
+string_var sSpeakerRef
+string_var sTargetName
+string_var sTargetRef
+string_var sLastCaptureKey
+string_var sCaptureKey
+
+int iMenuMode
+int iPlayerLine
+int iCaptureSeq
+
+begin function {}
+    let iMenuMode := 0
+    if MenuMode
+        let iMenuMode := 1
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
+        return
+    endif
+
+    ; Do not recapture Dialectic AI subtitles as vanilla/radiant dialogue.
+    if FileExists "NVSE\\Plugins\\dialectic_subtitle.txt"
+        let sDialecticSubtitle := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_subtitle.txt" 1 1
+        if sDialecticSubtitle && sv_Length sDialecticSubtitle > 0
+            if sDialecticSubtitle
+                sv_Destruct sDialecticSubtitle
+            endif
+            CallAfterSeconds 0.10 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
+            return
+        endif
+        if sDialecticSubtitle
+            sv_Destruct sDialecticSubtitle
+        endif
+    endif
+
+    let sSubtitle := GetUIString "HUDSubtitle\subtitle_text"
+    if eval !(sSubtitle) || (sv_Length sSubtitle) <= 0
+        if sSubtitle
+            sv_Destruct sSubtitle
+        endif
+        let sSubtitle := GetUIString "HUDSubtitle\text"
+    endif
+    if eval !(sSubtitle) || (sv_Length sSubtitle) <= 0
+        if sSubtitle
+            sv_Destruct sSubtitle
+        endif
+        let sSubtitle := GetUIString "HUDMainMenu\Subtitles\string"
+    endif
+    if eval !(sSubtitle) || (sv_Length sSubtitle) <= 0
+        if sSubtitle
+            sv_Destruct sSubtitle
+        endif
+        let sSubtitle := GetUIString "HUDMainMenu\Subtitles\justify_center_text\string"
+    endif
+
+    if eval !(sSubtitle) || (sv_Length sSubtitle) <= 0
+        if sLastCaptureKey
+            sv_Destruct sLastCaptureKey
+        endif
+        if sSubtitle
+            sv_Destruct sSubtitle
+        endif
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
+        return
+    endif
+
+    let rSpeaker := PlayerRef.GetDialogueSpeaker PlayerRef
+    let rTarget := PlayerRef.GetDialogueTarget
+
+    let sSpeakerName := sv_Construct "Unknown"
+    let sSpeakerRef := sv_Construct "%e"
+    let sTargetName := sv_Construct "%e"
+    let sTargetRef := sv_Construct "%e"
+    let iPlayerLine := 0
+
+    if eval rSpeaker && IsFormValid rSpeaker
+        sv_Destruct sSpeakerName
+        let sSpeakerName := GetName rSpeaker
+        if eval !(sSpeakerName) || (sv_Length sSpeakerName) <= 0
+            if sSpeakerName
+                sv_Destruct sSpeakerName
+            endif
+            let sSpeakerName := sv_Construct "Unknown"
+        endif
+        sv_Destruct sSpeakerRef
+        let sSpeakerRef := GetFormIDString rSpeaker
+        if eval rSpeaker == PlayerRef
+            let iPlayerLine := 1
+        endif
+    endif
+
+    if eval rTarget && IsFormValid rTarget
+        sv_Destruct sTargetName
+        let sTargetName := GetName rTarget
+        if eval !(sTargetName) || (sv_Length sTargetName) <= 0
+            if sTargetName
+                sv_Destruct sTargetName
+            endif
+            let sTargetName := sv_Construct "%e"
+        endif
+        sv_Destruct sTargetRef
+        let sTargetRef := GetFormIDString rTarget
+    endif
+
+    let sCaptureKey := sv_Construct "%z|%z|%g" sSpeakerRef sSubtitle iMenuMode
+    if eval sLastCaptureKey && (sv_Compare sCaptureKey sLastCaptureKey) == 0
+        sv_Destruct sCaptureKey
+        sv_Destruct sSubtitle
+        sv_Destruct sSpeakerName
+        sv_Destruct sSpeakerRef
+        sv_Destruct sTargetName
+        sv_Destruct sTargetRef
+        CallAfterSeconds 0.10 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
+        return
+    endif
+
+    if sLastCaptureKey
+        sv_Destruct sLastCaptureKey
+    endif
+    let sLastCaptureKey := sv_Construct "%z" sCaptureKey
+    sv_Destruct sCaptureKey
+
+    let iCaptureSeq += 1
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 0 "source=radiant\n"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "speaker=%z\n" sSpeakerName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "target=%z\n" sTargetName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "target_refid=%z\n" sTargetRef
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "text=%z\n" sSubtitle
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "is_player_line=%g\n" iPlayerLine
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "menu_mode=%g\n" iMenuMode
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "capture_id=%g\n" iCaptureSeq
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "end=1\n"
+
+    sv_Destruct sSubtitle
+    sv_Destruct sSpeakerName
+    sv_Destruct sSpeakerRef
+    sv_Destruct sTargetName
+    sv_Destruct sTargetRef
+
+    CallAfterSeconds 0.25 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
+end

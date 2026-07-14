@@ -1,0 +1,10 @@
+float fValue
+int iMenu
+int iSubmenu
+int iOption
+array_var aJSON
+
+Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    DialecticReloadConfig
+    call (CompileScript "Dialectic/RegisterHotkeys.gek")
+End

@@ -1,0 +1,14 @@
+begin function {}
+    if MenuMode
+        CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0
+        return
+    endif
+
+    if FileExists "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
+        call (CompileScript "Dialectic/CollectActorSnapshot.txt")
+    elseif FileExists "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
+        call (CompileScript "Dialectic/CollectActorSnapshot.txt")
+    endif
+
+    CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0
+end

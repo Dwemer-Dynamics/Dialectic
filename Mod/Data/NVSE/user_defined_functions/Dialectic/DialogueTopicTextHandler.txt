@@ -1,0 +1,17 @@
+array_var aArgs
+
+string_var sText
+string_var sTileName
+
+begin Function {aArgs}
+    let sText := aArgs["text"]
+    let sTileName := aArgs["tileName"]
+
+    if eval sText && (sv_Length sText) > 0
+    else
+    endif
+
+    if eval sTileName && (sv_Length sTileName) > 0
+    else
+    endif
+end

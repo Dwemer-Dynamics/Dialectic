@@ -1,0 +1,22 @@
+# Build outputs
+/Plugin/out/
+/Plugin/build/
+/Plugin/.vs/
+*.suo
+*.user
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# Runtime artifacts
+*.log
+*.tmp
+/Mod/Data/NVSE/Plugins/*.log
+/Mod/Data/NVSE/Plugins/*.tmp
+
+# Local packaged binary output
+/Mod/Data/NVSE/Plugins/dialectic.dll
+/Mod/Data/NVSE/Plugins/dialectic_custom.ini
+
+# Game audio is imported from the user's installed game at runtime.
+/Mod/Data/Dialectic/voice_samples/

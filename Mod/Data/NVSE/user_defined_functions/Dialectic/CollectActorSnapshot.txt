@@ -1,0 +1,472 @@
+ref rTarget
+ref rBase
+ref rRace
+ref rVoice
+ref rItem
+ref rInventoryItem
+ref rActor
+
+string_var sPath
+string_var sName
+string_var sBaseID
+string_var sRefID
+string_var sRequestedRefID
+string_var sRequestedName
+string_var sRequestedMod
+string_var sRequestedLocal
+string_var sGender
+string_var sRace
+string_var sVoiceID
+string_var sVoiceFormID
+string_var sVoiceName
+string_var sItemName
+string_var sItemID
+string_var sInventoryItemName
+string_var sInventoryItemID
+string_var sScanRef
+
+array_var aActors
+array_var aActorEntry
+
+float fStrength
+float fPerception
+float fEndurance
+float fCharisma
+float fIntelligence
+float fAgility
+float fLuck
+float fBarter
+float fEnergyWeapons
+float fExplosives
+float fGuns
+float fLockpick
+float fMedicine
+float fMeleeWeapons
+float fRepair
+float fScience
+float fSneak
+float fSpeech
+float fSurvival
+float fUnarmed
+float fLevel
+float fHealth
+float fHealthMax
+float fActionPoints
+float fActionPointsMax
+float fScale
+float fXP
+float fKarma
+float fItemCondition
+
+int iSlot
+int iInventoryIndex
+int iInventoryCount
+int iInventoryItemCount
+int iInventoryItemType
+int iEquipmentMask
+int iMaskSlot
+int iEquippedSlot
+int iWroteEquippedItem
+int iWroteInventoryItem
+int iRequestedMod
+int iRequestedLocal
+int iScanCount
+
+begin function {}
+    if FileExists "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
+        let sRequestedRefID := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 1 1
+        let sRequestedName := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 2 1
+        let sRequestedMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 3 1
+        let sRequestedLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 4 1
+    elseif FileExists "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
+        let sRequestedRefID := ReadStringFromFile "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 1 1
+        let sRequestedName := ReadStringFromFile "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 2 1
+        let sRequestedMod := ReadStringFromFile "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 3 1
+        let sRequestedLocal := ReadStringFromFile "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 4 1
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 0 "status=no_request\n"
+        return
+    endif
+
+    let rTarget := 0
+    if eval sRequestedLocal && sv_Length sRequestedLocal > 0
+        let iRequestedMod := ToNumber sRequestedMod
+        let iRequestedLocal := ToNumber sRequestedLocal
+        if eval iRequestedLocal > 0
+            let rTarget := BuildRef iRequestedMod iRequestedLocal
+            if eval rTarget && !(rTarget.IsActor)
+                let rTarget := 0
+            endif
+        endif
+    endif
+
+    if eval !(rTarget) && sRequestedRefID && sv_Length sRequestedRefID > 0
+        let aActors := GetActorsByProcessingLevel 0
+        foreach aActorEntry <- aActors
+            let rActor := aActorEntry["value"]
+            if eval rActor && rActor.IsActor
+                let sScanRef := GetFormIDString rActor
+                if eval sScanRef && (sv_Compare sScanRef sRequestedRefID) == 0
+                    let rTarget := rActor
+                endif
+                if sScanRef
+                    sv_Destruct sScanRef
+                endif
+            endif
+            if eval rTarget
+                break
+            endif
+        loop
+    endif
+
+    if eval !(rTarget) && sRequestedRefID && sv_Length sRequestedRefID > 0
+        let iScanCount := 0
+        let rActor := GetFirstRef 200 1 0
+        while eval rActor && iScanCount < 512
+            if eval rActor.IsActor
+                let sScanRef := GetFormIDString rActor
+                if eval sScanRef && (sv_Compare sScanRef sRequestedRefID) == 0
+                    let rTarget := rActor
+                endif
+                if sScanRef
+                    sv_Destruct sScanRef
+                endif
+            endif
+            if eval rTarget
+                let iScanCount := 512
+                let rActor := 0
+            else
+                let rActor := GetNextRef
+            endif
+            let iScanCount += 1
+        loop
+    endif
+
+    if eval !(rTarget) && sRequestedRefID && sv_Length sRequestedRefID > 0
+        let iScanCount := 0
+        let rActor := GetFirstRef 201 1 0
+        while eval rActor && iScanCount < 512
+            if eval rActor.IsActor
+                let sScanRef := GetFormIDString rActor
+                if eval sScanRef && (sv_Compare sScanRef sRequestedRefID) == 0
+                    let rTarget := rActor
+                endif
+                if sScanRef
+                    sv_Destruct sScanRef
+                endif
+            endif
+            if eval rTarget
+                let iScanCount := 512
+                let rActor := 0
+            else
+                let rActor := GetNextRef
+            endif
+            let iScanCount += 1
+        loop
+    endif
+
+    if eval !(rTarget) && (!(sRequestedRefID) || sv_Length sRequestedRefID <= 0)
+        let rTarget := GetCrosshairRef
+    endif
+
+    if eval !rTarget
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 0 "status=no_target\n"
+        if eval sRequestedRefID
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "requested=%z\n" sRequestedRefID
+        endif
+        return
+    endif
+
+    if eval !(IsFormValid rTarget)
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 0 "status=invalid_target\n"
+        return
+    endif
+
+    if eval !(rTarget.IsActor)
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 0 "status=not_actor\n"
+        return
+    endif
+
+    let sPath := sv_Construct "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp"
+    let sName := GetName rTarget
+    let sRefID := GetFormIDString rTarget
+    let sGender := sv_Construct "Unknown"
+    let sRace := sv_Construct "Unknown"
+    let sBaseID := sv_Construct "Unknown"
+    let sVoiceID := sv_Construct "Unknown"
+    let sVoiceFormID := sv_Construct "Unknown"
+    let sVoiceName := sv_Construct "Unknown"
+
+    let rBase := rTarget.GetBaseForm
+    if eval rBase && IsFormValid rBase
+        sv_Destruct sBaseID
+        let sBaseID := GetFormIDString rBase
+    endif
+
+    if rTarget.GetIsSex Female
+        sv_Destruct sGender
+        let sGender := sv_Construct "Female"
+    elseif rTarget.GetIsSex Male
+        sv_Destruct sGender
+        let sGender := sv_Construct "Male"
+    endif
+
+    let rRace := rTarget.GetRace
+    if eval rRace && IsFormValid rRace
+        sv_Destruct sRace
+        let sRace := GetName rRace
+    endif
+
+    let rVoice := rTarget.GetActorVoiceType
+    if eval rVoice && IsFormValid rVoice
+        sv_Destruct sVoiceFormID
+        let sVoiceFormID := GetFormIDString rVoice
+        sv_Destruct sVoiceName
+        let sVoiceName := GetName rVoice
+        sv_Destruct sVoiceID
+        let sVoiceID := GetEditorID rVoice
+        if eval (sv_Length sVoiceID) <= 0
+            sv_Destruct sVoiceID
+            let sVoiceID := sv_Construct "%z" sVoiceName
+        endif
+    endif
+
+    let fStrength := rTarget.GetAV Strength
+    let fPerception := rTarget.GetAV Perception
+    let fEndurance := rTarget.GetAV Endurance
+    let fCharisma := rTarget.GetAV Charisma
+    let fIntelligence := rTarget.GetAV Intelligence
+    let fAgility := rTarget.GetAV Agility
+    let fLuck := rTarget.GetAV Luck
+
+    let fBarter := rTarget.GetAV Barter
+    let fEnergyWeapons := rTarget.GetAV EnergyWeapons
+    let fExplosives := rTarget.GetAV Explosives
+    let fGuns := rTarget.GetAV Guns
+    let fLockpick := rTarget.GetAV Lockpick
+    let fMedicine := rTarget.GetAV Medicine
+    let fMeleeWeapons := rTarget.GetAV MeleeWeapons
+    let fRepair := rTarget.GetAV Repair
+    let fScience := rTarget.GetAV Science
+    let fSneak := rTarget.GetAV Sneak
+    let fSpeech := rTarget.GetAV Speech
+    let fSurvival := rTarget.GetAV Survival
+    let fUnarmed := rTarget.GetAV Unarmed
+
+    let fLevel := rTarget.GetLevel
+    let fHealth := rTarget.GetAV Health
+    let fHealthMax := rTarget.GetBaseAV Health
+    let fActionPoints := rTarget.GetAV ActionPoints
+    let fActionPointsMax := rTarget.GetBaseAV ActionPoints
+    let fScale := rTarget.GetScale
+    let fXP := rTarget.GetAV XP
+    let fKarma := rTarget.GetAV Karma
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 0 "name=%z\n" sName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "refid=%z\n" sRefID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "baseid=%z\n" sBaseID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "gender=%z\n" sGender
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "race=%z\n" sRace
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "voiceid=%z\n" sVoiceID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "voice_formid=%z\n" sVoiceFormID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "voice_name=%z\n" sVoiceName
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "strength=%.0f\n" fStrength
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "perception=%.0f\n" fPerception
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "endurance=%.0f\n" fEndurance
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "charisma=%.0f\n" fCharisma
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "intelligence=%.0f\n" fIntelligence
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "agility=%.0f\n" fAgility
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "luck=%.0f\n" fLuck
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "barter=%.0f\n" fBarter
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "energy_weapons=%.0f\n" fEnergyWeapons
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "explosives=%.0f\n" fExplosives
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "guns=%.0f\n" fGuns
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "lockpick=%.0f\n" fLockpick
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "medicine=%.0f\n" fMedicine
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "melee_weapons=%.0f\n" fMeleeWeapons
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "repair=%.0f\n" fRepair
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "science=%.0f\n" fScience
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "sneak=%.0f\n" fSneak
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "speech=%.0f\n" fSpeech
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "survival=%.0f\n" fSurvival
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "unarmed=%.0f\n" fUnarmed
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "level=%.0f\n" fLevel
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "health=%.0f\n" fHealth
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "health_max=%.0f\n" fHealthMax
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "action_points=%.0f\n" fActionPoints
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "action_points_max=%.0f\n" fActionPointsMax
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "scale=%.2f\n" fScale
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "xp=%.0f\n" fXP
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "karma=%.0f\n" fKarma
+
+    let rItem := rTarget.GetEquippedObject 0
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "face=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 1
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "head=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 2
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "body=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 3
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "left_hand=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 4
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "right_hand=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 5
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "weapon=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 17
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "upper_body_addon=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let rItem := rTarget.GetEquippedObject 18
+    if eval rItem && IsFormValid rItem
+        let sItemName := GetName rItem
+        let sItemID := GetFormIDString rItem
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "lower_body_addon=%z^%z\n" sItemName sItemID
+        sv_Destruct sItemName
+        sv_Destruct sItemID
+    endif
+
+    let iWroteEquippedItem := 0
+    let iSlot := 0
+    while iSlot < 20
+        let rItem := rTarget.GetEquippedObject iSlot
+        if eval rItem && IsFormValid rItem
+            let sItemName := GetName rItem
+            let sItemID := GetFormIDString rItem
+            let fItemCondition := rTarget.GetEquippedCurrentHealth iSlot
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "equipment=%g^%z^%z^%.4f\n" iSlot sItemName sItemID fItemCondition
+            let iWroteEquippedItem := 1
+            sv_Destruct sItemName
+            sv_Destruct sItemID
+        endif
+        let iSlot += 1
+    loop
+
+    if iWroteEquippedItem == 0
+        foreach rInventoryItem <- rTarget
+            if eval rInventoryItem && rInventoryItem.IsEquipped
+                let rItem := rInventoryItem.GetBaseObject
+                if eval rItem && IsFormValid rItem
+                    let sItemName := GetName rItem
+                    let sItemID := GetFormIDString rItem
+                    let iEquippedSlot := -1
+                    let iEquipmentMask := GetEquipmentSlotsMask rItem
+                    let iMaskSlot := 0
+                    while iMaskSlot < 20
+                        if iEquippedSlot < 0
+                            if GetBit iEquipmentMask iMaskSlot
+                                let iEquippedSlot := iMaskSlot
+                            endif
+                        endif
+                        let iMaskSlot += 1
+                    loop
+                    if iEquippedSlot < 0
+                        let iInventoryItemType := GetType rItem
+                        if iInventoryItemType == 40
+                            let iEquippedSlot := 5
+                        else
+                            let iEquippedSlot := 2
+                        endif
+                    endif
+                    let fItemCondition := -1
+                    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "equipment=%g^%z^%z^%.4f\n" iEquippedSlot sItemName sItemID fItemCondition
+                    sv_Destruct sItemName
+                    sv_Destruct sItemID
+                endif
+            endif
+        loop
+    endif
+
+    let iInventoryCount := rTarget.GetNumItems
+    let iInventoryIndex := 0
+    let iWroteInventoryItem := 0
+    while iInventoryIndex < iInventoryCount
+        let rInventoryItem := rTarget.GetInventoryObject iInventoryIndex
+        if eval rInventoryItem && IsFormValid rInventoryItem
+            let iInventoryItemCount := rTarget.GetItemCount rInventoryItem
+            if iInventoryItemCount > 0
+                let sInventoryItemName := GetName rInventoryItem
+                let sInventoryItemID := GetFormIDString rInventoryItem
+                let iInventoryItemType := GetType rInventoryItem
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot.tmp" 1 "inventory=%z^%z^%g^%g%r" sInventoryItemName sInventoryItemID iInventoryItemCount iInventoryItemType
+                let iWroteInventoryItem += 1
+                sv_Destruct sInventoryItemName
+                sv_Destruct sInventoryItemID
+            endif
+        endif
+        let iInventoryIndex += 1
+    loop
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 0 "status=ok\n"
+    if eval sRequestedRefID
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "requested=%z\n" sRequestedRefID
+    endif
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "captured=%z\n" sRefID
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "name=%z\n" sName
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "equipment=%g\n" iWroteEquippedItem
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "inventory=%g\n" iWroteInventoryItem
+
+    PrintC "[Dialectic] Captured actor snapshot for %z (%z)." sName sRefID
+
+    sv_Destruct sPath
+    sv_Destruct sName
+    sv_Destruct sBaseID
+    sv_Destruct sRefID
+    sv_Destruct sRequestedRefID
+    sv_Destruct sRequestedName
+    sv_Destruct sRequestedMod
+    sv_Destruct sRequestedLocal
+    sv_Destruct sGender
+    sv_Destruct sRace
+    sv_Destruct sVoiceID
+    sv_Destruct sVoiceFormID
+    sv_Destruct sVoiceName
+end

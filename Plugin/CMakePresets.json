@@ -1,0 +1,45 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "x86-release",
+            "displayName": "x86 Release (for Fallout NV)",
+            "description": "32-bit Release build for Fallout New Vegas",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "Win32",
+                "strategy": "set"
+            },
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "x86-debug",
+            "displayName": "x86 Debug (for Fallout NV)",
+            "description": "32-bit Debug build for Fallout New Vegas",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "Win32",
+                "strategy": "set"
+            },
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "x86-release",
+            "configurePreset": "x86-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "x86-debug",
+            "configurePreset": "x86-debug",
+            "configuration": "Debug"
+        }
+    ]
+}

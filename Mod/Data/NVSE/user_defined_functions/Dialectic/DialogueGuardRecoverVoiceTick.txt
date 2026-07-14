@@ -1,0 +1,70 @@
+string_var sStoredActor
+string_var sStoredVoice
+string_var sStoredActorMod
+string_var sStoredActorLocal
+string_var sStoredVoiceMod
+string_var sStoredVoiceLocal
+
+ref rStoredActor
+ref rStoredBase
+ref rRestoreVoice
+
+int iRestoredCount
+int iStoredActorMod
+int iStoredActorLocal
+int iStoredVoiceMod
+int iStoredVoiceLocal
+int iConsoleRestoreAttempt
+
+float fPrid
+float fRestore
+
+begin function {}
+    let iRestoredCount := 0
+
+    let sStoredActor := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor.txt" 1 1
+    let sStoredVoice := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_original.txt" 1 1
+    let sStoredActorMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_mod.txt" 1 1
+    let sStoredActorLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_local.txt" 1 1
+    let sStoredVoiceMod := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_mod.txt" 1 1
+    let sStoredVoiceLocal := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_local.txt" 1 1
+
+    let iConsoleRestoreAttempt := 0
+    if eval sStoredActor && (sv_Length sStoredActor) > 0 && sStoredVoice && (sv_Length sStoredVoice) > 0
+        set fRestore to Console "%z.SetActorVoiceType %z" sStoredActor sStoredVoice
+        let iRestoredCount := 1
+        let iConsoleRestoreAttempt := 1
+    endif
+
+    if eval iRestoredCount > 0 || !(sStoredActor) || (sv_Length sStoredActor) <= 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_mod.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_local.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_original.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_mod.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_actor_local.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_mod.txt" 0 "%e"
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_voice_local.txt" 0 "%e"
+    endif
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_recovery_status.txt" 0 "restored=%g console_attempt=%g actor=%z voice=%z heartbeat=1%r" iRestoredCount iConsoleRestoreAttempt sStoredActor sStoredVoice
+
+    if sStoredActor
+        sv_Destruct sStoredActor
+    endif
+    if sStoredVoice
+        sv_Destruct sStoredVoice
+    endif
+    if sStoredActorMod
+        sv_Destruct sStoredActorMod
+    endif
+    if sStoredActorLocal
+        sv_Destruct sStoredActorLocal
+    endif
+    if sStoredVoiceMod
+        sv_Destruct sStoredVoiceMod
+    endif
+    if sStoredVoiceLocal
+        sv_Destruct sStoredVoiceLocal
+    endif
+end
