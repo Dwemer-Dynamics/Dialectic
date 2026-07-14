@@ -9,8 +9,14 @@ REQUIREMENTS
 - Fallout: New Vegas with xNVSE 6.3.3 or newer
 - JIP LN NVSE 57 or newer
 - JohnnyGuitar NVSE 5.17 or newer
+- ITR NVSE 1.0.0 or newer
 - Mod Configuration Menu and MCM Extender
-- DialecticServer
+- ShowOff xNVSE and UIO (required by MCM Extender)
+- Microsoft Visual C++ 2015-2022 Redistributable (x86)
+- A running matching-version DialecticServer
+
+Tale of Two Wastelands is supported but is not required. Dialectic.esp only
+uses FalloutNV.esm as a master.
 
 INSTALLATION
 ------------
