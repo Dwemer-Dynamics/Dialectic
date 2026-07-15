@@ -91,12 +91,12 @@ namespace Config {
 
     // Spatial audio configuration
     bool spatialAudioEnabled = true;
-    float spatialMaxAirDistance = 4000.0f;
-    float spatialImmediateDistance = 150.0f;
-    float spatialAutoHearingDistance = 560.0f;
+    float spatialMaxAirDistance = 5600.0f;
+    float spatialImmediateDistance = 210.0f;
+    float spatialAutoHearingDistance = 784.0f;
     float spatialDistanceScaler = 1.0f;
-    float spatialInteriorHearingDistance = 750.0f;
-    float spatialExteriorHearingDistance = 1250.0f;
+    float spatialInteriorHearingDistance = 1050.0f;
+    float spatialExteriorHearingDistance = 1750.0f;
     float spatialMinDistanceFactor = 0.1f;
     float spatialInteriorBaseModifier = 1.0f;
     float spatialExteriorBaseModifier = 0.7f;
@@ -1016,7 +1016,7 @@ namespace Config {
         iniFile << "[SpatialAudio]\n";
         iniFile << "; Spatial awareness for NPC hearing, auto-activation, and listener selection. Player-heard playback is configured in [Audio].\n";
         iniFile << "Enabled=1\n";
-        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 8m at 70 FNV units/meter.\n";
+        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 11.2m at 70 FNV units/meter.\n";
         iniFile << "MaxAirDistance=" << spatialMaxAirDistance << "\n";
         iniFile << "ImmediateDistance=" << spatialImmediateDistance << "\n";
         iniFile << "AutoHearingDistance=" << spatialAutoHearingDistance << "\n";

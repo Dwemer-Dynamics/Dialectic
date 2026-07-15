@@ -259,7 +259,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:InteriorHearingDistance",
-              "default": 750
+              "default": 1050
             }
           ],
           "scale": {
@@ -283,7 +283,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:ExteriorHearingDistance",
-              "default": 1250
+              "default": 1750
             }
           ],
           "scale": {
@@ -307,7 +307,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:AutoHearingDistance",
-              "default": 560
+              "default": 784
             }
           ],
           "scale": {
