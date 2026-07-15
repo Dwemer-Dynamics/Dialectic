@@ -45,6 +45,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ImportDataSyncFNV.cpp
     src/VoiceSampleOverridesFNV.cpp
     src/VoiceSampleBatchUploadFNV.cpp
+    src/BsaArchiveReader.cpp
     src/XNVSEAdapter.cpp
     src/FNVRuntime.cpp
     src/RuntimeGeneration.cpp
@@ -127,6 +128,17 @@ if(BUILD_TESTING)
         target_compile_options(DialecticTaskPipelineIntegrationTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
     endif()
     add_test(NAME DialecticTaskPipelineIntegrationTests COMMAND DialecticTaskPipelineIntegrationTests)
+
+    add_executable(DialecticBsaArchiveReaderTests
+        tests/BsaArchiveReaderTests.cpp
+        src/BsaArchiveReader.cpp
+    )
+    target_include_directories(DialecticBsaArchiveReaderTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_definitions(DialecticBsaArchiveReaderTests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(MSVC)
+        target_compile_options(DialecticBsaArchiveReaderTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
+    endif()
+    add_test(NAME DialecticBsaArchiveReaderTests COMMAND DialecticBsaArchiveReaderTests)
 endif()
 
 # Link against Windows libraries
