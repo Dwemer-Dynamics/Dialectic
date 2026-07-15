@@ -346,10 +346,7 @@ std::string BuildSignature(const Context& context) {
               << context.weather << "|"
               << context.gameYear << "|"
               << context.gameMonth << "|"
-              << context.gameDay << "|"
-              << static_cast<int>(std::floor(context.gameHour * 10.0f)) << "|"
-              << static_cast<int>(std::floor(context.playerX / 256.0f)) << ":"
-              << static_cast<int>(std::floor(context.playerY / 256.0f));
+              << context.gameDay;
     return signature.str();
 }
 
@@ -397,7 +394,7 @@ void SendContext(Context context) {
         const std::string response = HTTPManager::SendJson("gamedata.php", json);
         const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
-        Logger::LogInfo("[PERF] WorldContextFNV send elapsed_ms=%lld bytes=%zu response_empty=%d",
+        Logger::LogDebug("[PERF] WorldContextFNV send elapsed_ms=%lld bytes=%zu response_empty=%d",
             elapsedMs,
             json.size(),
             response.empty() ? 1 : 0);
