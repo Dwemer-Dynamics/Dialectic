@@ -147,6 +147,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     winhttp     # WinHTTP
     winmm       # Windows Multimedia (audio)
     xaudio2     # XAudio2 playback
+    psapi       # Process memory diagnostics
     ole32       # COM
     oleaut32    # COM automation
 )

@@ -20,8 +20,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <sstream>
 #include <Windows.h>
+#include <Psapi.h>
 
 namespace FNVRuntime {
 namespace {
@@ -60,6 +62,32 @@ CaptureTiming g_navTiming;
 CaptureTiming g_questTiming;
 CaptureTiming g_totalCaptureTiming;
 std::chrono::steady_clock::time_point g_lastCaptureTimingLog;
+std::size_t g_actorHighWater = 0;
+std::size_t g_referenceHighWater = 0;
+std::size_t g_eventHighWater = 0;
+std::size_t g_taskPendingHighWater = 0;
+std::size_t g_dispatchPendingHighWater = 0;
+
+struct ProcessHealth {
+    std::uint64_t workingSetBytes{0};
+    std::uint64_t privateBytes{0};
+    DWORD handles{0};
+    bool valid{false};
+};
+
+ProcessHealth CaptureProcessHealth() {
+    ProcessHealth health;
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
+        health.workingSetBytes = counters.WorkingSetSize;
+        health.privateBytes = counters.PrivateUsage;
+        health.valid = true;
+    }
+    GetProcessHandleCount(GetCurrentProcess(), &health.handles);
+    return health;
+}
 
 void RecordCaptureTiming(CaptureTiming& timing,
                          std::chrono::steady_clock::time_point startedAt) {
@@ -161,6 +189,11 @@ void ResetNativeState(const char* reason) {
     g_navTiming = {};
     g_questTiming = {};
     g_totalCaptureTiming = {};
+    g_actorHighWater = 0;
+    g_referenceHighWater = 0;
+    g_eventHighWater = 0;
+    g_taskPendingHighWater = 0;
+    g_dispatchPendingHighWater = 0;
     g_previousSpeechDiagnostics = SpeakManager::GetDiagnostics();
     g_previousPresentationDiagnostics = XNVSEAdapter::GetNativePresentationDiagnostics();
 }
@@ -419,8 +452,11 @@ void CaptureFrame() {
     }
 
     RecordCaptureTiming(g_totalCaptureTiming, captureStartedAt);
+    g_actorHighWater = (std::max)(g_actorHighWater, RuntimeSnapshot::GetActors().size());
+    g_referenceHighWater = (std::max)(g_referenceHighWater, RuntimeSnapshot::GetReferences().size());
+    g_eventHighWater = (std::max)(g_eventHighWater, RuntimeEventBus::PendingCount());
     if (g_lastCaptureTimingLog.time_since_epoch().count() == 0 ||
-        now - g_lastCaptureTimingLog >= std::chrono::seconds(5)) {
+        now - g_lastCaptureTimingLog >= std::chrono::seconds(30)) {
         Logger::LogInfo(
             "[NATIVE_CAPTURE_PERF] frame(calls=%llu avg_ms=%.3f max_ms=%.3f) "
             "state(calls=%llu avg_ms=%.3f max_ms=%.3f) actors(calls=%llu avg_ms=%.3f max_ms=%.3f) "
@@ -448,7 +484,7 @@ void CaptureFrame() {
     }
 
     if (g_lastSpeechHealthLog.time_since_epoch().count() == 0 ||
-        now - g_lastSpeechHealthLog >= std::chrono::seconds(5)) {
+        now - g_lastSpeechHealthLog >= std::chrono::seconds(15)) {
         const auto speech = SpeakManager::GetDiagnostics();
         const auto presentation = XNVSEAdapter::GetNativePresentationDiagnostics();
         const auto queue = SpeakManager::GetQueueStatus();
@@ -544,12 +580,15 @@ void CaptureFrame() {
     }
 
     if (g_lastHealthLog.time_since_epoch().count() == 0 ||
-        now - g_lastHealthLog >= std::chrono::seconds(10)) {
+        now - g_lastHealthLog >= std::chrono::seconds(30)) {
         const auto dispatcher = GameThreadDispatcher::GetStatus();
         const auto taskSnapshot = TaskManager::GetSnapshot();
         const auto& tasks = taskSnapshot.totals;
         const auto nav = SpatialPathProviderFNV::GetNativeGraphStatus();
         const auto spatial = SpatialSnapshotManagerFNV::GetStatus();
+        const auto process = CaptureProcessHealth();
+        g_taskPendingHighWater = (std::max)(g_taskPendingHighWater, tasks.pending);
+        g_dispatchPendingHighWater = (std::max)(g_dispatchPendingHighWater, dispatcher.pending);
         Logger::LogInfo(
             "[NATIVE_RUNTIME] generation=%llu frame=%llu actors=%zu refs=%zu events=%zu "
             "nav(cell=0x%08X ready=%d building=%d nodes=%zu edges=%zu) "
@@ -578,6 +617,18 @@ void CaptureFrame() {
             static_cast<unsigned long long>(tasks.timedOut),
             static_cast<unsigned long long>(tasks.errors),
             static_cast<unsigned long long>(tasks.rejected));
+        Logger::LogInfo(
+            "[PROCESS_HEALTH] valid=%d working_set_mb=%.1f private_mb=%.1f handles=%lu "
+            "high_water(actors=%zu refs=%zu events=%zu tasks=%zu dispatcher=%zu)",
+            process.valid ? 1 : 0,
+            static_cast<double>(process.workingSetBytes) / (1024.0 * 1024.0),
+            static_cast<double>(process.privateBytes) / (1024.0 * 1024.0),
+            static_cast<unsigned long>(process.handles),
+            g_actorHighWater,
+            g_referenceHighWater,
+            g_eventHighWater,
+            g_taskPendingHighWater,
+            g_dispatchPendingHighWater);
         if (!taskSnapshot.types.empty()) {
             std::ostringstream typeSummary;
             for (std::size_t index = 0; index < taskSnapshot.types.size(); ++index) {
