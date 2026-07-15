@@ -984,7 +984,7 @@
           "title": "Send Faction and Location Info",
           "type": 5,
           "enable": 1,
-          "mouse": "Sends Fallout factions and map marker locations to the Dialectic server.",
+          "mouse": "Scans Fallout factions and map marker locations in the background, then sends them to the Dialectic server. Progress appears in the Pip-Boy notification area.",
           "vars": [
             {
               "configINI": "Tools:SendWorldData",

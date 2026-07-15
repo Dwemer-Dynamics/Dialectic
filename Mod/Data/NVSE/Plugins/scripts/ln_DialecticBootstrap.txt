@@ -64,7 +64,6 @@ CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/ActiveQuestDirectTick.txt") 0
-CallAfterSeconds 5.00 (CompileScript "Dialectic/WorldDataSyncTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/VoiceSampleUploadTick.txt") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0

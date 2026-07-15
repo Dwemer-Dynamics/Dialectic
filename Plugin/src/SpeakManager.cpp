@@ -57,6 +57,7 @@ namespace SpeakManager {
     struct ScriptLine {
         std::string text;
         std::string actor;
+        std::string displayName;
         std::string action;
         uint32_t actorFormId = 0;
         bool isFinalResponseLine = false;
@@ -1193,7 +1194,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         const std::string displayText = NormalizeSubtitleText(line.text);
         const std::string speakerName = IsPlayerSpeakerName(line.actor)
             ? PlayerDisplayName()
-            : line.actor;
+            : (!line.displayName.empty() ? line.displayName : line.actor);
         const std::string speaker = NormalizeSubtitleText(speakerName);
         if (displayText.empty() || speaker.empty()) {
             return displayText;
@@ -4605,10 +4606,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
                        const std::string& requestId,
                        uint64_t runtimeGeneration,
                        uint32_t listenerFormId,
-                       uint32_t rechatTargetFormId) {
+                       uint32_t rechatTargetFormId,
+                       const std::string& displayName) {
         ScriptLine line;
         line.text = text;
         line.actor = speaker;
+        line.displayName = displayName;
         line.action = "";
         line.actorFormId = actorFormId;
         line.isFinalResponseLine = isFinalResponseLine;
