@@ -261,15 +261,18 @@ struct NativePresentationDiagnostics {
 };
 
 using MessageCallback = std::function<void(const Message&)>;
+using PlayerInventoryChangeCallback = std::function<void(const char*)>;
 
 bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCallback callback);
 void Shutdown();
 bool IsInitialized();
 bool HasMessaging();
+void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);
+bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
-bool CaptureNativeActors(std::vector<NativeActorState>& actors);
+bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
 bool CaptureNativeReferences(std::vector<NativeReferenceState>& references);
 bool CaptureNativeNavScene(NativeNavSceneState& scene);
 bool CaptureNativeQuest(NativeQuestState& quest);

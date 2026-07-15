@@ -17,13 +17,10 @@ int iLookingAt
 int iHolding
 
 begin function {}
+    DialecticDiagnosticBridgeTick 11
     if MenuMode
         CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
         return
-    endif
-
-    if eval (FileExists "NVSE\\Plugins\\dialectic_action_request.tmp")
-        CallAfterSeconds 0.05 (CompileScript "Dialectic/ActionCommandTick.txt") 0
     endif
 
     let rCrosshair := GetCrosshairRef

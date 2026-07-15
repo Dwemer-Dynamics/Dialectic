@@ -23,6 +23,7 @@ int iGameMonth
 int iGameDay
 
 begin function {}
+    DialecticDiagnosticBridgeTick 9
     if MenuMode
         CallAfterSeconds 2.0 (CompileScript "Dialectic/WorldContextTick.txt") 0
         return

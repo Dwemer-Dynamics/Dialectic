@@ -4,6 +4,7 @@ string_var sIcon
 string_var sMessage
 
 begin function {}
+    DialecticDiagnosticBridgeTick 5
     if eval !(FileExists "NVSE\\Plugins\\dialectic_notification.tmp")
         CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
         return

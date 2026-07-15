@@ -477,6 +477,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
 
     struct QueuedDialogueLine {
         std::string speaker;
+        std::string displayName;
         std::string action;
         std::string message;
         std::string ttsCacheKey;
@@ -504,6 +505,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
     for (size_t lineIndex = 0; lineIndex < responseLines.size(); ++lineIndex) {
         const std::string& lineObject = responseLines[lineIndex];
         std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
+        std::string displayName = Trim(ExtractJsonStringValue(lineObject, "display_name"));
         std::string action = Trim(ExtractJsonStringValue(lineObject, "action"));
         std::string message = Trim(ExtractJsonStringValue(lineObject, "text"));
         if (message.empty()) {
@@ -550,6 +552,9 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
 
         if (action.empty() || action == "say") {
             const std::string queuedSpeaker = NormalizePlayerSpeakerForDisplay(speaker);
+            if (displayName.empty()) {
+                displayName = queuedSpeaker;
+            }
             if (IsRecentDuplicateDialogueLine(requestId, utteranceId, queuedSpeaker, message)) {
                 Logger::LogInfo("%s: Skipping duplicate dialogue line speaker=[%s] utterance=[%s] request=[%s]",
                     source ? source : "ResponseRouter",
@@ -560,6 +565,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
             }
             dialogueLines.push_back({
                 queuedSpeaker,
+                displayName,
                 action.empty() ? "say" : action,
                 message,
                 ttsCacheKey,
@@ -574,7 +580,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
             });
 
             if (!isPlayerTextOnly) {
-                const std::string subtitle = "[" + queuedSpeaker + "] " + message;
+                const std::string subtitle = "[" + displayName + "] " + message;
                 Console::Print(subtitle.c_str());
             }
         } else if (isActionCommand) {
@@ -594,6 +600,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
         ResponseQueueFNV::DialogueLine queuedLine;
         queuedLine.text = dialogueLines[i].message;
         queuedLine.speaker = dialogueLines[i].speaker;
+        queuedLine.displayName = dialogueLines[i].displayName;
         queuedLine.actorFormId = dialogueLines[i].actorFormId;
         queuedLine.isFinalResponseLine = isFinalResponseLine;
         queuedLine.listenerHint = listenerHint;

@@ -1,4 +1,5 @@
 #include "VoiceSampleBatchUploadFNV.h"
+#include "BsaArchiveReader.h"
 #include "HTTPManager.h"
 #include "VoiceSampleOverridesFNV.h"
 #include "Console.h"
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 void Log(const char* fmt, ...);
@@ -25,6 +27,8 @@ namespace VoiceSampleBatchUploadFNV {
             std::string transcript;
             std::string source;
             uintmax_t fileSize = 0;
+            BsaArchiveReader::Entry archiveEntry;
+            bool hasArchiveEntry = false;
         };
 
         std::string Trim(const std::string& value) {
@@ -114,6 +118,21 @@ namespace VoiceSampleBatchUploadFNV {
             return file.good() || file.gcount() == static_cast<std::streamsize>(size);
         }
 
+        bool ReadCandidateAudio(const VoiceSampleCandidate& candidate, std::string& data) {
+            if (candidate.hasArchiveEntry) {
+                std::string error;
+                if (BsaArchiveReader::ReadEntry(candidate.archiveEntry, data, 32 * 1024 * 1024, &error)) {
+                    return true;
+                }
+                Log("[VOICE_BATCH] Could not read archive sample %s from %s: %s",
+                    candidate.originalName.c_str(),
+                    candidate.archiveEntry.archivePath.c_str(),
+                    error.c_str());
+                return false;
+            }
+            return ReadBinaryFile(candidate.dataPath, data);
+        }
+
         bool TimedOut(const std::chrono::steady_clock::time_point& deadline) {
             return std::chrono::steady_clock::now() >= deadline;
         }
@@ -194,15 +213,95 @@ namespace VoiceSampleBatchUploadFNV {
 
             const bool candidateHasFile = candidate.fileSize > 0;
             const bool existingHasFile = it->second.fileSize > 0;
-            if ((candidateHasFile && !existingHasFile) ||
-                (candidateHasFile && existingHasFile && candidate.fileSize > it->second.fileSize)) {
+            const bool candidateIsLoose = candidateHasFile && !candidate.hasArchiveEntry;
+            const bool existingIsLoose = existingHasFile && !it->second.hasArchiveEntry;
+            if ((candidateIsLoose && !existingIsLoose) ||
+                (candidateHasFile && !existingHasFile) ||
+                (candidateHasFile && existingHasFile && candidateIsLoose == existingIsLoose &&
+                 candidate.fileSize > it->second.fileSize)) {
                 it->second = candidate;
+            }
+        }
+
+        void CollectArchiveCandidates(std::unordered_map<std::string, VoiceSampleCandidate>& candidates,
+                                      int& archiveMappings,
+                                      const std::chrono::steady_clock::time_point& deadline,
+                                      bool& timedOut,
+                                      const std::function<bool()>& cancelRequested) {
+            std::unordered_map<std::string, std::string> requestedVoiceByPath;
+            std::unordered_set<std::string> requestedPaths;
+            for (const auto& pair : candidates) {
+                if (pair.second.fileSize > 0) {
+                    continue;
+                }
+                const std::string normalizedPath = BsaArchiveReader::NormalizeAssetPath(pair.second.originalName);
+                if (!normalizedPath.empty()) {
+                    requestedVoiceByPath[normalizedPath] = pair.first;
+                    requestedPaths.insert(normalizedPath);
+                }
+            }
+            if (requestedPaths.empty()) {
+                return;
+            }
+
+            std::vector<std::filesystem::path> archives;
+            std::error_code ec;
+            const std::filesystem::path dataRoot("Data");
+            if (!std::filesystem::exists(dataRoot, ec) || ec) {
+                Log("[VOICE_BATCH] Data directory unavailable while scanning BSA archives");
+                return;
+            }
+            for (std::filesystem::directory_iterator it(dataRoot,
+                     std::filesystem::directory_options::skip_permission_denied, ec), end;
+                 it != end; it.increment(ec)) {
+                if (ec) {
+                    ec.clear();
+                    continue;
+                }
+                if (it->is_regular_file(ec) && !ec && ToLower(it->path().extension().string()) == ".bsa") {
+                    archives.push_back(it->path());
+                }
+            }
+            std::sort(archives.begin(), archives.end());
+
+            for (const auto& archivePath : archives) {
+                if (requestedPaths.empty() || (cancelRequested && cancelRequested())) {
+                    break;
+                }
+                if (TimedOut(deadline)) {
+                    timedOut = true;
+                    break;
+                }
+
+                std::unordered_map<std::string, BsaArchiveReader::Entry> matches;
+                std::string error;
+                if (!BsaArchiveReader::FindEntries(archivePath.string(), requestedPaths, matches, &error)) {
+                    Log("[VOICE_BATCH] Skipping BSA index %s: %s", archivePath.string().c_str(), error.c_str());
+                    continue;
+                }
+                for (auto& match : matches) {
+                    const auto voiceIt = requestedVoiceByPath.find(match.first);
+                    if (voiceIt == requestedVoiceByPath.end()) {
+                        continue;
+                    }
+                    auto candidateIt = candidates.find(voiceIt->second);
+                    if (candidateIt == candidates.end() || candidateIt->second.fileSize > 0) {
+                        continue;
+                    }
+                    candidateIt->second.archiveEntry = std::move(match.second);
+                    candidateIt->second.hasArchiveEntry = true;
+                    candidateIt->second.fileSize = candidateIt->second.archiveEntry.storedSize;
+                    candidateIt->second.source += ":bsa:" + archivePath.filename().string();
+                    ++archiveMappings;
+                    requestedPaths.erase(match.first);
+                }
             }
         }
 
         std::unordered_map<std::string, VoiceSampleCandidate> CollectVoiceSampleCandidates(
             int& csvMappings,
             int& looseMappings,
+            int& archiveMappings,
             const std::chrono::steady_clock::time_point& deadline,
             bool& timedOut,
             const std::function<bool()>& cancelRequested) {
@@ -232,10 +331,8 @@ namespace VoiceSampleBatchUploadFNV {
             std::error_code ec;
             if (!std::filesystem::exists(voiceRoot, ec) || ec) {
                 Log("[VOICE_BATCH] Loose voice root not found: %s", voiceRoot.string().c_str());
-                return candidates;
-            }
-
-            for (std::filesystem::recursive_directory_iterator it(
+            } else {
+                for (std::filesystem::recursive_directory_iterator it(
                      voiceRoot,
                      std::filesystem::directory_options::skip_permission_denied,
                      ec),
@@ -283,7 +380,10 @@ namespace VoiceSampleBatchUploadFNV {
 
                 ++looseMappings;
                 UpsertCandidate(candidates, candidate);
+                }
             }
+
+            CollectArchiveCandidates(candidates, archiveMappings, deadline, timedOut, cancelRequested);
 
             return candidates;
         }
@@ -298,6 +398,7 @@ namespace VoiceSampleBatchUploadFNV {
         auto candidates = CollectVoiceSampleCandidates(
             summary.csvMappings,
             summary.looseMappings,
+            summary.archiveMappings,
             deadline,
             scanTimedOut,
             cancelRequested);
@@ -312,10 +413,11 @@ namespace VoiceSampleBatchUploadFNV {
             return summary.timedOut ? BatchUploadResult::TimedOut : BatchUploadResult::NoSamplesUploaded;
         }
 
-        Log("[VOICE_BATCH] Starting upload of %d Fallout voice sample mappings (csv=%d loose_files_seen=%d)",
+        Log("[VOICE_BATCH] Starting upload of %d Fallout voice sample mappings (csv=%d loose_files_seen=%d archive_samples=%d)",
             summary.totalMappings,
             summary.csvMappings,
-            summary.looseMappings);
+            summary.looseMappings,
+            summary.archiveMappings);
         Console::Print("[Dialectic] Uploading Fallout voice samples...");
 
         std::vector<VoiceSampleCandidate> orderedCandidates;
@@ -339,11 +441,11 @@ namespace VoiceSampleBatchUploadFNV {
             }
 
             std::string audioData;
-            if (!ReadBinaryFile(candidate.dataPath, audioData)) {
+            if (!ReadCandidateAudio(candidate, audioData)) {
                 ++summary.missing;
                 Log("[VOICE_BATCH] Missing voice sample for %s: %s",
                     candidate.voiceType.c_str(),
-                    candidate.dataPath.c_str());
+                    candidate.hasArchiveEntry ? candidate.archiveEntry.archivePath.c_str() : candidate.dataPath.c_str());
                 continue;
             }
 
@@ -368,10 +470,11 @@ namespace VoiceSampleBatchUploadFNV {
                 static_cast<unsigned long long>(candidate.fileSize));
         }
 
-        Log("[VOICE_BATCH] Complete: mappings=%d csv=%d loose_files_seen=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
+        Log("[VOICE_BATCH] Complete: mappings=%d csv=%d loose_files_seen=%d archive_samples=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
             summary.totalMappings,
             summary.csvMappings,
             summary.looseMappings,
+            summary.archiveMappings,
             summary.uploaded,
             summary.missing,
             summary.failed,

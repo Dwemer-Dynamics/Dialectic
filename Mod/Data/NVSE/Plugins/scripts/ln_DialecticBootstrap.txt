@@ -18,7 +18,8 @@ if GetPluginVersion "JohnnyGuitarNVSE" < 517
 endif
 
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_bootstrap_active.tmp" 0 "active=1\n"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_request.tmp" 0 "%e"
+DialecticClearActionRequest
+DialecticClearActorSnapshotRequest
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_halt_actions_status.txt" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"
@@ -64,7 +65,6 @@ CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/ActiveQuestDirectTick.txt") 0
-CallAfterSeconds 5.00 (CompileScript "Dialectic/WorldDataSyncTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/VoiceSampleUploadTick.txt") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0

@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "Misc.h"
 #include "NativeComparisonTelemetry.h"
+#include "PlayerInventoryManagerFNV.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
@@ -667,6 +668,7 @@ bool ProcessNativeSnapshot() {
     const auto counterpartyPost = NativeInventoryMap(session.nativeCounterpartyPost);
     EmitInventoryDelta(session.request, playerPre, playerPost, "native",
         &counterpartyPre, &counterpartyPost);
+    PlayerInventoryManagerFNV::MarkDirty("trade_closed", 200);
     CancelAll("native_snapshot_processed");
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -718,6 +720,7 @@ bool ProcessDoneSnapshot() {
     const auto playerPost = ParseInventorySnapshot(ReadFileIfExists(kTradePostPlayerPath));
 
     EmitInventoryDelta(request, playerPre, playerPost, "bridge");
+    PlayerInventoryManagerFNV::MarkDirty("trade_closed_bridge", 200);
 
     CleanupBridgeFiles();
     CancelAll("snapshot_processed");

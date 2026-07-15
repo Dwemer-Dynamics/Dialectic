@@ -7,6 +7,7 @@
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
 #include "XNVSEAdapter.h"
+#include "PlayerInventoryManagerFNV.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -67,7 +68,12 @@ namespace AgentManager {
     static const char* kActorSnapshotRequestFileName = "dialectic_actor_snapshot_request.tmp";
     static const char* kActorSnapshotStatusFileName = "dialectic_actor_snapshot_status.txt";
 
+    static bool IsPlayerReference(uint32_t refID) {
+        return refID == 0x00000014;
+    }
+
     void Initialize() {
+        ClearActorSnapshotRequest();
         std::lock_guard<std::mutex> lock(g_agentsMutex);
         g_agents.clear();
         g_registeredAgents.clear();
@@ -603,6 +609,11 @@ namespace AgentManager {
     }
 
     void RequestActorSnapshot(uint32_t refID, const std::string& npcName) {
+        if (IsPlayerReference(refID)) {
+            Log("AgentManager: Refused NPC actor snapshot request for player ref 0x%08X", refID);
+            PlayerInventoryManagerFNV::ForceRefresh("snapshot_request_player_guard", 0);
+            return;
+        }
         RemoveActorSnapshotBridgeFile(kActorSnapshotFileName);
         RemoveActorSnapshotBridgeFile(kActorSnapshotStatusFileName);
 
@@ -631,7 +642,7 @@ namespace AgentManager {
             npcName.c_str(), refID, written);
     }
 
-    static void ClearActorSnapshotRequest() {
+    void ClearActorSnapshotRequest() {
         RemoveActorSnapshotBridgeFile(kActorSnapshotRequestFileName);
     }
 
@@ -1595,6 +1606,12 @@ namespace AgentManager {
             return;
         }
 
+        if (IsPlayerReference(refID)) {
+            Log("AgentManager: Routed player inventory away from NPC profile snapshot bridge");
+            PlayerInventoryManagerFNV::ForceRefresh("actor_profile_player_guard", 0);
+            return;
+        }
+
         Log("AgentManager: SendActorProfile called for: %s (0x%08X)", npcName.c_str(), refID);
 
         constexpr int kSnapshotTimeoutMs = 600;
@@ -1630,6 +1647,12 @@ namespace AgentManager {
             return;
         }
 
+        if (IsPlayerReference(data.refID)) {
+            Log("AgentManager: Routed player metadata away from NPC profile snapshot bridge");
+            PlayerInventoryManagerFNV::ForceRefresh("actor_metadata_player_guard", 0);
+            return;
+        }
+
         if (data.displayName.empty() || data.refID == 0) {
             Log("AgentManager: Cannot send actor profile metadata, missing name or refid");
             return;
@@ -1648,6 +1671,11 @@ namespace AgentManager {
 
     void RefreshActorMetadata(uint32_t refID, const std::string& npcName) {
         if (!g_initialized || refID == 0) {
+            return;
+        }
+
+        if (IsPlayerReference(refID)) {
+            PlayerInventoryManagerFNV::ForceRefresh("metadata_refresh_player_guard", 0);
             return;
         }
 
@@ -1680,6 +1708,11 @@ namespace AgentManager {
     bool RefreshActorMetadataForPrompt(uint32_t refID, const std::string& npcName, int timeoutMs) {
         if (!g_initialized || refID == 0) {
             return false;
+        }
+
+        if (IsPlayerReference(refID)) {
+            PlayerInventoryManagerFNV::MarkDirty("prompt_player_inventory", 0);
+            return true;
         }
 
         (void)timeoutMs;

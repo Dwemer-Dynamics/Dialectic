@@ -11,6 +11,7 @@ array_var aObjectiveEntry
 int iObjectiveId
 
 begin function {}
+    DialecticDiagnosticBridgeTick 14
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_quest_state_status.txt" 0 "direct_start%r"
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp" 0 "source=active_quest_direct%r"
 

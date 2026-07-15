@@ -11,6 +11,7 @@ float fSleeping
 string_var sPlayerName
 
 begin function {}
+    DialecticDiagnosticBridgeTick 16
     let fLevel := PlayerRef.GetLevel
     let fCombat := PlayerRef.IsInCombat
     let fSleeping := PlayerRef.GetSleeping

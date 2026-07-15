@@ -1242,12 +1242,7 @@ bool WriteHaltBridgeRequest(const std::vector<std::pair<uint32_t, std::string>>&
 }
 
 void ClearActionBridgeFiles() {
-    {
-        std::ofstream out(kActionRequestPath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
+    std::remove(kActionRequestPath);
     {
         std::ofstream out(kActionStatusPath, std::ios::binary | std::ios::trunc);
         if (out.is_open()) {
@@ -3168,6 +3163,10 @@ void FlushPostDialogueActionsWithoutSpeech() {
 }
 
 } // namespace
+
+void ClearScriptBridgeRequest() {
+    std::remove(kActionRequestPath);
+}
 
 bool IsActionCommand(const std::string& actionName) {
     const std::string normalized = NormalizeActionName(actionName);

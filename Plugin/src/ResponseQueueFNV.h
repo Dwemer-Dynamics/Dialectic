@@ -11,6 +11,7 @@ namespace ResponseQueueFNV {
 struct DialogueLine {
     std::string text;
     std::string speaker;
+    std::string displayName;
     uint32_t actorFormId = 0;
     bool isFinalResponseLine = false;
     std::string listenerHint;

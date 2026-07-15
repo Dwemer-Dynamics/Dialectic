@@ -217,7 +217,8 @@ bool DispatchPending(std::size_t maxItems) {
                                         line.requestId,
                                         line.runtimeGeneration,
                                         line.listenerFormId,
-                                        line.rechatTargetFormId);
+                                        line.rechatTargetFormId,
+                                        line.displayName);
             continue;
         }
 

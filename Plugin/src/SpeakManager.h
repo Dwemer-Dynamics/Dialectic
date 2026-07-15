@@ -61,7 +61,8 @@ void QueueDialogue(const std::string& text,
                    const std::string& requestId = "",
                    uint64_t runtimeGeneration = 0,
                    uint32_t listenerFormId = 0,
-                   uint32_t rechatTargetFormId = 0);
+                   uint32_t rechatTargetFormId = 0,
+                   const std::string& displayName = "");
 
 // Suppress vanilla/radiant dialogue for an actor while an AI turn is pending.
 void GuardActorForPendingDialogue(uint32_t actorFormId, const std::string& actorName);

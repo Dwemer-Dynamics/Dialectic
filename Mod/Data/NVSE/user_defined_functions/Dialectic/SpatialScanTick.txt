@@ -40,6 +40,7 @@ int iDisabled
 int iDead
 
 begin function {}
+    DialecticDiagnosticBridgeTick 8
     if MenuMode
         CallAfterSeconds 2.0 (CompileScript "Dialectic/SpatialScanTick.txt") 0
         return
