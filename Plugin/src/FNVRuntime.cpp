@@ -19,6 +19,7 @@
 #include "XNVSEAdapter.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <algorithm>
 #include <sstream>
@@ -69,12 +70,70 @@ std::size_t g_eventHighWater = 0;
 std::size_t g_taskPendingHighWater = 0;
 std::size_t g_dispatchPendingHighWater = 0;
 
+constexpr std::uint64_t kDetailedHitchThresholdUs = 30000;
+constexpr auto kHitchDetailRateLimit = std::chrono::milliseconds(250);
+constexpr auto kHitchSummaryInterval = std::chrono::seconds(10);
+
+struct BridgeTickState {
+    std::uint64_t windowTicks{0};
+    std::uint64_t totalTicks{0};
+    std::chrono::steady_clock::time_point lastTick;
+};
+
+static constexpr std::array<const char*, 18> kBridgeNames = {
+    "unknown",
+    "action",
+    "actor_snapshot",
+    "dialogue_capture",
+    "trade",
+    "notification",
+    "halt",
+    "text_input",
+    "spatial_scan",
+    "world_context",
+    "activity",
+    "nearby_items",
+    "nearby_poi",
+    "nearby_furniture",
+    "active_quest",
+    "voice_upload",
+    "rpg_event",
+    "actor_snapshot_collect"
+};
+
+std::array<BridgeTickState, kBridgeNames.size()> g_bridgeTicks;
+std::chrono::steady_clock::time_point g_lastMainLoopCallbackAt;
+std::chrono::steady_clock::time_point g_lastHitchAt;
+std::chrono::steady_clock::time_point g_lastHitchDetailAt;
+std::chrono::steady_clock::time_point g_lastHitchSummaryAt;
+std::uint64_t g_previousPluginWorkUs = 0;
+std::uint64_t g_cadenceFrames = 0;
+std::uint64_t g_cadenceGapSamples = 0;
+std::uint64_t g_cadenceTotalGapUs = 0;
+std::uint64_t g_cadenceMaxGapUs = 0;
+std::uint64_t g_cadenceTotalPluginWorkUs = 0;
+std::uint64_t g_cadenceMaxPluginWorkUs = 0;
+std::uint64_t g_cadenceGaps25 = 0;
+std::uint64_t g_cadenceGaps50 = 0;
+std::uint64_t g_cadenceGaps100 = 0;
+std::uint64_t g_cadenceGaps250 = 0;
+std::uint64_t g_cadenceDetailsSuppressed = 0;
+
 struct ProcessHealth {
     std::uint64_t workingSetBytes{0};
     std::uint64_t privateBytes{0};
+    std::uint64_t kernelTime100ns{0};
+    std::uint64_t userTime100ns{0};
+    std::uint64_t readBytes{0};
+    std::uint64_t writeBytes{0};
+    std::uint64_t pageFaults{0};
     DWORD handles{0};
     bool valid{false};
 };
+
+ProcessHealth g_previousProcessHealth;
+Logger::Diagnostics g_previousLoggerDiagnostics;
+std::chrono::steady_clock::time_point g_lastProcessHealthSampleAt;
 
 ProcessHealth CaptureProcessHealth() {
     ProcessHealth health;
@@ -84,10 +143,202 @@ ProcessHealth CaptureProcessHealth() {
             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
         health.workingSetBytes = counters.WorkingSetSize;
         health.privateBytes = counters.PrivateUsage;
+        health.pageFaults = counters.PageFaultCount;
         health.valid = true;
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        ULARGE_INTEGER kernelValue{};
+        kernelValue.LowPart = kernel.dwLowDateTime;
+        kernelValue.HighPart = kernel.dwHighDateTime;
+        ULARGE_INTEGER userValue{};
+        userValue.LowPart = user.dwLowDateTime;
+        userValue.HighPart = user.dwHighDateTime;
+        health.kernelTime100ns = kernelValue.QuadPart;
+        health.userTime100ns = userValue.QuadPart;
+    }
+    IO_COUNTERS io{};
+    if (GetProcessIoCounters(GetCurrentProcess(), &io)) {
+        health.readBytes = io.ReadTransferCount;
+        health.writeBytes = io.WriteTransferCount;
     }
     GetProcessHandleCount(GetCurrentProcess(), &health.handles);
     return health;
+}
+
+std::string BuildRecentBridgeSummary(std::chrono::steady_clock::time_point now) {
+    std::ostringstream summary;
+    for (std::size_t index = 1; index < g_bridgeTicks.size(); ++index) {
+        const auto& tick = g_bridgeTicks[index];
+        if (tick.lastTick.time_since_epoch().count() == 0) continue;
+        const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - tick.lastTick).count();
+        if (ageMs < 0 || ageMs > 750) continue;
+        if (summary.tellp() > 0) summary << ",";
+        summary << kBridgeNames[index] << ":" << ageMs << "ms";
+    }
+    return summary.tellp() > 0 ? summary.str() : "none";
+}
+
+std::string BuildBridgeWindowSummary() {
+    std::ostringstream summary;
+    for (std::size_t index = 1; index < g_bridgeTicks.size(); ++index) {
+        const auto ticks = g_bridgeTicks[index].windowTicks;
+        if (ticks == 0) continue;
+        if (summary.tellp() > 0) summary << ",";
+        summary << kBridgeNames[index] << ":" << ticks;
+    }
+    return summary.tellp() > 0 ? summary.str() : "none";
+}
+
+void ResetHitchTelemetry() {
+    g_lastMainLoopCallbackAt = {};
+    g_lastHitchAt = {};
+    g_lastHitchDetailAt = {};
+    g_lastHitchSummaryAt = {};
+    g_previousPluginWorkUs = 0;
+    g_cadenceFrames = 0;
+    g_cadenceGapSamples = 0;
+    g_cadenceTotalGapUs = 0;
+    g_cadenceMaxGapUs = 0;
+    g_cadenceTotalPluginWorkUs = 0;
+    g_cadenceMaxPluginWorkUs = 0;
+    g_cadenceGaps25 = 0;
+    g_cadenceGaps50 = 0;
+    g_cadenceGaps100 = 0;
+    g_cadenceGaps250 = 0;
+    g_cadenceDetailsSuppressed = 0;
+    for (auto& tick : g_bridgeTicks) {
+        tick.windowTicks = 0;
+        tick.lastTick = {};
+    }
+}
+
+void RecordFrameCadence(std::chrono::steady_clock::time_point callbackStartedAt,
+                        std::uint64_t gapUs,
+                        std::uint64_t pluginWorkUs) {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_lastHitchSummaryAt.time_since_epoch().count() == 0) {
+        g_lastHitchSummaryAt = callbackStartedAt;
+    }
+
+    ++g_cadenceFrames;
+    g_cadenceTotalPluginWorkUs += pluginWorkUs;
+    g_cadenceMaxPluginWorkUs = (std::max)(g_cadenceMaxPluginWorkUs, pluginWorkUs);
+    if (gapUs > 0) {
+        ++g_cadenceGapSamples;
+        g_cadenceTotalGapUs += gapUs;
+        g_cadenceMaxGapUs = (std::max)(g_cadenceMaxGapUs, gapUs);
+        if (gapUs >= 25000) ++g_cadenceGaps25;
+        if (gapUs >= 50000) ++g_cadenceGaps50;
+        if (gapUs >= 100000) ++g_cadenceGaps100;
+        if (gapUs >= 250000) ++g_cadenceGaps250;
+    }
+
+    if (gapUs >= kDetailedHitchThresholdUs && gapUs <= 5000000) {
+        const auto sincePreviousHitchMs = g_lastHitchAt.time_since_epoch().count() == 0
+            ? -1LL
+            : std::chrono::duration_cast<std::chrono::milliseconds>(callbackStartedAt - g_lastHitchAt).count();
+        g_lastHitchAt = callbackStartedAt;
+        if (g_lastHitchDetailAt.time_since_epoch().count() == 0 ||
+            callbackStartedAt - g_lastHitchDetailAt >= kHitchDetailRateLimit) {
+            const auto state = RuntimeSnapshot::GetGameState();
+            const auto queue = SpeakManager::GetQueueStatus();
+            const auto dispatcher = GameThreadDispatcher::GetStatus();
+            const auto taskSnapshot = TaskManager::GetSnapshot();
+            const auto outsideCallbackUs = gapUs > g_previousPluginWorkUs
+                ? gapUs - g_previousPluginWorkUs
+                : 0;
+            const std::string bridges = BuildRecentBridgeSummary(now);
+            Logger::LogInfo(
+                "[HITCH] gap_ms=%.3f since_previous_hitch_ms=%lld outside_callback_ms=%.3f "
+                "previous_plugin_work_ms=%.3f current_plugin_work_ms=%.3f frame=%llu generation=%llu "
+                "state(in_game=%d menu=%d paused=%d loading=%d dialogue=%d combat=%d cell=0x%08X world=0x%08X) "
+                "queue(lines=%d downloads=%d prepared=%d playing=%d) tasks(pending=%zu active=%zu oldest_ms=%llu) "
+                "dispatcher(pending=%zu) recent_bridges=%s",
+                static_cast<double>(gapUs) / 1000.0,
+                sincePreviousHitchMs,
+                static_cast<double>(outsideCallbackUs) / 1000.0,
+                static_cast<double>(g_previousPluginWorkUs) / 1000.0,
+                static_cast<double>(pluginWorkUs) / 1000.0,
+                static_cast<unsigned long long>(g_frameSequence.load()),
+                static_cast<unsigned long long>(RuntimeGeneration::Current()),
+                state.inGame ? 1 : 0,
+                state.inMenu ? 1 : 0,
+                state.paused ? 1 : 0,
+                state.loadingMenuOpen ? 1 : 0,
+                state.dialogueMenuOpen ? 1 : 0,
+                state.inCombat ? 1 : 0,
+                state.cellFormId,
+                state.worldspaceFormId,
+                queue.dialogueLinesQueued,
+                queue.ttsDownloadsInProgress,
+                queue.preparedAudioCount,
+                queue.isPlaying ? 1 : 0,
+                taskSnapshot.totals.pending,
+                taskSnapshot.totals.active,
+                static_cast<unsigned long long>(taskSnapshot.totals.oldestPendingMs),
+                dispatcher.pending,
+                bridges.c_str());
+            g_lastHitchDetailAt = callbackStartedAt;
+        } else {
+            ++g_cadenceDetailsSuppressed;
+        }
+    }
+
+    g_previousPluginWorkUs = pluginWorkUs;
+
+    if (now - g_lastHitchSummaryAt >= kHitchSummaryInterval) {
+        const auto windowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - g_lastHitchSummaryAt).count();
+        const double averageGapMs = g_cadenceGapSamples == 0
+            ? 0.0
+            : static_cast<double>(g_cadenceTotalGapUs) / static_cast<double>(g_cadenceGapSamples) / 1000.0;
+        const double averagePluginWorkMs = g_cadenceFrames == 0
+            ? 0.0
+            : static_cast<double>(g_cadenceTotalPluginWorkUs) / static_cast<double>(g_cadenceFrames) / 1000.0;
+        const std::string bridges = BuildBridgeWindowSummary();
+        Logger::LogInfo(
+            "[HITCH_SUMMARY] window_ms=%lld frames=%llu avg_gap_ms=%.3f max_gap_ms=%.3f "
+            "gaps_25=%llu gaps_50=%llu gaps_100=%llu gaps_250=%llu "
+            "plugin_work(avg_ms=%.3f max_ms=%.3f) detail_suppressed=%llu bridge_ticks=%s",
+            windowMs,
+            static_cast<unsigned long long>(g_cadenceFrames),
+            averageGapMs,
+            static_cast<double>(g_cadenceMaxGapUs) / 1000.0,
+            static_cast<unsigned long long>(g_cadenceGaps25),
+            static_cast<unsigned long long>(g_cadenceGaps50),
+            static_cast<unsigned long long>(g_cadenceGaps100),
+            static_cast<unsigned long long>(g_cadenceGaps250),
+            averagePluginWorkMs,
+            static_cast<double>(g_cadenceMaxPluginWorkUs) / 1000.0,
+            static_cast<unsigned long long>(g_cadenceDetailsSuppressed),
+            bridges.c_str());
+        if (g_bridgeTicks[1].windowTicks > 300) {
+            Logger::LogWarning(
+                "[BRIDGE_STORM] name=action ticks=%llu window_ms=%lld expected_max=300; duplicate ActionCommandTick chains are active",
+                static_cast<unsigned long long>(g_bridgeTicks[1].windowTicks),
+                windowMs);
+        }
+        if (g_bridgeTicks[17].windowTicks > 8) {
+            Logger::LogWarning(
+                "[BRIDGE_STORM] name=actor_snapshot_collect ticks=%llu window_ms=%lld expected_max=8; actor snapshots are being collected without one-shot request acknowledgement",
+                static_cast<unsigned long long>(g_bridgeTicks[17].windowTicks),
+                windowMs);
+        }
+        g_cadenceFrames = 0;
+        g_cadenceGapSamples = 0;
+        g_cadenceTotalGapUs = 0;
+        g_cadenceMaxGapUs = 0;
+        g_cadenceTotalPluginWorkUs = 0;
+        g_cadenceMaxPluginWorkUs = 0;
+        g_cadenceGaps25 = 0;
+        g_cadenceGaps50 = 0;
+        g_cadenceGaps100 = 0;
+        g_cadenceGaps250 = 0;
+        g_cadenceDetailsSuppressed = 0;
+        for (auto& tick : g_bridgeTicks) tick.windowTicks = 0;
+        g_lastHitchSummaryAt = now;
+    }
 }
 
 void RecordCaptureTiming(CaptureTiming& timing,
@@ -198,6 +449,10 @@ void ResetNativeState(const char* reason) {
     g_dispatchPendingHighWater = 0;
     g_previousSpeechDiagnostics = SpeakManager::GetDiagnostics();
     g_previousPresentationDiagnostics = XNVSEAdapter::GetNativePresentationDiagnostics();
+    g_previousProcessHealth = CaptureProcessHealth();
+    g_previousLoggerDiagnostics = Logger::GetDiagnostics();
+    g_lastProcessHealthSampleAt = std::chrono::steady_clock::now();
+    ResetHitchTelemetry();
 }
 
 void CaptureFrame() {
@@ -595,6 +850,26 @@ void CaptureFrame() {
         const auto nav = SpatialPathProviderFNV::GetNativeGraphStatus();
         const auto spatial = SpatialSnapshotManagerFNV::GetStatus();
         const auto process = CaptureProcessHealth();
+        const auto loggerDiagnostics = Logger::GetDiagnostics();
+        const auto processWindowMs = g_lastProcessHealthSampleAt.time_since_epoch().count() == 0
+            ? 0LL
+            : std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastProcessHealthSampleAt).count();
+        const auto cpuTimeDelta100ns = CounterDelta(
+            process.kernelTime100ns + process.userTime100ns,
+            g_previousProcessHealth.kernelTime100ns + g_previousProcessHealth.userTime100ns);
+        const double cpuTimeDeltaMs = static_cast<double>(cpuTimeDelta100ns) / 10000.0;
+        const double cpuPercentOneCore = processWindowMs > 0
+            ? cpuTimeDeltaMs * 100.0 / static_cast<double>(processWindowMs)
+            : 0.0;
+        const auto readBytesDelta = CounterDelta(process.readBytes, g_previousProcessHealth.readBytes);
+        const auto writeBytesDelta = CounterDelta(process.writeBytes, g_previousProcessHealth.writeBytes);
+        const auto pageFaultDelta = CounterDelta(process.pageFaults, g_previousProcessHealth.pageFaults);
+        const auto loggerLinesDelta = CounterDelta(loggerDiagnostics.linesWritten, g_previousLoggerDiagnostics.linesWritten);
+        const auto loggerBytesDelta = CounterDelta(loggerDiagnostics.bytesWritten, g_previousLoggerDiagnostics.bytesWritten);
+        const auto loggerFlushDelta = CounterDelta(loggerDiagnostics.flushes, g_previousLoggerDiagnostics.flushes);
+        const auto loggerSlowDelta = CounterDelta(loggerDiagnostics.slowWrites, g_previousLoggerDiagnostics.slowWrites);
+        const auto loggerWriteUsDelta = CounterDelta(loggerDiagnostics.totalWriteUs, g_previousLoggerDiagnostics.totalWriteUs);
+        const auto loggerLockUsDelta = CounterDelta(loggerDiagnostics.totalLockWaitUs, g_previousLoggerDiagnostics.totalLockWaitUs);
         g_taskPendingHighWater = (std::max)(g_taskPendingHighWater, tasks.pending);
         g_dispatchPendingHighWater = (std::max)(g_dispatchPendingHighWater, dispatcher.pending);
         Logger::LogInfo(
@@ -626,17 +901,36 @@ void CaptureFrame() {
             static_cast<unsigned long long>(tasks.errors),
             static_cast<unsigned long long>(tasks.rejected));
         Logger::LogInfo(
-            "[PROCESS_HEALTH] valid=%d working_set_mb=%.1f private_mb=%.1f handles=%lu "
+            "[PROCESS_HEALTH] window_ms=%lld valid=%d working_set_mb=%.1f private_mb=%.1f handles=%lu "
+            "cpu_ms=%.1f cpu_pct_one_core=%.1f page_faults=%llu io(read_mb=%.3f write_mb=%.3f) "
+            "logger(lines=%llu bytes=%llu flushes=%llu write_ms=%.3f lock_wait_ms=%.3f slow=%llu max_write_ms=%.3f max_lock_ms=%.3f) "
             "high_water(actors=%zu refs=%zu events=%zu tasks=%zu dispatcher=%zu)",
+            processWindowMs,
             process.valid ? 1 : 0,
             static_cast<double>(process.workingSetBytes) / (1024.0 * 1024.0),
             static_cast<double>(process.privateBytes) / (1024.0 * 1024.0),
             static_cast<unsigned long>(process.handles),
+            cpuTimeDeltaMs,
+            cpuPercentOneCore,
+            static_cast<unsigned long long>(pageFaultDelta),
+            static_cast<double>(readBytesDelta) / (1024.0 * 1024.0),
+            static_cast<double>(writeBytesDelta) / (1024.0 * 1024.0),
+            static_cast<unsigned long long>(loggerLinesDelta),
+            static_cast<unsigned long long>(loggerBytesDelta),
+            static_cast<unsigned long long>(loggerFlushDelta),
+            static_cast<double>(loggerWriteUsDelta) / 1000.0,
+            static_cast<double>(loggerLockUsDelta) / 1000.0,
+            static_cast<unsigned long long>(loggerSlowDelta),
+            static_cast<double>(loggerDiagnostics.maxWriteUs) / 1000.0,
+            static_cast<double>(loggerDiagnostics.maxLockWaitUs) / 1000.0,
             g_actorHighWater,
             g_referenceHighWater,
             g_eventHighWater,
             g_taskPendingHighWater,
             g_dispatchPendingHighWater);
+        g_previousProcessHealth = process;
+        g_previousLoggerDiagnostics = loggerDiagnostics;
+        g_lastProcessHealthSampleAt = now;
         if (!taskSnapshot.types.empty()) {
             std::ostringstream typeSummary;
             for (std::size_t index = 0; index < taskSnapshot.types.size(); ++index) {
@@ -694,19 +988,29 @@ void CaptureFrame() {
 void OnMessage(const XNVSEAdapter::Message& message) {
     using Event = XNVSEAdapter::LifecycleEvent;
     if (message.event == Event::MainGameLoop) {
+        const auto callbackStartedAt = std::chrono::steady_clock::now();
+        const std::uint64_t gapUs = g_lastMainLoopCallbackAt.time_since_epoch().count() == 0
+            ? 0
+            : static_cast<std::uint64_t>((std::max)(0LL,
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    callbackStartedAt - g_lastMainLoopCallbackAt).count()));
+        g_lastMainLoopCallbackAt = callbackStartedAt;
         if (!g_nativeFramePumpLogged.exchange(true)) {
             Logger::LogInfo("[NATIVE_RUNTIME] xNVSE main-game-loop pump authoritative; legacy update thread disabled");
         }
         CaptureFrame();
         GameThreadDispatcher::Pump(RuntimeGeneration::Current());
-        static auto lastFrame = std::chrono::steady_clock::now();
-        const auto now = std::chrono::steady_clock::now();
-        float deltaTime = std::chrono::duration<float>(now - lastFrame).count();
-        lastFrame = now;
+        float deltaTime = gapUs > 0
+            ? static_cast<float>(static_cast<double>(gapUs) / 1000000.0)
+            : 1.0f / 60.0f;
         if (!std::isfinite(deltaTime) || deltaTime <= 0.0f || deltaTime > 1.0f) {
             deltaTime = 1.0f / 60.0f;
         }
         Dialectic_UpdateFrame(deltaTime);
+        const auto pluginWorkElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - callbackStartedAt).count();
+        RecordFrameCadence(callbackStartedAt, gapUs,
+            pluginWorkElapsed > 0 ? static_cast<std::uint64_t>(pluginWorkElapsed) : 0);
         return;
     }
 
@@ -741,6 +1045,10 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle) {
     GameThreadDispatcher::Initialize();
     TaskManager::Initialize(8, 512);
     const bool initialized = XNVSEAdapter::Initialize(nvseInterface, pluginHandle, OnMessage);
+    g_previousProcessHealth = CaptureProcessHealth();
+    g_previousLoggerDiagnostics = Logger::GetDiagnostics();
+    g_lastProcessHealthSampleAt = std::chrono::steady_clock::now();
+    ResetHitchTelemetry();
     g_available.store(initialized, std::memory_order_release);
     Logger::LogInfo("FNVRuntime: native lifecycle %s", initialized ? "enabled" : "unavailable");
     return initialized;
@@ -757,6 +1065,16 @@ void Shutdown() {
 
 bool IsAvailable() {
     return g_available.load(std::memory_order_acquire);
+}
+
+void RecordScriptBridgeTick(std::uint32_t bridgeId) {
+    if (bridgeId == 0 || bridgeId >= g_bridgeTicks.size()) {
+        return;
+    }
+    auto& tick = g_bridgeTicks[bridgeId];
+    ++tick.windowTicks;
+    ++tick.totalTicks;
+    tick.lastTick = std::chrono::steady_clock::now();
 }
 
 void PumpLegacyFrameFallback() {

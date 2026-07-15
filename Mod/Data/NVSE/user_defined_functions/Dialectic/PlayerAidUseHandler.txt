@@ -30,6 +30,7 @@ begin function {rAidItem}
     endif
 
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "player_consumed|%z consumed %z|%z|%z\n" sActorName sItemName sItemID sItemName
+    DialecticMarkPlayerInventoryDirty
 
     sv_Destruct sItemID
     sv_Destruct sItemName

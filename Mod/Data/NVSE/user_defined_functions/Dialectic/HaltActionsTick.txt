@@ -20,6 +20,7 @@ float fResult4
 float fResult5
 
 begin function {}
+    DialecticDiagnosticBridgeTick 6
     if eval !(FileExists "NVSE\\Plugins\\dialectic_halt_actions.tmp")
         CallAfterSeconds 0.25 (CompileScript "Dialectic/HaltActionsTick.txt") 0
         return

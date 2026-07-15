@@ -18,7 +18,8 @@ if GetPluginVersion "JohnnyGuitarNVSE" < 517
 endif
 
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_bootstrap_active.tmp" 0 "active=1\n"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_request.tmp" 0 "%e"
+DialecticClearActionRequest
+DialecticClearActorSnapshotRequest
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_halt_actions_status.txt" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"

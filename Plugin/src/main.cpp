@@ -45,11 +45,13 @@
 #include "InputManager.h"
 #include "TargetManager.h"
 #include "ActivationManager.h"
+#include "ActionManager.h"
 #include "GameLoop.h"
 #include "WorldDataSyncFNV.h"
 #include "VoiceSampleBatchUploadFNV.h"
 #include "ImportDataSyncFNV.h"
 #include "QuestJournalFNV.h"
+#include "PlayerInventoryManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
 
@@ -1172,6 +1174,38 @@ static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticDiagnosticBridgeTick_Execute(COMMAND_ARGS) {
+    int bridgeId = 0;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &bridgeId)) {
+        return true;
+    }
+    FNVRuntime::RecordScriptBridgeTick(bridgeId > 0 ? static_cast<std::uint32_t>(bridgeId) : 0);
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticClearActionRequest_Execute(COMMAND_ARGS) {
+    ActionManager::ClearScriptBridgeRequest();
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticClearActorSnapshotRequest_Execute(COMMAND_ARGS) {
+    AgentManager::ClearActorSnapshotRequest();
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticMarkPlayerInventoryDirty_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    PlayerInventoryManagerFNV::MarkDirty("script_event", 200);
+    *result = 1;
+    return true;
+}
+
 static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
     int scanCode = 0;
     *result = 0;
@@ -1419,6 +1453,27 @@ static CommandInfo kCommandInfo_DialecticManageAIAgents = {
     kParams_Integer, Cmd_DialecticManageAIAgents_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
+    "DialecticDiagnosticBridgeTick", "", 0, "Records a lightweight Dialectic script-bridge diagnostic tick.", 0, 1,
+    kParams_Integer, Cmd_DialecticDiagnosticBridgeTick_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticClearActionRequest = {
+    "DialecticClearActionRequest", "", 0, "Acknowledges and removes the active Dialectic action bridge request.", 0, 0,
+    nullptr, Cmd_DialecticClearActionRequest_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticClearActorSnapshotRequest = {
+    "DialecticClearActorSnapshotRequest", "", 0, "Acknowledges and removes Dialectic actor snapshot bridge requests.", 0, 0,
+    nullptr, Cmd_DialecticClearActorSnapshotRequest_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticMarkPlayerInventoryDirty = {
+    "DialecticMarkPlayerInventoryDirty", "", 0,
+    "Queues a coalesced native refresh of the player's Dialectic inventory.", 0, 0,
+    nullptr, Cmd_DialecticMarkPlayerInventoryDirty_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticHandleHotkey = {
     "DialecticHandleHotkey", "", 0, "Routes a raw xNVSE/Fallout scan-code hotkey through Dialectic.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkey_Execute, nullptr, nullptr, 0
@@ -1484,6 +1539,10 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenLLMModelMenu,
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
         &kCommandInfo_DialecticManageAIAgents,
+        &kCommandInfo_DialecticDiagnosticBridgeTick,
+        &kCommandInfo_DialecticClearActionRequest,
+        &kCommandInfo_DialecticClearActorSnapshotRequest,
+        &kCommandInfo_DialecticMarkPlayerInventoryDirty,
         &kCommandInfo_DialecticHandleHotkey,
         &kCommandInfo_DialecticHandleHaltHotkey
     };

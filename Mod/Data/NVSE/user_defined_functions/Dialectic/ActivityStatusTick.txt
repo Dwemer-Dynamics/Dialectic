@@ -18,6 +18,7 @@ int iUnconscious
 int iWeaponDrawn
 
 begin function {}
+    DialecticDiagnosticBridgeTick 10
     if MenuMode
         CallAfterSeconds 2.0 (CompileScript "Dialectic/ActivityStatusTick.txt") 0
         return

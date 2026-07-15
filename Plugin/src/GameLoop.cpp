@@ -26,6 +26,7 @@
 #include "NearbyItemsFNV.h"
 #include "NearbyPoiFNV.h"
 #include "QuestJournalFNV.h"
+#include "PlayerInventoryManagerFNV.h"
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
@@ -129,33 +130,33 @@ static std::deque<std::string> g_nativeDialogueCaptures;
 
 struct PerfAggregate {
     long long calls = 0;
-    long long totalMs = 0;
-    long long maxMs = 0;
+    long long totalUs = 0;
+    long long maxUs = 0;
     long long slowCalls = 0;
 };
 
 static std::unordered_map<std::string, PerfAggregate> g_updatePerfAggregates;
 static std::chrono::steady_clock::time_point g_lastUpdatePerfSummaryTime;
 static uint64_t g_updatePerfTickCount = 0;
-static constexpr long long kPerfSlowSubsystemMs = 8;
-static constexpr long long kPerfSlowFrameMs = 25;
+static constexpr long long kPerfSlowSubsystemUs = 8000;
+static constexpr long long kPerfSlowFrameUs = 25000;
 static constexpr auto kPerfSummaryInterval = std::chrono::seconds(5);
 
-static long long ElapsedMsSince(const std::chrono::steady_clock::time_point& start) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
+static long long ElapsedUsSince(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start).count();
 }
 
-static void RecordUpdatePerf(const char* name, long long elapsedMs) {
+static void RecordUpdatePerf(const char* name, long long elapsedUs) {
     PerfAggregate& aggregate = g_updatePerfAggregates[name ? name : "unknown"];
     aggregate.calls += 1;
-    aggregate.totalMs += elapsedMs;
-    aggregate.maxMs = std::max(aggregate.maxMs, elapsedMs);
-    if (elapsedMs >= kPerfSlowSubsystemMs) {
+    aggregate.totalUs += elapsedUs;
+    aggregate.maxUs = std::max(aggregate.maxUs, elapsedUs);
+    if (elapsedUs >= kPerfSlowSubsystemUs) {
         aggregate.slowCalls += 1;
-        Logger::LogInfo("[PERF] GameLoop subsystem slow name=%s elapsed_ms=%lld",
+        Logger::LogInfo("[PERF] GameLoop subsystem slow name=%s elapsed_ms=%.3f",
             name ? name : "unknown",
-            elapsedMs);
+            static_cast<double>(elapsedUs) / 1000.0);
     }
 }
 
@@ -163,10 +164,10 @@ template <typename Fn>
 static void ProfileUpdateSubsystem(const char* name, Fn&& fn) {
     const auto start = std::chrono::steady_clock::now();
     fn();
-    RecordUpdatePerf(name, ElapsedMsSince(start));
+    RecordUpdatePerf(name, ElapsedUsSince(start));
 }
 
-static void MaybeLogUpdatePerfSummary(long long frameElapsedMs) {
+static void MaybeLogUpdatePerfSummary(long long frameElapsedUs) {
     g_updatePerfTickCount += 1;
     const auto now = std::chrono::steady_clock::now();
     if (g_lastUpdatePerfSummaryTime.time_since_epoch().count() != 0 &&
@@ -179,23 +180,23 @@ static void MaybeLogUpdatePerfSummary(long long frameElapsedMs) {
         : std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastUpdatePerfSummaryTime).count();
     g_lastUpdatePerfSummaryTime = now;
 
-    Logger::LogInfo("[PERF] GameLoop summary window_ms=%lld ticks=%llu last_frame_ms=%lld subsystems=%zu",
+    Logger::LogInfo("[PERF] GameLoop summary window_ms=%lld ticks=%llu last_frame_ms=%.3f subsystems=%zu",
         windowMs,
         static_cast<unsigned long long>(g_updatePerfTickCount),
-        frameElapsedMs,
+        static_cast<double>(frameElapsedUs) / 1000.0,
         g_updatePerfAggregates.size());
 
     for (const auto& entry : g_updatePerfAggregates) {
         const PerfAggregate& aggregate = entry.second;
         const double avgMs = aggregate.calls > 0
-            ? static_cast<double>(aggregate.totalMs) / static_cast<double>(aggregate.calls)
+            ? static_cast<double>(aggregate.totalUs) / static_cast<double>(aggregate.calls) / 1000.0
             : 0.0;
-        Logger::LogInfo("[PERF]   %s calls=%lld total_ms=%lld avg_ms=%.3f max_ms=%lld slow_calls=%lld",
+        Logger::LogInfo("[PERF]   %s calls=%lld total_ms=%.3f avg_ms=%.3f max_ms=%.3f slow_calls=%lld",
             entry.first.c_str(),
             aggregate.calls,
-            aggregate.totalMs,
+            static_cast<double>(aggregate.totalUs) / 1000.0,
             avgMs,
-            aggregate.maxMs,
+            static_cast<double>(aggregate.maxUs) / 1000.0,
             aggregate.slowCalls);
     }
 
@@ -3637,12 +3638,15 @@ static void ProcessNativeRuntimeEvents() {
         using Type = RuntimeEventBus::EventType;
         switch (event.type) {
             case Type::PreLoadGame:
+                PlayerInventoryManagerFNV::Reset("native_pre_load_game");
                 ResetRuntimeForAIActions("native_pre_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
                 break;
             case Type::LoadGame:
+                PlayerInventoryManagerFNV::Reset("native_load_game");
+                PlayerInventoryManagerFNV::ForceRefresh("native_load_game", 2000);
                 ResetRuntimeForAIActions("native_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("load game");
                 DelayDynamicProfileTimerAfterLoad("game load");
@@ -3650,6 +3654,8 @@ static void ProcessNativeRuntimeEvents() {
                 g_lastSeenGamets = 0;
                 break;
             case Type::NewGame:
+                PlayerInventoryManagerFNV::Reset("native_new_game");
+                PlayerInventoryManagerFNV::ForceRefresh("native_new_game", 3000);
                 ResetRuntimeForAIActions("native_new_game", false, false, false);
                 g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
                 g_dynamicProfileBlockedAt = {};
@@ -3660,6 +3666,7 @@ static void ProcessNativeRuntimeEvents() {
                 break;
             case Type::ExitToMainMenu:
             case Type::ExitGame:
+                PlayerInventoryManagerFNV::Reset("native_runtime_exit");
                 ResetRuntimeForAIActions("native_runtime_exit", false, false, false);
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
@@ -3708,6 +3715,7 @@ void Initialize() {
     g_updatePerfTickCount = 0;
     
     ApplyModeIndex(Config::currentModeIndex, false);
+    PlayerInventoryManagerFNV::Initialize();
     TradeManager::Initialize();
     
     Log("GameLoop: Initialized (native frame and response queue pump)");
@@ -3718,6 +3726,7 @@ void Shutdown() {
     
     VoiceRecorder::Shutdown();
     TradeManager::Shutdown();
+    PlayerInventoryManagerFNV::Shutdown();
     
     // Stop any active conversation
     if (g_conversationActive) {
@@ -3747,6 +3756,7 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("NearbyItemsFNV::Update", []() { NearbyItemsFNV::Update(); });
     ProfileUpdateSubsystem("NearbyPoiFNV::Update", []() { NearbyPoiFNV::Update(); });
     ProfileUpdateSubsystem("QuestJournalFNV::Update", []() { QuestJournalFNV::Update(); });
+    ProfileUpdateSubsystem("PlayerInventoryManagerFNV::Update", []() { PlayerInventoryManagerFNV::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });
@@ -3861,16 +3871,16 @@ void Update(float deltaTime) {
         });
     }
     
-    const long long frameElapsedMs = ElapsedMsSince(frameProfileStart);
-    if (frameElapsedMs >= kPerfSlowFrameMs) {
-        Logger::LogInfo("[PERF] GameLoop frame slow elapsed_ms=%lld delta=%.4f conversation=%d voice=%d speaking=%d",
-            frameElapsedMs,
+    const long long frameElapsedUs = ElapsedUsSince(frameProfileStart);
+    if (frameElapsedUs >= kPerfSlowFrameUs) {
+        Logger::LogInfo("[PERF] GameLoop frame slow elapsed_ms=%.3f delta=%.4f conversation=%d voice=%d speaking=%d",
+            static_cast<double>(frameElapsedUs) / 1000.0,
             deltaTime,
             g_conversationActive ? 1 : 0,
             g_voiceInputActive.load() ? 1 : 0,
             SpeakManager::IsSpeaking() ? 1 : 0);
     }
-    MaybeLogUpdatePerfSummary(frameElapsedMs);
+    MaybeLogUpdatePerfSummary(frameElapsedUs);
 }
 
 const GameState& GetGameState() {

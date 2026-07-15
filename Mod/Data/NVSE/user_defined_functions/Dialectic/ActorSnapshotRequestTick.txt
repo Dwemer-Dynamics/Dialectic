@@ -1,4 +1,5 @@
 begin function {}
+    DialecticDiagnosticBridgeTick 2
     if MenuMode
         CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0
         return
@@ -6,8 +7,10 @@ begin function {}
 
     if FileExists "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
         call (CompileScript "Dialectic/CollectActorSnapshot.txt")
+        DialecticClearActorSnapshotRequest
     elseif FileExists "NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
         call (CompileScript "Dialectic/CollectActorSnapshot.txt")
+        DialecticClearActorSnapshotRequest
     endif
 
     CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0

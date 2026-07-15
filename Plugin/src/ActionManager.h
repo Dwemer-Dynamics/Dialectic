@@ -19,6 +19,7 @@ bool FlushPostDialogueActionsForSpeaker(const std::string& speaker,
                                         uint32_t actorFormId,
                                         const char* source = "ActionManager");
 void ClearPostDialogueActions();
+void ClearScriptBridgeRequest();
 void Update();
 
 // Clears native package overrides during save/load, cell, and runtime generation

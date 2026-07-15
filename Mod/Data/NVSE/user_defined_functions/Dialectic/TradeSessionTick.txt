@@ -12,6 +12,7 @@ int iInventoryItemCount
 int iInventoryItemType
 
 begin function {}
+    DialecticDiagnosticBridgeTick 4
     let sRequestId := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_trade_session.tmp" 1 1
     if eval !(sRequestId) || sv_Length sRequestId <= 0
         return

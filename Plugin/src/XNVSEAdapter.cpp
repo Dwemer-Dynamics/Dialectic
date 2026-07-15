@@ -94,11 +94,74 @@ std::mutex g_mapMarkerMutex;
 
 std::mutex g_callbackMutex;
 MessageCallback g_callback;
+PlayerInventoryChangeCallback g_playerInventoryChangeCallback;
 const NVSEInterface* g_nvse = nullptr;
 NVSEMessagingInterface* g_messaging = nullptr;
 NVSEScriptInterface* g_scriptInterface = nullptr;
+NVSEEventManagerInterface* g_eventManager = nullptr;
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 std::atomic<bool> g_initialized{false};
+std::array<bool, 6> g_playerInventoryEventHandlers{};
+
+bool IsPlayerInventoryEventSource(void* parameters) {
+    if (!parameters) return false;
+    auto** arguments = static_cast<void**>(parameters);
+    auto* source = arguments ? static_cast<TESObjectREFR*>(arguments[0]) : nullptr;
+    __try {
+        return source && source->refID == 0x00000014;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void NotifyPlayerInventoryChange(void* parameters, const char* reason) {
+    if (!IsPlayerInventoryEventSource(parameters)) return;
+
+    PlayerInventoryChangeCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(g_callbackMutex);
+        callback = g_playerInventoryChangeCallback;
+    }
+    if (callback) callback(reason);
+}
+
+void OnPlayerInventoryAdded(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "onadd");
+}
+
+void OnPlayerInventoryDropped(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "ondrop");
+}
+
+void OnPlayerInventoryDropItem(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "ondropitem");
+}
+
+void OnPlayerInventoryEquipped(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "onequip");
+}
+
+void OnPlayerInventoryUnequipped(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "onunequip");
+}
+
+void OnPlayerInventorySold(TESObjectREFR*, void* parameters) {
+    NotifyPlayerInventoryChange(parameters, "onsell");
+}
+
+struct InventoryEventBinding {
+    const char* name;
+    NVSEEventManagerInterface::NativeEventHandler handler;
+};
+
+const std::array<InventoryEventBinding, 6> kPlayerInventoryEventBindings{{
+    {"onadd", OnPlayerInventoryAdded},
+    {"ondrop", OnPlayerInventoryDropped},
+    {"ondropitem", OnPlayerInventoryDropItem},
+    {"onactorequip", OnPlayerInventoryEquipped},
+    {"onactorunequip", OnPlayerInventoryUnequipped},
+    {"onsell", OnPlayerInventorySold},
+}};
 
 constexpr std::size_t kFaceGenPhonemeKeyFrameOffset = 0x4C;
 constexpr std::size_t kFaceGenAlternateKeyFrameOffset = 0x74;
@@ -844,6 +907,7 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCa
 
     g_messaging = static_cast<NVSEMessagingInterface*>(g_nvse->QueryInterface(kInterface_Messaging));
     g_scriptInterface = static_cast<NVSEScriptInterface*>(g_nvse->QueryInterface(kInterface_Script));
+    g_eventManager = static_cast<NVSEEventManagerInterface*>(g_nvse->QueryInterface(kInterface_EventManager));
     if (!g_messaging || !g_messaging->RegisterListener) {
         Logger::LogWarning("XNVSEAdapter: messaging interface unavailable");
         return false;
@@ -853,20 +917,51 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCa
         g_messaging = nullptr;
         return false;
     }
+    std::size_t inventoryHandlerCount = 0;
+    if (g_eventManager && g_eventManager->SetNativeEventHandler) {
+        for (std::size_t index = 0; index < kPlayerInventoryEventBindings.size(); ++index) {
+            const auto& binding = kPlayerInventoryEventBindings[index];
+            g_playerInventoryEventHandlers[index] =
+                g_eventManager->SetNativeEventHandler(binding.name, binding.handler);
+            if (g_playerInventoryEventHandlers[index]) {
+                ++inventoryHandlerCount;
+            } else {
+                Logger::LogWarning(
+                    "XNVSEAdapter: failed to register player inventory event handler %s",
+                    binding.name);
+            }
+        }
+    } else {
+        Logger::LogWarning(
+            "XNVSEAdapter: event manager unavailable; player inventory will use explicit triggers and reconciliation");
+    }
     g_initialized.store(true, std::memory_order_release);
-    Logger::LogInfo("XNVSEAdapter: initialized messaging_version=%u script_interface=%d runtime_dir=%s",
+    Logger::LogInfo("XNVSEAdapter: initialized messaging_version=%u script_interface=%d inventory_events=%zu runtime_dir=%s",
         g_messaging->version,
         g_scriptInterface ? 1 : 0,
+        inventoryHandlerCount,
         RuntimeDirectory().c_str());
     return true;
 }
 
 void Shutdown() {
     g_initialized.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> lock(g_callbackMutex);
-    g_callback = {};
+    if (g_eventManager && g_eventManager->RemoveNativeEventHandler) {
+        for (std::size_t index = 0; index < kPlayerInventoryEventBindings.size(); ++index) {
+            if (!g_playerInventoryEventHandlers[index]) continue;
+            const auto& binding = kPlayerInventoryEventBindings[index];
+            g_eventManager->RemoveNativeEventHandler(binding.name, binding.handler);
+            g_playerInventoryEventHandlers[index] = false;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_callbackMutex);
+        g_callback = {};
+        g_playerInventoryChangeCallback = {};
+    }
     g_messaging = nullptr;
     g_scriptInterface = nullptr;
+    g_eventManager = nullptr;
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
     g_modeMenuFunction = nullptr;
@@ -899,6 +994,16 @@ void Shutdown() {
     }
     g_nvse = nullptr;
     g_pluginHandle = kPluginHandle_Invalid;
+}
+
+void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback) {
+    std::lock_guard<std::mutex> lock(g_callbackMutex);
+    g_playerInventoryChangeCallback = std::move(callback);
+}
+
+bool HasPlayerInventoryEventHooks() {
+    return std::any_of(g_playerInventoryEventHandlers.begin(), g_playerInventoryEventHandlers.end(),
+        [](bool registered) { return registered; });
 }
 
 bool IsInitialized() {

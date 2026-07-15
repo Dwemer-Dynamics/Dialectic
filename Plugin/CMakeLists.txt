@@ -40,6 +40,7 @@ add_library(${PROJECT_NAME} SHARED
     src/NearbyItemsFNV.cpp
     src/NearbyPoiFNV.cpp
     src/QuestJournalFNV.cpp
+    src/PlayerInventoryManagerFNV.cpp
     src/LoadedPluginsFNV.cpp
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp

@@ -73,6 +73,7 @@ int iRequestedLocal
 int iScanCount
 
 begin function {}
+    DialecticDiagnosticBridgeTick 17
     if FileExists "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
         let sRequestedRefID := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 1 1
         let sRequestedName := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 2 1

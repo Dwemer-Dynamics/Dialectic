@@ -161,6 +161,7 @@ namespace AgentManager {
 
     // Request and wait for script-runner actor snapshots.
     void RequestActorSnapshot(uint32_t refID, const std::string& npcName);
+    void ClearActorSnapshotRequest();
     bool WaitForFreshActorSnapshot(uint32_t expectedRefID, int timeoutMs = 600,
                                    const std::function<bool()>& cancelRequested = {});
     

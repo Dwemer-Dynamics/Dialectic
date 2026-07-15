@@ -15,6 +15,7 @@ int iPlayerLine
 int iCaptureSeq
 
 begin function {}
+    DialecticDiagnosticBridgeTick 3
     let iMenuMode := 0
     if MenuMode
         let iMenuMode := 1
