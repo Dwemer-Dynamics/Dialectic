@@ -56,7 +56,7 @@
 #include "TaskManager.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.0"
+#define DIALECTIC_VERSION "0.5.1"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
