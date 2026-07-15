@@ -1489,6 +1489,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static uint64_t g_lipSyncLineSequence = 0;
     static std::chrono::steady_clock::time_point g_lipSyncLastCommandAt = {};
     static constexpr int kMaxConsecutiveNativeLipSyncFailures = 3;
+    static constexpr int kMaxLipSyncResetAttempts = 5;
+    static constexpr auto kLipSyncResetRetryDelay = std::chrono::milliseconds(100);
+
+    struct PendingLipSyncReset {
+        uint32_t actorFormId = 0;
+        uint64_t lineSequence = 0;
+        int attempts = 0;
+        std::chrono::steady_clock::time_point nextAttempt = {};
+        std::string reason;
+    };
+
+    static std::deque<PendingLipSyncReset> g_pendingLipSyncResets;
 
     static uint16_t ReadLE16(const uint8_t* data) {
         return static_cast<uint16_t>(data[0] | (data[1] << 8));
@@ -2082,29 +2094,130 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return frames;
     }
 
-    static void StopLipSync(bool resetFace) {
+    static void ClearLipSyncSessionLocked() {
+        g_lipSyncActive = false;
+        g_lipSyncActorFormId = 0;
+        g_lipSyncFrames.clear();
+        g_lipSyncFrameIndex = 0;
+        g_lipSyncLastPhoneme = -2;
+        g_lipSyncLastIntensity = -1;
+        g_lipSyncCommandCount = 0;
+        g_lipSyncConsecutiveNativeFailures = 0;
+        g_lipSyncRuntimeGeneration = 0;
+        g_lipSyncAudioGeneration = 0;
+        g_lipSyncLineSequence = 0;
+        g_lipSyncLastCommandAt = {};
+    }
+
+    static void QueueLipSyncResetRetry(uint32_t formId,
+                                       uint64_t lineSequence,
+                                       int attempts,
+                                       const char* reason) {
+        std::lock_guard<std::mutex> lock(g_lipSyncMutex);
+        for (PendingLipSyncReset& pending : g_pendingLipSyncResets) {
+            if (pending.actorFormId == formId && pending.lineSequence == lineSequence) {
+                pending.attempts = std::max(pending.attempts, attempts);
+                pending.nextAttempt = std::chrono::steady_clock::now() + kLipSyncResetRetryDelay;
+                return;
+            }
+        }
+        g_pendingLipSyncResets.push_back({
+            formId,
+            lineSequence,
+            attempts,
+            std::chrono::steady_clock::now() + kLipSyncResetRetryDelay,
+            reason ? reason : "unknown"
+        });
+    }
+
+    static void FinalizeLipSync(const char* reason) {
         uint32_t formId = 0;
+        uint64_t lineSequence = 0;
         {
             std::lock_guard<std::mutex> lock(g_lipSyncMutex);
             formId = g_lipSyncActorFormId;
-            g_lipSyncActive = false;
-            g_lipSyncActorFormId = 0;
-            g_lipSyncFrames.clear();
-            g_lipSyncFrameIndex = 0;
-            g_lipSyncLastPhoneme = -2;
-            g_lipSyncLastIntensity = -1;
-            g_lipSyncCommandCount = 0;
-            g_lipSyncConsecutiveNativeFailures = 0;
-            g_lipSyncRuntimeGeneration = 0;
-            g_lipSyncAudioGeneration = 0;
-            g_lipSyncLineSequence = 0;
+            lineSequence = g_lipSyncLineSequence;
+            ClearLipSyncSessionLocked();
         }
 
-        if (resetFace && formId != 0) {
-            if (!XNVSEAdapter::ApplyNativeFaceGenLipSync(formId, -1, 0, 100, true)) {
-                WriteLipSyncCommand(formId, "MFG Reset");
+        if (formId == 0) {
+            return;
+        }
+
+        if (XNVSEAdapter::ResetNativeLipSync(formId)) {
+            Log("SpeakManager: Lip sync finalized reason=%s ref=0x%08X line=%llu reset=direct",
+                reason ? reason : "unknown",
+                formId,
+                static_cast<unsigned long long>(lineSequence));
+            WriteLipSyncStatus(std::string("status=reset_direct reason=") +
+                               (reason ? reason : "unknown") +
+                               " ref=" + ConsoleFormId(formId));
+            return;
+        }
+
+        Log("SpeakManager: Lip sync reset deferred reason=%s ref=0x%08X line=%llu",
+            reason ? reason : "unknown",
+            formId,
+            static_cast<unsigned long long>(lineSequence));
+        QueueLipSyncResetRetry(formId, lineSequence, 1, reason);
+        WriteLipSyncStatus(std::string("status=reset_pending reason=") +
+                           (reason ? reason : "unknown") +
+                           " ref=" + ConsoleFormId(formId));
+    }
+
+    static void ProcessPendingLipSyncResets() {
+        PendingLipSyncReset pending;
+        bool hasPending = false;
+        {
+            std::lock_guard<std::mutex> lock(g_lipSyncMutex);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = g_pendingLipSyncResets.begin(); it != g_pendingLipSyncResets.end();) {
+                if (g_lipSyncActive && g_lipSyncActorFormId == it->actorFormId) {
+                    if (g_lipSyncLineSequence != it->lineSequence) {
+                        Log("SpeakManager: Discarding obsolete lip sync reset ref=0x%08X oldLine=%llu newLine=%llu",
+                            it->actorFormId,
+                            static_cast<unsigned long long>(it->lineSequence),
+                            static_cast<unsigned long long>(g_lipSyncLineSequence));
+                        it = g_pendingLipSyncResets.erase(it);
+                        continue;
+                    }
+                    ++it;
+                    continue;
+                }
+                if (it->nextAttempt <= now) {
+                    pending = *it;
+                    g_pendingLipSyncResets.erase(it);
+                    hasPending = true;
+                    break;
+                }
+                ++it;
             }
         }
+
+        if (!hasPending) {
+            return;
+        }
+        if (XNVSEAdapter::ResetNativeLipSync(pending.actorFormId)) {
+            Log("SpeakManager: Lip sync reset retry succeeded reason=%s ref=0x%08X attempts=%d",
+                pending.reason.c_str(), pending.actorFormId, pending.attempts + 1);
+            WriteLipSyncStatus(std::string("status=reset_retry_succeeded reason=") +
+                               pending.reason + " ref=" + ConsoleFormId(pending.actorFormId));
+            return;
+        }
+
+        ++pending.attempts;
+        if (pending.attempts >= kMaxLipSyncResetAttempts) {
+            Log("SpeakManager: Lip sync reset exhausted reason=%s ref=0x%08X attempts=%d; using script bridge",
+                pending.reason.c_str(), pending.actorFormId, pending.attempts);
+            WriteLipSyncCommand(pending.actorFormId, "MFG Reset");
+            WriteLipSyncStatus(std::string("status=reset_bridge_fallback reason=") +
+                               pending.reason + " ref=" + ConsoleFormId(pending.actorFormId));
+            return;
+        }
+        QueueLipSyncResetRetry(pending.actorFormId,
+                               pending.lineSequence,
+                               pending.attempts,
+                               pending.reason.c_str());
     }
 
     static uint32_t ResolveSpeakerFormId(const ScriptLine& line);
@@ -2151,7 +2264,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static void StartLipSync(const ScriptLine& line, const std::vector<uint8_t>& audioData) {
-        StopLipSync(false);
+        FinalizeLipSync("replacement_line");
 
         const uint32_t formId = ResolveSpeakerFormId(line);
         if (IsPlayerSpeakerName(line.actor) ||
@@ -2302,7 +2415,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             "avoiding high-frequency MFG script fallback",
             formId,
             kMaxConsecutiveNativeLipSyncFailures);
-        WriteLipSyncCommand(formId, "MFG Reset");
+        FinalizeLipSync("native_facegen_failure");
         WriteLipSyncStatus(std::string("status=disabled reason=repeated_native_facegen_failure ref=") +
                            ConsoleFormId(formId));
     }
@@ -2340,18 +2453,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             }
 
             if (staleSession) {
-                g_lipSyncActive = false;
-                g_lipSyncActorFormId = 0;
-                g_lipSyncFrames.clear();
-                g_lipSyncFrameIndex = 0;
-                g_lipSyncRuntimeGeneration = 0;
-                g_lipSyncAudioGeneration = 0;
-                g_lipSyncLineSequence = 0;
-            }
-
-            if (staleSession) {
-                // Never touch an actor after the owning playback generation has changed.
-                // Explicit stop paths perform their face reset separately.
                 shouldWrite = false;
             } else {
 
@@ -2363,7 +2464,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
                 if (elapsed > g_lipSyncFrames.back().endSeconds + 0.1) {
                     formId = g_lipSyncActorFormId;
-                    g_lipSyncActive = false;
                     shouldReset = true;
                 } else {
                     const LipSyncFrame& frame = g_lipSyncFrames[g_lipSyncFrameIndex];
@@ -2393,19 +2493,14 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         if (staleSession) {
-            Log("SpeakManager: Lip sync session dropped without actor write because %s changed",
-                staleReason ? staleReason : "ownership");
-            WriteLipSyncStatus(std::string("status=dropped reason=stale_") +
-                               (staleReason ? staleReason : "ownership"));
+            const std::string reason = std::string("stale_") +
+                (staleReason ? staleReason : "ownership");
+            FinalizeLipSync(reason.c_str());
             return;
         }
 
         if (shouldReset && formId != 0) {
-            if (!XNVSEAdapter::ApplyNativeFaceGenLipSync(formId, -1, 0, 100, true)) {
-                WriteLipSyncCommand(formId, "MFG Reset");
-            } else {
-                WriteLipSyncStatus(std::string("status=reset_direct ref=") + ConsoleFormId(formId));
-            }
+            FinalizeLipSync("frames_complete");
             return;
         }
 
@@ -2447,7 +2542,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         TaskManager::CancelByType("audio_prepare");
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
-        StopLipSync(true);
+        FinalizeLipSync("shutdown");
         std::lock_guard<std::mutex> lock(g_queueMutex);
         while (!g_scriptQueue.empty()) {
             g_scriptQueue.pop();
@@ -2727,7 +2822,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::Set3DPlaybackEnabled(false);
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
-        StopLipSync(true);
+        FinalizeLipSync("abort");
     }
 
     bool IsAborted() {
@@ -3233,7 +3328,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::Stop();
         AudioManager::Set3DPlaybackEnabled(false);
         AudioManager::SetVolume(GetBaseVoiceVolume());
-        StopLipSync(true);
+        FinalizeLipSync("scene_change");
         ClearFaceTargetBridge();
         ClearSubtitleBridge();
         ClearDialogueGuardBridge();
@@ -4257,6 +4352,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     // Functions required by GameLoop
     void UpdatePlaybackFrame() {
+        ProcessPendingLipSyncResets();
         UpdatePlayerTextOnlySubtitle();
         if (CancelDialogueIfPlayerSceneChanged()) {
             return;
@@ -4316,7 +4412,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 SendDeliveryState(finishedLine, "spoken");
             }
             g_dialogueGuardHoldUntil = std::chrono::steady_clock::now() + kVanillaDialogueGuardTail;
-            StopLipSync(true);
+            FinalizeLipSync("playback_finished");
             ClearFaceTargetBridge();
             g_currentPlaybackLine = ScriptLine{};
             g_currentPlaybackLineActive = false;
@@ -4454,7 +4550,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     Log("SpeakManager: AudioManager::Play failed for speaker '%s'",
                         g_currentSpeaker.c_str());
                     SendDeliveryState(g_currentPlaybackLine, "failed");
-                    StopLipSync(true);
+                    FinalizeLipSync("audio_play_failed");
                     ClearFaceTargetBridge();
                     g_currentPlaybackLine = ScriptLine{};
                     g_currentPlaybackLineActive = false;
@@ -4682,7 +4778,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         AudioManager::Stop();
         g_playbackPausedForMenu = false;
-        StopLipSync(true);
+        FinalizeLipSync(reason ? reason : "stop_speaking");
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
         g_currentPlaybackRechatLaunched = false;

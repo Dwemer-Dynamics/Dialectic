@@ -2132,6 +2132,24 @@ bool ApplyNativeFaceGenLipSync(std::uint32_t actorFormId,
     return applied;
 }
 
+bool ResetNativeLipSync(std::uint32_t actorFormId) {
+    if (actorFormId == 0) {
+        return false;
+    }
+
+    // FaceGen owns the viseme banks while MFG can retain engine-level facial
+    // state. Clear both at line boundaries so an interrupted line cannot leave
+    // either source holding the actor's mouth open.
+    const bool faceGenReset = ApplyNativeFaceGenLipSync(actorFormId, -1, 0, 100, true);
+    const bool mfgReset = ApplyNativeMfg(actorFormId, -1, 0, true);
+    Logger::LogInfo(
+        "[NATIVE_LIPSYNC] reset actor=0x%08X facegen=%d mfg=%d",
+        actorFormId,
+        faceGenReset ? 1 : 0,
+        mfgReset ? 1 : 0);
+    return faceGenReset || mfgReset;
+}
+
 bool HaltNativeActor(std::uint32_t actorFormId) {
     if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
         !g_scriptInterface->CallFunctionAlt || actorFormId == 0) {

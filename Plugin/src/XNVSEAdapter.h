@@ -303,6 +303,7 @@ bool ApplyNativeFaceGenLipSync(std::uint32_t actorFormId,
                                int intensity,
                                int decayIntensity,
                                bool reset);
+bool ResetNativeLipSync(std::uint32_t actorFormId);
 bool HaltNativeActor(std::uint32_t actorFormId);
 bool ExecuteSimpleNativeAction(std::uint32_t actorFormId, int actionCode);
 bool ExecuteNativePackageAction(std::uint32_t actorFormId, std::uint32_t targetFormId, int actionCode);
