@@ -41,6 +41,7 @@ std::unordered_map<std::uint32_t, TESActorBase*> g_guardedActorRefs;
 BGSVoiceType* g_silentVoiceType = nullptr;
 std::unordered_map<std::uint32_t, TESObjectREFR*> g_knownRuntimeReferences;
 std::unordered_map<std::uint32_t, TESObjectREFR*> g_knownActorReferences;
+std::unordered_map<std::uint32_t, std::vector<NativeEquipmentItem>> g_actorEquipmentCache;
 Tile* g_passiveSubtitleTile = nullptr;
 Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
@@ -889,6 +890,7 @@ void Shutdown() {
     g_doorStateFunction = nullptr;
     g_knownRuntimeReferences.clear();
     g_knownActorReferences.clear();
+    g_actorEquipmentCache.clear();
     g_doorStateCache.clear();
     g_sceneCellCache = {};
     {
@@ -972,7 +974,7 @@ bool CaptureNativeGameState(NativeGameState& state) {
     return true;
 }
 
-bool CaptureNativeActors(std::vector<NativeActorState>& actors) {
+bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment) {
     actors.clear();
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
     if (!player || !player->parentCell) return false;
@@ -1070,7 +1072,15 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors) {
             ExtraContainerChanges::EntryData* weapon = actor->baseProcess->GetWeaponInfo();
             state.equippedWeaponFormId = weapon && weapon->type ? weapon->type->refID : 0;
         }
-        CaptureEquippedItems(actor, state.equipment);
+        if (refreshEquipment) {
+            CaptureEquippedItems(actor, state.equipment);
+            g_actorEquipmentCache[state.formId] = state.equipment;
+        } else {
+            const auto cached = g_actorEquipmentCache.find(state.formId);
+            if (cached != g_actorEquipmentCache.end()) {
+                state.equipment = cached->second;
+            }
+        }
         if (actor->actorMover) {
             const UInt32 movementFlags = actor->actorMover->Unk_08();
             state.moving = (movementFlags & 1u) != 0;
@@ -1731,6 +1741,7 @@ void InvalidateNativePresentation() {
 void InvalidateNativeObjectCache() {
     g_knownRuntimeReferences.clear();
     g_knownActorReferences.clear();
+    g_actorEquipmentCache.clear();
     g_doorStateCache.clear();
     g_sceneCellCache = {};
     {

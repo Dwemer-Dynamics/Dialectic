@@ -269,7 +269,7 @@ bool HasMessaging();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
-bool CaptureNativeActors(std::vector<NativeActorState>& actors);
+bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
 bool CaptureNativeReferences(std::vector<NativeReferenceState>& references);
 bool CaptureNativeNavScene(NativeNavSceneState& scene);
 bool CaptureNativeQuest(NativeQuestState& quest);

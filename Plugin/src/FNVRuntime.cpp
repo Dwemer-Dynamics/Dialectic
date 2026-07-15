@@ -41,6 +41,7 @@ bool g_lastPaused = false;
 bool g_hadCombatState = false;
 bool g_lastInCombat = false;
 std::chrono::steady_clock::time_point g_lastActorCapture;
+std::chrono::steady_clock::time_point g_lastEquipmentCapture;
 std::chrono::steady_clock::time_point g_lastReferenceCapture;
 std::chrono::steady_clock::time_point g_lastNavCaptureAttempt;
 std::chrono::steady_clock::time_point g_lastQuestCapture;
@@ -177,6 +178,7 @@ void ResetNativeState(const char* reason) {
     g_hadMenuState = false;
     g_hadCombatState = false;
     g_lastActorCapture = {};
+    g_lastEquipmentCapture = {};
     g_lastReferenceCapture = {};
     g_lastNavCaptureAttempt = {};
     g_lastQuestCapture = {};
@@ -223,6 +225,7 @@ void CaptureFrame() {
         GameThreadDispatcher::CancelAll("cell_changed");
         TaskManager::CancelOlderThanGeneration(generation);
         g_lastActorCapture = {};
+        g_lastEquipmentCapture = {};
         g_lastReferenceCapture = {};
         g_lastNavCaptureAttempt = {};
         g_lastQuestCapture = {};
@@ -323,10 +326,12 @@ void CaptureFrame() {
     }
 
     if (g_lastActorCapture.time_since_epoch().count() == 0 ||
-        now - g_lastActorCapture >= std::chrono::milliseconds(250)) {
+        now - g_lastActorCapture >= std::chrono::seconds(1)) {
         std::vector<XNVSEAdapter::NativeActorState> nativeActors;
         const auto actorsStartedAt = std::chrono::steady_clock::now();
-        if (XNVSEAdapter::CaptureNativeActors(nativeActors)) {
+        const bool refreshEquipment = g_lastEquipmentCapture.time_since_epoch().count() == 0 ||
+            now - g_lastEquipmentCapture >= std::chrono::seconds(15);
+        if (XNVSEAdapter::CaptureNativeActors(nativeActors, refreshEquipment)) {
             std::vector<RuntimeSnapshot::ActorState> actors;
             actors.reserve(nativeActors.size());
             for (const auto& source : nativeActors) {
@@ -384,14 +389,18 @@ void CaptureFrame() {
                 }
                 actors.push_back(actor);
             }
+            g_actorHighWater = (std::max)(g_actorHighWater, actors.size());
             RuntimeSnapshot::UpdateActors(std::move(actors), RuntimeGeneration::Current());
+            if (refreshEquipment) {
+                g_lastEquipmentCapture = now;
+            }
         }
         RecordCaptureTiming(g_actorTiming, actorsStartedAt);
         g_lastActorCapture = now;
     }
 
     if (g_lastReferenceCapture.time_since_epoch().count() == 0 ||
-        now - g_lastReferenceCapture >= std::chrono::milliseconds(750)) {
+        now - g_lastReferenceCapture >= std::chrono::seconds(3)) {
         std::vector<XNVSEAdapter::NativeReferenceState> nativeReferences;
         const auto referencesStartedAt = std::chrono::steady_clock::now();
         if (XNVSEAdapter::CaptureNativeReferences(nativeReferences)) {
@@ -421,6 +430,7 @@ void CaptureFrame() {
                 reference.yaw = source.yaw;
                 references.push_back(std::move(reference));
             }
+            g_referenceHighWater = (std::max)(g_referenceHighWater, references.size());
             RuntimeSnapshot::UpdateReferences(std::move(references), RuntimeGeneration::Current());
         }
         RecordCaptureTiming(g_referenceTiming, referencesStartedAt);
@@ -452,8 +462,6 @@ void CaptureFrame() {
     }
 
     RecordCaptureTiming(g_totalCaptureTiming, captureStartedAt);
-    g_actorHighWater = (std::max)(g_actorHighWater, RuntimeSnapshot::GetActors().size());
-    g_referenceHighWater = (std::max)(g_referenceHighWater, RuntimeSnapshot::GetReferences().size());
     g_eventHighWater = (std::max)(g_eventHighWater, RuntimeEventBus::PendingCount());
     if (g_lastCaptureTimingLog.time_since_epoch().count() == 0 ||
         now - g_lastCaptureTimingLog >= std::chrono::seconds(30)) {
