@@ -1,0 +1,12 @@
+string_var sModName
+string_var sDevice
+int iSubmenu
+
+Begin Function {sModName, iSubmenu}
+    if eval iSubmenu != 4
+        return
+    endif
+
+    let sDevice := DialecticGetCurrentRecordingDevice
+    SetUIString "StartMenu/MCM/*:1/*:20/_title" (sDevice)
+End

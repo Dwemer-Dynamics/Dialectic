@@ -1973,6 +1973,7 @@ namespace HTTPManager {
 
             DWORD statusCode = 0;
             DWORD statusSize = sizeof(statusCode);
+            bool sttHttpSuccess = true;
             if (WinHttpQueryHeaders(hRequest,
                                     WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                     WINHTTP_HEADER_NAME_BY_INDEX,
@@ -1981,10 +1982,7 @@ namespace HTTPManager {
                                     WINHTTP_NO_HEADER_INDEX)) {
                 if (statusCode < 200 || statusCode >= 300) {
                     Log("HTTPManager: STT endpoint returned HTTP %lu", statusCode);
-                    closeRequest();
-                    WinHttpCloseHandle(hConnect);
-                    WinHttpCloseHandle(hSession);
-                    return "";
+                    sttHttpSuccess = false;
                 }
             } else {
                 Log("HTTPManager: Could not query STT HTTP status code");
@@ -2033,15 +2031,23 @@ namespace HTTPManager {
 
             if (response.starts_with("{")) {
                 const std::string sttText = Trim(ExtractJsonStringValue(response, "text"));
+                const std::string error = Trim(ExtractJsonStringValue(response, "error"));
                 if (sttText.empty() && response.find("\"ok\":false") != std::string::npos) {
-                    const std::string error = Trim(ExtractJsonStringValue(response, "error"));
                     Log("HTTPManager: STT JSON response failed: %s", error.c_str());
+                }
+                if (!sttHttpSuccess) {
+                    Log("HTTPManager: STT request failed HTTP %lu error=%s",
+                        statusCode, error.empty() ? "unspecified" : error.c_str());
+                    return "";
                 }
                 return sttText;
             }
 
             if (!response.empty()) {
                 Log("HTTPManager: STT service returned non-JSON response");
+            }
+            if (!sttHttpSuccess) {
+                Log("HTTPManager: STT request failed HTTP %lu without a JSON error body", statusCode);
             }
             return "";
 

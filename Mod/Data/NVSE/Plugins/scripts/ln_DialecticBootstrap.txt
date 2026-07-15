@@ -37,6 +37,7 @@ SetEventHandler "OnTopic" (CompileScript "Dialectic/DialogueTopicTextHandler.txt
 SetEventHandler "OnLockPickSuccess" (CompileScript "Dialectic/RpgLockpickSuccessHandler.txt")
 SetEventHandler "ITR:OnDialogueText" (CompileScript "Dialectic/DialogueGuardInterruptHandler.txt")
 SetEventHandler "ITR:OnSoundPlayed" (CompileScript "Dialectic/DialogueGuardSoundHandler.txt")
+SetEventHandler "MCMExtMenuState" (CompileScript "Dialectic/RecordingDeviceMenuState.gek")
 
 if IsComponentLoaded "HUDMainMenu\DialecticPassiveSubtitle"
     UnloadUIComponent "HUDMainMenu\DialecticPassiveSubtitle"

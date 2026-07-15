@@ -2,6 +2,7 @@
 #include "HTTPManager.h"
 #include "Config.h"
 #include "VoiceSampleOverridesFNV.h"
+#include "VoiceSampleResolverFNV.h"
 #include "GameThreadDispatcher.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
@@ -1140,77 +1141,6 @@ namespace AgentManager {
         });
     }
 
-    static std::string NormalizeVoicePathSeparators(std::string value) {
-        value = Trim(value);
-        std::replace(value.begin(), value.end(), '/', '\\');
-        return value;
-    }
-
-    static bool StartsWithInsensitive(const std::string& value, const std::string& prefix) {
-        if (value.size() < prefix.size()) {
-            return false;
-        }
-        for (size_t i = 0; i < prefix.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(value[i])) !=
-                std::tolower(static_cast<unsigned char>(prefix[i]))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    static std::string BuildVoiceOriginalName(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-            return path.substr(5);
-        }
-        if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            return path;
-        }
-        return "Sound\\Voice\\" + path;
-    }
-
-    static std::string BuildVoiceDataPath(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\")) {
-            return path;
-        }
-        if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            return "Data\\" + path;
-        }
-        return "Data\\Sound\\Voice\\" + path;
-    }
-
-    static std::string BuildBundledVoiceSamplePath(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-            path = path.substr(17);
-        } else if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            path = path.substr(12);
-        } else if (StartsWithInsensitive(path, "Data\\")) {
-            path = path.substr(5);
-        }
-        return "Data\\Dialectic\\voice_samples\\" + path;
-    }
-
-    static bool ReadBinaryFile(const std::string& path, std::string& data) {
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open()) {
-            return false;
-        }
-
-        file.seekg(0, std::ios::end);
-        const std::streamoff size = file.tellg();
-        if (size <= 0) {
-            return false;
-        }
-
-        file.seekg(0, std::ios::beg);
-        data.resize(static_cast<size_t>(size));
-        file.read(data.data(), static_cast<std::streamsize>(size));
-        return file.good() || file.gcount() == static_cast<std::streamsize>(size);
-    }
-
     static bool FindVoiceSampleForData(const NPCData& data, VoiceSampleOverridesFNV::VoiceSampleOverride& sample) {
         if (!IsMissingSnapshotValue(data.voiceId) &&
             VoiceSampleOverridesFNV::FindVoiceSampleOverride(data.voiceId, sample)) {
@@ -1241,9 +1171,7 @@ namespace AgentManager {
             return;
         }
 
-        const std::string originalName = BuildVoiceOriginalName(sample.voiceFile);
-        const std::string dataPath = BuildVoiceDataPath(sample.voiceFile);
-        const std::string bundledPath = BuildBundledVoiceSamplePath(sample.voiceFile);
+        const std::string originalName = VoiceSampleResolverFNV::BuildOriginalName(sample.voiceFile);
         const std::string uploadKey = NormalizeName(originalName);
         {
             std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
@@ -1255,20 +1183,25 @@ namespace AgentManager {
 
         const std::string actorName = data.displayName;
         TaskManager::Enqueue("voice_sample", actorName, RuntimeGeneration::Current(), false,
-            std::chrono::seconds(60), [actorName, originalName, dataPath, bundledPath, sample](const TaskManager::CancellationToken& token) {
+            std::chrono::seconds(60), [actorName, originalName, uploadKey, sample](const TaskManager::CancellationToken& token) {
             if (!token.WaitFor(std::chrono::milliseconds(1200))) return;
 
             std::string audioData;
-            std::string sourcePath = dataPath;
-            if (!ReadBinaryFile(sourcePath, audioData)) {
-                sourcePath = bundledPath;
-            }
-            if (audioData.empty() && !ReadBinaryFile(sourcePath, audioData)) {
-                Log("AgentManager: Voice sample file not found or empty for %s: %s",
+            std::string sourcePath;
+            std::string resolveError;
+            if (!VoiceSampleResolverFNV::ResolveAndRead(
+                    sample.voiceFile, audioData, sourcePath, &resolveError)) {
+                Log("AgentManager: Voice sample resolution failed for %s: %s (%s)",
                     actorName.c_str(),
-                    dataPath.c_str());
+                    sample.voiceFile.c_str(),
+                    resolveError.c_str());
+                std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
+                g_attemptedVoiceSampleUploads.erase(uploadKey);
                 return;
             }
+
+            Log("AgentManager: Resolved voice sample for %s from %s (%zu bytes)",
+                actorName.c_str(), sourcePath.c_str(), audioData.size());
 
             const std::string response = HTTPManager::UploadVoiceSample(
                 audioData,

@@ -45,6 +45,7 @@ add_library(${PROJECT_NAME} SHARED
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp
     src/VoiceSampleOverridesFNV.cpp
+    src/VoiceSampleResolverFNV.cpp
     src/VoiceSampleBatchUploadFNV.cpp
     src/BsaArchiveReader.cpp
     src/XNVSEAdapter.cpp

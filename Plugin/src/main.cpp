@@ -54,6 +54,8 @@
 #include "PlayerInventoryManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
+#include "VoiceRecorder.h"
+#include "Console.h"
 
 #ifndef DIALECTIC_VERSION
 #define DIALECTIC_VERSION "0.5.1"
@@ -1048,17 +1050,27 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
 
     if (TaskManager::Enqueue("voice_sample_batch", "all_voice_samples", 0, false,
         std::chrono::minutes(15), [](const TaskManager::CancellationToken& token) {
-        VoiceSampleBatchUploadFNV::BatchUploadSummary summary;
-        const auto uploadResult = VoiceSampleBatchUploadFNV::SendAllVoiceSamples(summary,
-            [&token]() { return token.IsCancellationRequested(); });
-        Logger::LogInfo(
-            "DialecticSendAllVoiceSamples result=%d mappings=%d uploaded=%d missing=%d failed=%d timedOut=%d",
-            static_cast<int>(uploadResult),
-            summary.totalMappings,
-            summary.uploaded,
-            summary.missing,
-            summary.failed,
-            summary.timedOut ? 1 : 0);
+        Logger::LogInfo("DialecticSendAllVoiceSamples worker started");
+        try {
+            VoiceSampleBatchUploadFNV::BatchUploadSummary summary;
+            const auto uploadResult = VoiceSampleBatchUploadFNV::SendAllVoiceSamples(summary,
+                [&token]() { return token.IsCancellationRequested(); });
+            Logger::LogInfo(
+                "DialecticSendAllVoiceSamples result=%d mappings=%d csv=%d archive=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
+                static_cast<int>(uploadResult),
+                summary.totalMappings,
+                summary.csvMappings,
+                summary.archiveMappings,
+                summary.uploaded,
+                summary.missing,
+                summary.failed,
+                summary.timedOut ? 1 : 0,
+                summary.cancelled ? 1 : 0);
+        } catch (...) {
+            g_voiceSampleBatchRunning = false;
+            Logger::LogError("DialecticSendAllVoiceSamples worker failed with an exception");
+            throw;
+        }
         g_voiceSampleBatchRunning = false;
     }) == 0) {
         g_voiceSampleBatchRunning = false;
@@ -1075,6 +1087,48 @@ static bool Cmd_DialecticSendAllVoiceSamples_Execute(COMMAND_ARGS) {
     Dialectic_RequestVoiceSampleBatch("NVSE command");
     *result = 1;
     return true;
+}
+
+static bool Cmd_DialecticGetRecordingDeviceCount_Execute(COMMAND_ARGS) {
+    // Deprecated ABI slot. Device selection was removed; Dialectic follows the
+    // Windows default recording endpoint like CHIM.
+    *result = 0;
+    return true;
+}
+
+static bool Cmd_DialecticGetRecordingDeviceName_Execute(COMMAND_ARGS) {
+    int index = -1;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &index) || index < 0) {
+        return true;
+    }
+
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, "");
+}
+
+static bool Cmd_DialecticGetCurrentRecordingDevice_Execute(COMMAND_ARGS) {
+    *result = 0;
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    const std::string current = VoiceRecorder::GetCurrentRecordingDeviceDisplayName();
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, current.c_str());
+}
+
+static bool Cmd_DialecticSetRecordingDevice_Execute(COMMAND_ARGS) {
+    int index = -1;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &index) || index < 0) {
+        return true;
+    }
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    const std::string current = VoiceRecorder::GetCurrentRecordingDeviceDisplayName();
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, current.c_str());
 }
 
 static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
@@ -1423,6 +1477,26 @@ static CommandInfo kCommandInfo_DialecticSendAllVoiceSamples = {
     nullptr, Cmd_DialecticSendAllVoiceSamples_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticGetRecordingDeviceCount = {
+    "DialecticGetRecordingDeviceCount", "", 0, "Deprecated recording-device selector ABI slot.", 0, 0,
+    nullptr, Cmd_DialecticGetRecordingDeviceCount_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetRecordingDeviceName = {
+    "DialecticGetRecordingDeviceName", "", 0, "Deprecated recording-device selector ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticGetRecordingDeviceName_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetCurrentRecordingDevice = {
+    "DialecticGetCurrentRecordingDevice", "", 0, "Returns the active Windows recording device name.", 0, 0,
+    nullptr, Cmd_DialecticGetCurrentRecordingDevice_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSetRecordingDevice = {
+    "DialecticSetRecordingDevice", "", 0, "Deprecated recording-device selector ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticSetRecordingDevice_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticSendSetConf = {
     "DialecticSendSetConf", "", 0, "Sends a DialecticServer setconf payload.", 0, 1,
     kParams_SetConfPayload, Cmd_DialecticSendSetConf_Execute, nullptr, nullptr, 0
@@ -1519,6 +1593,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
     nvse->SetOpcodeBase(kDialecticOpcodeBase);
 
     CommandInfo* commands[] = {
+        // This list is an append-only ABI. Inserting commands shifts xNVSE opcodes
+        // and makes already-compiled scripts invoke the wrong native function.
         &kCommandInfo_DialecticGetConfigInt,
         &kCommandInfo_DialecticSetConfigInt,
         &kCommandInfo_DialecticGetConfigFloat,
@@ -1544,11 +1620,22 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticClearActorSnapshotRequest,
         &kCommandInfo_DialecticMarkPlayerInventoryDirty,
         &kCommandInfo_DialecticHandleHotkey,
-        &kCommandInfo_DialecticHandleHaltHotkey
+        &kCommandInfo_DialecticHandleHaltHotkey,
+        &kCommandInfo_DialecticGetRecordingDeviceCount,
+        &kCommandInfo_DialecticGetRecordingDeviceName,
+        &kCommandInfo_DialecticGetCurrentRecordingDevice,
+        &kCommandInfo_DialecticSetRecordingDevice
     };
 
     for (CommandInfo* command : commands) {
-        if (nvse->RegisterCommand(command)) {
+        const bool returnsString =
+            command == &kCommandInfo_DialecticGetRecordingDeviceName ||
+            command == &kCommandInfo_DialecticGetCurrentRecordingDevice ||
+            command == &kCommandInfo_DialecticSetRecordingDevice;
+        const bool registered = returnsString
+            ? nvse->RegisterTypedCommand(command, kRetnType_String)
+            : nvse->RegisterCommand(command);
+        if (registered) {
             Logger::LogInfo("Registered NVSE command: %s", command->longName);
         } else {
             Logger::LogWarning("Failed to register NVSE command: %s", command->longName);
@@ -1567,7 +1654,7 @@ void Log(const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
-    Logger::LogInfo(buffer);
+    Logger::LogInfo("%s", buffer);
 }
 
 // Forward declarations from other modules
