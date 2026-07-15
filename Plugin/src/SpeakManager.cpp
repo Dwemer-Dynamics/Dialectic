@@ -71,6 +71,7 @@ namespace SpeakManager {
         std::string sceneKey;
         uint64_t runtimeGeneration = 0;
         bool rechatLaunched = false;
+        bool textOnlyFallback = false;
         uint64_t sequence = 0;
     };
 
@@ -81,6 +82,7 @@ namespace SpeakManager {
         uint32_t actorFormId = 0;
         ScriptLine line;
         bool ready;
+        bool textOnlyFallback = false;
     };
 
     static std::queue<ScriptLine> g_scriptQueue;
@@ -229,6 +231,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static bool g_playerTextOnlySubtitleActive = false;
     static std::chrono::steady_clock::time_point g_playerTextOnlySubtitleUntil = {};
     static constexpr auto kPlayerTextOnlySubtitleDuration = std::chrono::seconds(2);
+    static bool g_npcTextOnlyFallbackActive = false;
+    static std::chrono::steady_clock::time_point g_npcTextOnlyFallbackUntil = {};
     static std::mutex g_recentSubtitleMutex;
     static std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> g_recentAiSubtitleKeys;
     static constexpr auto kRecentAiSubtitleWindow = std::chrono::seconds(20);
@@ -1341,6 +1345,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_subtitleLastText.clear();
         g_playerTextOnlySubtitleActive = false;
         g_playerTextOnlySubtitleUntil = {};
+        g_npcTextOnlyFallbackActive = false;
+        g_npcTextOnlyFallbackUntil = {};
 
         auto clear = []() {
             XNVSEAdapter::ClearNativePassiveSubtitle();
@@ -1387,6 +1393,53 @@ static uint32_t g_faceTargetTargetFormId = 0;
             Log("SpeakManager: Player text-only subtitle finished");
             ClearSubtitleBridge();
         }
+    }
+
+    static std::chrono::milliseconds EstimateNpcTextOnlyFallbackDuration(const ScriptLine& line) {
+        const size_t visibleCharacters = NormalizeSubtitleText(line.text).size();
+        const long long estimatedMs = static_cast<long long>(visibleCharacters) * 55LL + 1200LL;
+        return std::chrono::milliseconds(std::clamp<long long>(estimatedMs, 2500LL, 12000LL));
+    }
+
+    static void StartNpcTextOnlyFallback(const ScriptLine& line) {
+        ClearSubtitleBridge();
+        const auto duration = Config::showAISubtitles
+            ? EstimateNpcTextOnlyFallbackDuration(line)
+            : std::chrono::milliseconds(100);
+        g_npcTextOnlyFallbackActive = true;
+        g_npcTextOnlyFallbackUntil = std::chrono::steady_clock::now() + duration;
+
+        if (Config::showAISubtitles) {
+            const std::string displayText = BuildSpeakerSubtitleText(line);
+            if (!displayText.empty()) {
+                WriteSubtitleBridgeText(displayText,
+                                        line.utteranceId.empty() ? line.requestId : line.utteranceId,
+                                        0,
+                                        1,
+                                        0.0,
+                                        std::chrono::duration<double>(duration).count());
+            }
+        }
+
+        Log("SpeakManager: Audio unavailable; delivering text-only fallback speaker='%s' duration_ms=%lld text='%s'",
+            line.actor.c_str(),
+            static_cast<long long>(duration.count()),
+            PreviewText(line.text).c_str());
+        SendDeliveryState(line, "text_only");
+    }
+
+    static bool UpdateNpcTextOnlyFallback() {
+        if (!g_npcTextOnlyFallbackActive) {
+            return false;
+        }
+        if (std::chrono::steady_clock::now() < g_npcTextOnlyFallbackUntil) {
+            return true;
+        }
+
+        g_npcTextOnlyFallbackActive = false;
+        g_npcTextOnlyFallbackUntil = {};
+        ClearSubtitleBridge();
+        return false;
     }
 
     struct WavInfo {
@@ -3027,30 +3080,31 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static void CompleteFailedAudioDownload(const ScriptLine& item, uint64_t generation) {
-        bool shouldClearGuardIfIdle = false;
+        bool queuedTextFallback = false;
         if (generation == g_audioGeneration.load() && !item.text.empty() && !item.actor.empty()) {
             g_audioFailed.fetch_add(1, std::memory_order_relaxed);
-            HTTPManager::SendDialogueDeliveryAck(item.actor,
-                                                 item.actorFormId,
-                                                 item.text,
-                                                 item.ttsCacheKey,
-                                                 item.utteranceId,
-                                                 "failed",
-                                                 item.requestId);
-            if (!AudioManager::IsPlaying() && !g_currentPlaybackLineActive) {
-                shouldClearGuardIfIdle = true;
-            }
         }
         {
             std::lock_guard<std::mutex> pendingLock(g_pendingMutex);
             if (g_downloadsInProgress > 0) {
                 --g_downloadsInProgress;
             }
-            if (generation == g_audioGeneration.load() && item.sequence != 0) {
+            if (generation == g_audioGeneration.load() && item.sequence != 0 &&
+                !item.text.empty() && !item.actor.empty()) {
+                PendingAudio fallback;
+                fallback.speaker = item.actor;
+                fallback.actorFormId = item.actorFormId;
+                fallback.line = item;
+                fallback.line.textOnlyFallback = true;
+                fallback.ready = true;
+                fallback.textOnlyFallback = true;
+                g_pendingAudioQueue.push_back(std::move(fallback));
+                queuedTextFallback = true;
+            } else if (generation == g_audioGeneration.load() && item.sequence != 0) {
                 g_pendingLineSequences.erase(item.sequence);
             }
         }
-        if (shouldClearGuardIfIdle) {
+        if (!queuedTextFallback && !AudioManager::IsPlaying() && !g_currentPlaybackLineActive) {
             ClearDialogueGuardBridgeIfIdle();
         }
     }
@@ -3062,7 +3116,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         const uint64_t nextSequence = *g_pendingLineSequences.begin();
         for (auto it = g_pendingAudioQueue.begin(); it != g_pendingAudioQueue.end(); ++it) {
-            if (it->ready && !it->audioData.empty() && it->line.sequence == nextSequence) {
+            if (it->ready && (!it->audioData.empty() || it->textOnlyFallback) &&
+                it->line.sequence == nextSequence) {
                 readyAudio = std::move(*it);
                 g_pendingAudioQueue.erase(it);
                 g_pendingLineSequences.erase(nextSequence);
@@ -4244,6 +4299,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void ProcessQueue() {
         UpdatePlayerTextOnlySubtitle();
+        if (UpdateNpcTextOnlyFallback()) {
+            return;
+        }
         LogQueueStatusIfNeeded();
         LogDialogueGuardStatusIfChanged();
         if (CancelDialogueIfPlayerSceneChanged()) {
@@ -4257,7 +4315,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
             ScriptLine finishedLine = g_currentPlaybackLine;
             g_playbackCompleted.fetch_add(1, std::memory_order_relaxed);
             const bool rechatAlreadyLaunched = g_currentPlaybackRechatLaunched;
-            SendDeliveryState(finishedLine, "spoken");
+            if (!finishedLine.textOnlyFallback) {
+                SendDeliveryState(finishedLine, "spoken");
+            }
             g_dialogueGuardHoldUntil = std::chrono::steady_clock::now() + kVanillaDialogueGuardTail;
             StopLipSync(true);
             ClearFaceTargetBridge();
@@ -4350,6 +4410,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 ClearDialogueGuardBridgeIfIdle();
                 g_isProcessing = false;
                 UpdatePlaybackFrame();
+                return;
+            }
+
+            if (readyAudio.textOnlyFallback) {
+                g_currentSpeaker = readyAudio.speaker;
+                g_currentSpeakerFormId = readyAudio.actorFormId;
+                g_currentPlaybackLine = readyAudio.line;
+                g_currentPlaybackLineActive = true;
+                g_currentPlaybackRechatLaunched = false;
+                StartDialogueGuardBridge(g_currentPlaybackLine);
+                StartNpcTextOnlyFallback(g_currentPlaybackLine);
+                g_isProcessing = false;
                 return;
             }
 
