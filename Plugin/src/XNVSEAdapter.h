@@ -80,6 +80,7 @@ struct NativeEquipmentItem {
 struct NativeActorState {
     std::string name;
     std::string raceName;
+    std::string voiceName;
     std::uint32_t formId{0};
     std::uint32_t baseFormId{0};
     std::uint32_t cellFormId{0};
