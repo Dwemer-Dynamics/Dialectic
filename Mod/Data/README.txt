@@ -1,7 +1,7 @@
 Dialectic - AI NPCs for Fallout New Vegas and TTW
 =================================================
 
-Version: 0.5.1
+Version: 0.5.2
 Author: Dwemer Dynamics
 
 REQUIREMENTS
