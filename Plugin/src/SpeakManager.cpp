@@ -3511,13 +3511,111 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return wide;
     }
 
+    enum class TtsGenerationStatus {
+        Unknown,
+        Pending,
+        Ready,
+        Failed
+    };
+
+    static TtsGenerationStatus QueryTtsGenerationStatus(
+        HINTERNET hConnect,
+        const std::string& cacheKey,
+        uint64_t generation,
+        const TaskManager::CancellationToken& token) {
+        if (!hConnect || cacheKey.empty() ||
+            generation != g_audioGeneration.load() || token.IsCancellationRequested()) {
+            return TtsGenerationStatus::Unknown;
+        }
+
+        const std::string path = "/DialecticServer/tts_status.php?cache_key=" + cacheKey;
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect,
+                                                L"GET",
+                                                Utf8ToWide(path).c_str(),
+                                                NULL,
+                                                WINHTTP_NO_REFERER,
+                                                WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                                0);
+        if (!hRequest) {
+            return TtsGenerationStatus::Unknown;
+        }
+
+        auto interruptibleRequest = std::make_shared<std::atomic<HINTERNET>>(hRequest);
+        token.SetInterrupt([interruptibleRequest]() {
+            HINTERNET request = interruptibleRequest->exchange(nullptr);
+            if (request) WinHttpCloseHandle(request);
+        });
+
+        DWORD timeoutMs = 1000;
+        WinHttpSetTimeouts(hRequest, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+        const bool requestOk = WinHttpSendRequest(hRequest,
+                                                  WINHTTP_NO_ADDITIONAL_HEADERS,
+                                                  0,
+                                                  WINHTTP_NO_REQUEST_DATA,
+                                                  0,
+                                                  0,
+                                                  0) &&
+            WinHttpReceiveResponse(hRequest, NULL);
+
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        if (requestOk) {
+            WinHttpQueryHeaders(hRequest,
+                                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX,
+                                &statusCode,
+                                &statusCodeSize,
+                                WINHTTP_NO_HEADER_INDEX);
+        }
+
+        std::string response;
+        if (requestOk && statusCode == 200) {
+            DWORD available = 0;
+            DWORD downloaded = 0;
+            do {
+                available = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &available) || available == 0) {
+                    break;
+                }
+                std::vector<char> buffer((std::min)(available, static_cast<DWORD>(4096)));
+                if (!WinHttpReadData(hRequest, buffer.data(), static_cast<DWORD>(buffer.size()), &downloaded)) {
+                    break;
+                }
+                response.append(buffer.data(), downloaded);
+                if (response.size() >= 8192) {
+                    break;
+                }
+            } while (available > 0);
+        }
+
+        token.ClearInterrupt();
+        HINTERNET requestToClose = interruptibleRequest->exchange(nullptr);
+        if (requestToClose) WinHttpCloseHandle(requestToClose);
+
+        if (response.find("\"status\":\"failed\"") != std::string::npos ||
+            response.find("\"status\": \"failed\"") != std::string::npos) {
+            return TtsGenerationStatus::Failed;
+        }
+        if (response.find("\"status\":\"ready\"") != std::string::npos ||
+            response.find("\"status\": \"ready\"") != std::string::npos) {
+            return TtsGenerationStatus::Ready;
+        }
+        if (response.find("\"status\":\"pending\"") != std::string::npos ||
+            response.find("\"status\": \"pending\"") != std::string::npos) {
+            return TtsGenerationStatus::Pending;
+        }
+        return TtsGenerationStatus::Unknown;
+    }
+
     static std::vector<uint8_t> DownloadSoundcacheWavWithRetry(
         const std::string& host,
         int port,
         const std::string& path,
+        const std::string& cacheKey,
+        bool queryGenerationStatus,
         uint64_t generation,
         const TaskManager::CancellationToken& token,
-        int maxAttempts = 20) {
+        int maxAttempts = 30) {
         maxAttempts = std::max(1, maxAttempts);
         std::vector<uint8_t> audioData;
         const auto startTime = std::chrono::steady_clock::now();
@@ -3550,6 +3648,24 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     attempt, path.c_str());
                 closeHandles();
                 return {};
+            }
+
+            if (queryGenerationStatus) {
+                const TtsGenerationStatus status =
+                    QueryTtsGenerationStatus(hConnect, cacheKey, generation, token);
+                if (status == TtsGenerationStatus::Failed) {
+                    Log("SpeakManager: [Thread] Server reported permanent TTS failure for %s",
+                        cacheKey.c_str());
+                    closeHandles();
+                    return {};
+                }
+                if (status == TtsGenerationStatus::Pending) {
+                    if (!token.WaitFor(std::chrono::milliseconds(300))) {
+                        closeHandles();
+                        return {};
+                    }
+                    continue;
+                }
             }
 
             HINTERNET hRequest = WinHttpOpenRequest(hConnect,
@@ -4455,7 +4571,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     queuedLinesForActions,
                     pendingAudioForActions);
             }
-            if (!rechatAlreadyLaunched && !flushedPostDialogueActions) {
+            if (!finishedLine.textOnlyFallback &&
+                !rechatAlreadyLaunched &&
+                !flushedPostDialogueActions) {
                 MaybeLaunchRechatAfterPlayback(finishedLine);
             }
         }
@@ -4612,10 +4730,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
-        if (MaybeLaunchRechatForLine(item, "audio_prepare", true, false)) {
-            item.rechatLaunched = true;
-        }
-
         {
             std::lock_guard<std::mutex> pendingLock(g_pendingMutex);
             ++g_downloadsInProgress;
@@ -4631,7 +4745,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
         // legacy text hash for locally queued/debug lines.
         std::string textHash = item.ttsCacheKey.empty() ? Misc::MD5Hash(item.text) : item.ttsCacheKey;
         const uint64_t audioGeneration = g_audioGeneration.load();
-        const int maxHttpAttempts = IsPlayerTtsLine(item) ? 4 : 20;
+        const bool isPlayerTts = IsPlayerTtsLine(item);
+        const int maxHttpAttempts = isPlayerTts ? 4 : 30;
         Log("SpeakManager: utterance state=preparing_audio speaker='%s' utterance='%s' cache='%s'",
             item.actor.c_str(),
             item.utteranceId.c_str(),
@@ -4646,7 +4761,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         audioTask.lane = TaskManager::Lane::Audio;
         audioTask.priority = IsPlayerTtsLine(item);
         audioTask.deadlineFromEnqueue = true;
-        audioTask.timeout = IsPlayerTtsLine(item) ? std::chrono::seconds(15) : std::chrono::seconds(45);
+        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : std::chrono::seconds(12);
         audioTask.coalescing = TaskManager::CoalescingPolicy::RejectIfPendingOrActive;
         audioTask.concurrencyLimit = 2;
         const TaskManager::TaskHandle audioTaskHandle = TaskManager::Submit(std::move(audioTask), [item,
@@ -4655,14 +4770,23 @@ static uint32_t g_faceTargetTargetFormId = 0;
                         hash = textHash,
                         localSoundcachePath,
                         generation = audioGeneration,
-                        maxHttpAttempts](const TaskManager::CancellationToken& token) {
+                        maxHttpAttempts,
+                        queryGenerationStatus = !isPlayerTts](const TaskManager::CancellationToken& token) {
             // Create a temporary config-like structure for the download
             Log("SpeakManager: [Thread] Starting TTS download for '%s'", item.actor.c_str());
             std::string path = "/DialecticServer/soundcache/" + hash + ".wav";
             std::vector<uint8_t> audioData = ReadLocalSoundcacheWavWithRetry(localSoundcachePath, hash, generation, token);
             if (audioData.empty()) {
                 Log("SpeakManager: [Thread] Requesting TTS file: %s", path.c_str());
-                audioData = DownloadSoundcacheWavWithRetry(host, port, path, generation, token, maxHttpAttempts);
+                audioData = DownloadSoundcacheWavWithRetry(
+                    host,
+                    port,
+                    path,
+                    hash,
+                    queryGenerationStatus,
+                    generation,
+                    token,
+                    maxHttpAttempts);
             }
 
             if (audioData.empty()) {
