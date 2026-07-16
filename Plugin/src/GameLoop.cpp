@@ -60,6 +60,10 @@
 #include <set>
 #include <unordered_map>
 
+#ifndef DIALECTIC_VERSION
+#define DIALECTIC_VERSION "0.5.2"
+#endif
+
 // Forward declarations
 void Log(const char* fmt, ...);
 bool Dialectic_RequestVoiceSampleBatch(const char* source);
@@ -3627,8 +3631,11 @@ static void MaybeSendLoadedSaveInit() {
 
     const char* reason = firstInit ? "loaded_save" : "gamets_rollback";
     ResetRuntimeForAIActions(reason, false, detectedRollback || g_conversationActive || SpeakManager::IsSpeaking(), false);
-    Logger::LogInfo("GameLoop: Sending init event for %s at gamets=%lld", reason, currentGamets);
-    HTTPManager::SendEvent("init", "");
+    Logger::LogInfo("GameLoop: Sending init event for %s at gamets=%lld (plugin=%s)",
+                    reason,
+                    currentGamets,
+                    DIALECTIC_VERSION);
+    HTTPManager::SendEvent("init", DIALECTIC_VERSION);
     VersionCheck::Schedule();
 }
 
