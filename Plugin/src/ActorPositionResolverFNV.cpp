@@ -366,7 +366,9 @@ ActorPositionResolverFNV::PositionResult PositionFromNativeActor(
     result.baseTypeKnown = actor.baseType != 0;
     result.gender = actor.baseType == 0x2A ? (actor.female ? "Female" : "Male") : "";
     result.race = actor.raceName;
+    result.voiceId = actor.voiceName;
     result.voiceFormId = actor.voiceFormId == 0 ? "" : FormatNativeFormId(actor.voiceFormId);
+    result.voiceName = actor.voiceName;
     result.level = actor.level;
     result.playerTeammateKnown = true;
     result.isPlayerTeammate = actor.playerTeammate;

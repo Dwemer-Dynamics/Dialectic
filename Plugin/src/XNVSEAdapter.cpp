@@ -500,6 +500,13 @@ std::string CopyGameString(const String& value) {
     return std::string(value.m_data, strnlen_s(value.m_data, length));
 }
 
+std::string CopyGameCString(const char* value) {
+    if (!value) {
+        return {};
+    }
+    return std::string(value, strnlen_s(value, 1024));
+}
+
 std::string CopyFormName(TESForm* form) {
     if (!form) return {};
     using DynamicCast = void* (*)(void*, UInt32, const void*, const void*, UInt32);
@@ -1144,6 +1151,7 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
             state.name = CopyGameString(actorBase->fullName.name);
             BGSVoiceType* voiceType = ResolveActorVoice(actorBase);
             state.voiceFormId = voiceType ? voiceType->refID : 0;
+            state.voiceName = voiceType ? CopyGameCString(voiceType->GetName()) : "";
             state.level = actorBase->baseData.level;
             state.healthMax = actorBase->avOwner.Fn_01(eActorVal_Health);
             state.actionPointsMax = actorBase->avOwner.Fn_01(eActorVal_ActionPoints);

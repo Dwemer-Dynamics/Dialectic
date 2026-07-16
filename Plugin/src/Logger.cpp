@@ -3,12 +3,15 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
+#include <string>
 
 #include "Logger.h"
 
@@ -103,10 +106,29 @@ void Logger::Initialize() {
     
     char gameDir[MAX_PATH];
     char logPath[MAX_PATH];
+    logPath[0] = '\0';
     
     GetGameDir(gameDir, MAX_PATH);
+
+    char documentsDir[MAX_PATH];
+    if (SUCCEEDED(SHGetFolderPathA(
+            NULL,
+            CSIDL_PERSONAL | CSIDL_FLAG_CREATE,
+            NULL,
+            SHGFP_TYPE_CURRENT,
+            documentsDir))) {
+        std::filesystem::path logDirectory =
+            std::filesystem::path(documentsDir) / "My Games" / "FalloutNV" / "NVSE";
+        std::error_code directoryError;
+        std::filesystem::create_directories(logDirectory, directoryError);
+        const std::string documentsLogPath = (logDirectory / "dialectic.log").string();
+        if (documentsLogPath.size() < MAX_PATH) {
+            strcpy_s(logPath, MAX_PATH, documentsLogPath.c_str());
+            fopen_s(&s_logFile, logPath, "w");
+        }
+    }
     
-    if (gameDir[0] != '\0') {
+    if (!s_logFile && gameDir[0] != '\0') {
         sprintf_s(logPath, MAX_PATH, "%s\\dialectic.log", gameDir);
         fopen_s(&s_logFile, logPath, "w");
     }

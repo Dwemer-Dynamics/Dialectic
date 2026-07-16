@@ -993,7 +993,9 @@ namespace AgentManager {
             data.baseName = formatFormId(nativeActor.baseFormId);
             data.gender = nativeActor.baseType == 0x2A ? (nativeActor.female ? "Female" : "Male") : "";
             data.race = nativeActor.raceName;
+            data.voiceId = nativeActor.voiceName;
             data.voiceFormId = formatFormId(nativeActor.voiceFormId);
+            data.voiceName = nativeActor.voiceName;
             data.level = nativeActor.level;
             data.health = nativeActor.health;
             data.healthMax = nativeActor.healthMax;
@@ -1210,6 +1212,8 @@ namespace AgentManager {
                 sample.transcript);
             if (response.empty()) {
                 Log("AgentManager: Voice sample upload returned empty response for %s", actorName.c_str());
+                std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
+                g_attemptedVoiceSampleUploads.erase(uploadKey);
             } else {
                 Log("AgentManager: Voice sample upload completed for %s from %s",
                     actorName.c_str(),
@@ -1634,6 +1638,9 @@ namespace AgentManager {
             data.refID = refID;
         }
 
+        SendActorProfileUpdate(data);
+        SendNpcVoiceUpdate(data);
+        SendVoiceSampleUpload(data);
         SendEquipmentUpdate(data);
         SendInventoryUpdate(data);
     }
