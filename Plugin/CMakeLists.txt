@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Dialectic VERSION 0.5.1)
+project(Dialectic VERSION 0.5.2)
 
 math(EXPR DIALECTIC_PLUGIN_INFO_VERSION
     "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
@@ -45,6 +45,7 @@ add_library(${PROJECT_NAME} SHARED
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp
     src/VoiceSampleOverridesFNV.cpp
+    src/VoiceSampleResolverFNV.cpp
     src/VoiceSampleBatchUploadFNV.cpp
     src/BsaArchiveReader.cpp
     src/XNVSEAdapter.cpp

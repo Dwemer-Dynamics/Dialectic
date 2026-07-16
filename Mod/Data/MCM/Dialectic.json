@@ -259,7 +259,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:InteriorHearingDistance",
-              "default": 750
+              "default": 1050
             }
           ],
           "scale": {
@@ -283,7 +283,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:ExteriorHearingDistance",
-              "default": 1250
+              "default": 1750
             }
           ],
           "scale": {
@@ -307,7 +307,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:AutoHearingDistance",
-              "default": 560
+              "default": 784
             }
           ],
           "scale": {
@@ -758,16 +758,10 @@
           "type": 0
         },
         "20": {
-          "title": "Current Device",
-          "type": 1,
+          "title": "Current Device: Detecting automatically",
+          "type": 0,
           "enable": 1,
-          "mouse": "Current Windows recording device resolved by Dialectic.",
-          "vars": [
-            {
-              "configINI": "VoiceRecording:CurrentDevice",
-              "default": "Windows default"
-            }
-          ]
+          "mouse": "Read-only microphone selected automatically from the first in-game recording that contains speech."
         },
         "9": {
           "title": "Enable Open Mic",
@@ -1035,7 +1029,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Manually activates the NPC under the crosshair as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddTarget", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentAddTarget" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         },
         "3": {
@@ -1043,7 +1037,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Manually activates every eligible nearby NPC as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddNearby", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentAddNearby" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         },
         "4": {
@@ -1051,7 +1045,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Removes the targeted NPC from the active Dialectic AI agent registry.",
-          "vars": [{ "configINI": "Tools:AgentRemoveTarget", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentRemoveTarget" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         },
         "5": {
@@ -1059,7 +1053,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Removes every NPC from the active Dialectic AI agent registry. Auto Activate can add eligible NPCs again.",
-          "vars": [{ "configINI": "Tools:AgentRemoveAll", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentRemoveAll" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         },
         "6": {
@@ -1072,7 +1066,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Displays the currently active Dialectic AI agents in the in-game notification area and plugin log.",
-          "vars": [{ "configINI": "Tools:AgentListActive", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentListActive" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         },
         "8": {
@@ -1080,7 +1074,7 @@
           "type": 5,
           "enable": 1,
           "mouse": "Scans and displays nearby NPCs that can be manually added as AI agents.",
-          "vars": [{ "configINI": "Tools:AgentListNearby", "default": 0 }],
+          "vars": [{ "configINI": "Tools:AgentListNearby" }],
           "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         }
       }

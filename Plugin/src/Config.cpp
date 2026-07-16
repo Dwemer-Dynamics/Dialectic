@@ -69,8 +69,9 @@ namespace Config {
     // Voice recording configuration
     int silenceThreshold = 500;
     int maxRecordingSeconds = 60;
-    int voiceRecordingDeviceId = -1;
-    std::string voiceRecordingDeviceName = "";
+    std::string voiceRecordingPreferredDeviceName = "Windows default";
+    std::string voiceRecordingDetectedEndpointId;
+    bool voiceRecordingSaveLastWav = false;
     bool openMicEnabled = false;
     float openMicSensitivity = 1000.0f;
     float openMicEndDelaySeconds = 1.0f;
@@ -91,12 +92,12 @@ namespace Config {
 
     // Spatial audio configuration
     bool spatialAudioEnabled = true;
-    float spatialMaxAirDistance = 4000.0f;
-    float spatialImmediateDistance = 150.0f;
-    float spatialAutoHearingDistance = 560.0f;
+    float spatialMaxAirDistance = 5600.0f;
+    float spatialImmediateDistance = 210.0f;
+    float spatialAutoHearingDistance = 784.0f;
     float spatialDistanceScaler = 1.0f;
-    float spatialInteriorHearingDistance = 750.0f;
-    float spatialExteriorHearingDistance = 1250.0f;
+    float spatialInteriorHearingDistance = 1050.0f;
+    float spatialExteriorHearingDistance = 1750.0f;
     float spatialMinDistanceFactor = 0.1f;
     float spatialInteriorBaseModifier = 1.0f;
     float spatialExteriorBaseModifier = 0.7f;
@@ -673,8 +674,9 @@ namespace Config {
             else if (currentSection == "VoiceRecording") {
                 if (key == "SilenceThreshold") silenceThreshold = std::stoi(value);
                 else if (key == "MaxRecordingSeconds") maxRecordingSeconds = std::stoi(value);
-                else if (key == "DeviceId") voiceRecordingDeviceId = std::stoi(value);
-                else if (key == "DeviceName") voiceRecordingDeviceName = value;
+                else if (key == "CurrentDevice") voiceRecordingPreferredDeviceName = value;
+                else if (key == "DetectedEndpointId") voiceRecordingDetectedEndpointId = value;
+                else if (key == "SaveLastRecording") voiceRecordingSaveLastWav = (value == "1" || value == "true");
             }
             else if (currentSection == "OpenMic") {
                 if (key == "Enabled") openMicEnabled = (value == "1" || value == "true");
@@ -979,13 +981,12 @@ namespace Config {
         iniFile << "SilenceThreshold=" << silenceThreshold << "\n";
         iniFile << "; Maximum recording duration in seconds\n";
         iniFile << "MaxRecordingSeconds=" << maxRecordingSeconds << "\n";
-        iniFile << "; WinMM capture device. Set DeviceId=-1 to use Windows mapper/default.\n";
-        iniFile << "; Current dev machine examples: 2=Razer BlackShark, 4=HyperX QuadCast.\n";
-        iniFile << "DeviceId=" << voiceRecordingDeviceId << "\n";
-        iniFile << "; Optional substring match fallback when DeviceId is -1.\n";
-        iniFile << "DeviceName=" << voiceRecordingDeviceName << "\n";
-        iniFile << "; Display-only current Windows capture device for MCM.\n";
-        iniFile << "CurrentDevice=" << VoiceRecorder::GetCurrentRecordingDeviceName() << "\n\n";
+        iniFile << "; Keep the latest WAV submitted to STT for diagnostics.\n";
+        iniFile << "SaveLastRecording=" << (voiceRecordingSaveLastWav ? "1" : "0") << "\n";
+        iniFile << "; Preferred device retained automatically. Windows default follows the OS setting.\n";
+        iniFile << "CurrentDevice=" << voiceRecordingPreferredDeviceName << "\n";
+        iniFile << "; Stable Core Audio endpoint selected automatically from a recording with real signal.\n";
+        iniFile << "DetectedEndpointId=" << voiceRecordingDetectedEndpointId << "\n\n";
 
         iniFile << "[OpenMic]\n";
         iniFile << "; Open mic voice activity detection. Disabled by default.\n";
@@ -1016,7 +1017,7 @@ namespace Config {
         iniFile << "[SpatialAudio]\n";
         iniFile << "; Spatial awareness for NPC hearing, auto-activation, and listener selection. Player-heard playback is configured in [Audio].\n";
         iniFile << "Enabled=1\n";
-        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 8m at 70 FNV units/meter.\n";
+        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 11.2m at 70 FNV units/meter.\n";
         iniFile << "MaxAirDistance=" << spatialMaxAirDistance << "\n";
         iniFile << "ImmediateDistance=" << spatialImmediateDistance << "\n";
         iniFile << "AutoHearingDistance=" << spatialAutoHearingDistance << "\n";

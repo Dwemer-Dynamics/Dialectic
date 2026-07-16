@@ -50,8 +50,9 @@ namespace Config {
     // Voice recording configuration
     extern int silenceThreshold;
     extern int maxRecordingSeconds;
-    extern int voiceRecordingDeviceId;
-    extern std::string voiceRecordingDeviceName;
+    extern std::string voiceRecordingPreferredDeviceName;
+    extern std::string voiceRecordingDetectedEndpointId;
+    extern bool voiceRecordingSaveLastWav;
     extern bool openMicEnabled;
     extern float openMicSensitivity;
     extern float openMicEndDelaySeconds;

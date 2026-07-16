@@ -5,6 +5,10 @@ int iOption
 array_var aJSON
 
 Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    if eval fValue <= 0
+        return
+    endif
+
     if eval iOption == 2
         SetINIIntC "Tools:AgentAddTarget" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
         DialecticManageAIAgents 0
