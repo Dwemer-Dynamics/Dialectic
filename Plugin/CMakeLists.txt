@@ -152,6 +152,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     psapi       # Process memory diagnostics
     ole32       # COM
     oleaut32    # COM automation
+    shell32     # Known user folders for reliable logging
 )
 
 # Set output name to match NVSE plugin naming convention
