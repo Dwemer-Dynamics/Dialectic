@@ -632,6 +632,30 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
+        "20": {
+          "title": "Narrator / Player TTS Volume (%)",
+          "type": 2,
+          "enable": 1,
+          "suffix": "%",
+          "mouse": "Adjust narrator and player TTS playback relative to AI Voice Volume. 100% keeps the current level; 0% mutes both in-head voices only.",
+          "vars": [
+            {
+              "configINI": "Audio:HeadVoiceVolume",
+              "default": 100
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 0,
+            "valueMax": 200,
+            "suffix": "%"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
         "3": {
           "title": "Enable 3D Audio Playback",
           "type": 5,

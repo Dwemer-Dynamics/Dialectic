@@ -141,6 +141,15 @@ if(BUILD_TESTING)
         target_compile_options(DialecticBsaArchiveReaderTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
     endif()
     add_test(NAME DialecticBsaArchiveReaderTests COMMAND DialecticBsaArchiveReaderTests)
+
+    add_executable(DialecticHeadVoiceVolumeTests
+        tests/HeadVoiceVolumeUtilsTests.cpp
+    )
+    target_include_directories(DialecticHeadVoiceVolumeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(DialecticHeadVoiceVolumeTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
+    endif()
+    add_test(NAME DialecticHeadVoiceVolumeTests COMMAND DialecticHeadVoiceVolumeTests)
 endif()
 
 # Link against Windows libraries

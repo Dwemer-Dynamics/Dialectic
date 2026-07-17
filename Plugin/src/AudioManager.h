@@ -39,7 +39,7 @@ void SetCameraBasedAudio(bool enabled);
 // Strength multiplier for player-heard 3D panning. 1.0 is natural, higher is more obvious.
 void Set3DPlaybackStrength(float strength);
 
-// Volume control (0.0 to 1.0)
+// Source volume control (0.0 to 2.0; values above 1.0 amplify head voices)
 void SetVolume(float volume);
 
 // Check playback status

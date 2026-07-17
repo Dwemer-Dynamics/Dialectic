@@ -21,6 +21,7 @@ namespace Config {
     extern int animationResolution;
     extern float animationIntensity;
     extern float voiceVolume;
+    extern float headVoiceVolume;
     extern bool audio3DPlaybackEnabled;
     extern bool audioCameraBased;
     extern float audio3DPanStrength;
