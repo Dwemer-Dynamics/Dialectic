@@ -3733,6 +3733,7 @@ void Initialize() {
     ApplyModeIndex(Config::currentModeIndex, false);
     PlayerInventoryManagerFNV::Initialize();
     TradeManager::Initialize();
+    LoadedPluginsFNV::RequestSync();
     
     Log("GameLoop: Initialized (native frame and response queue pump)");
 }
