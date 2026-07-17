@@ -2569,6 +2569,27 @@ end
         static_cast<UInt32>(amount));
 }
 
+bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
+    state = {};
+    PlayerCharacter* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    if (!player) {
+        return false;
+    }
+
+    auto readNeed = [player](UInt32 actorValue) {
+        const float value = player->avOwner.Fn_03(actorValue);
+        return std::isfinite(value) && value > 0.0f ? value : 0.0f;
+    };
+
+    state.valid = true;
+    state.hardcoreEnabled = player->isHardcore;
+    state.dehydration = readNeed(eActorVal_Dehydration);
+    state.hunger = readNeed(eActorVal_Hunger);
+    state.sleepDeprivation = readNeed(eActorVal_Sleepdeprevation);
+    state.radiation = readNeed(eActorVal_RadLevel);
+    return true;
+}
+
 bool AddNativeItemToActor(std::uint32_t targetFormId,
                           std::uint32_t itemBaseFormId,
                           int amount,

@@ -70,6 +70,15 @@ struct NativeGameState {
     float playerYaw{0.0f};
 };
 
+struct NativePlayerSurvivalState {
+    bool valid{false};
+    bool hardcoreEnabled{false};
+    float hunger{0.0f};
+    float dehydration{0.0f};
+    float sleepDeprivation{0.0f};
+    float radiation{0.0f};
+};
+
 struct NativeEquipmentItem {
     std::string name;
     std::uint32_t baseFormId{0};
@@ -273,6 +282,7 @@ bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
+bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
 bool CaptureNativeReferences(std::vector<NativeReferenceState>& references);
 bool CaptureNativeNavScene(NativeNavSceneState& scene);
