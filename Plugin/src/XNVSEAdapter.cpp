@@ -57,6 +57,9 @@ Script* g_packageActionFunction = nullptr;
 Script* g_attackActionFunction = nullptr;
 Script* g_restoreCombatActorFunction = nullptr;
 Script* g_inventoryActionFunction = nullptr;
+Script* g_addItemToActorFunction = nullptr;
+Script* g_teleportActorFunction = nullptr;
+Script* g_killActorFunction = nullptr;
 Script* g_pickupTransferFunction = nullptr;
 Script* g_openTeammateContainerFunction = nullptr;
 Script* g_stopFollowingFunction = nullptr;
@@ -982,6 +985,9 @@ void Shutdown() {
     g_attackActionFunction = nullptr;
     g_restoreCombatActorFunction = nullptr;
     g_inventoryActionFunction = nullptr;
+    g_addItemToActorFunction = nullptr;
+    g_teleportActorFunction = nullptr;
+    g_killActorFunction = nullptr;
     g_pickupTransferFunction = nullptr;
     g_openTeammateContainerFunction = nullptr;
     g_stopFollowingFunction = nullptr;
@@ -2561,6 +2567,167 @@ end
     return g_scriptInterface->CallFunctionAlt(g_inventoryActionFunction, speaker, 6,
         static_cast<UInt32>(actionCode), targetMod, targetLocal, itemMod, itemLocal,
         static_cast<UInt32>(amount));
+}
+
+bool AddNativeItemToActor(std::uint32_t targetFormId,
+                          std::uint32_t itemBaseFormId,
+                          int amount,
+                          std::string& failureReason) {
+    failureReason.clear();
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+    if (targetFormId == 0 || itemBaseFormId == 0 || amount <= 0 || amount > 1000000) {
+        failureReason = "invalid_arguments";
+        return false;
+    }
+
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target != player && target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    if (!g_addItemToActorFunction) {
+        static constexpr const char* kAddItemSource = R"(
+int iItemMod
+int iItemLocal
+int iAmount
+ref rItem
+begin function {iItemMod, iItemLocal, iAmount}
+    let rItem := BuildRef iItemMod iItemLocal
+    if eval !(rItem) || iAmount <= 0
+        SetFunctionValue 0
+        return
+    endif
+    AddItem rItem iAmount 1
+    SetFunctionValue 1
+end
+)";
+        g_addItemToActorFunction = g_scriptInterface->CompileScript(kAddItemSource);
+        if (!g_addItemToActorFunction) {
+            failureReason = "add_item_script_compile_failed";
+            return false;
+        }
+    }
+
+    const UInt32 itemMod = (itemBaseFormId >> 24) & 0xFF;
+    const UInt32 itemLocal = itemBaseFormId & 0x00FFFFFF;
+    if (!g_scriptInterface->CallFunctionAlt(g_addItemToActorFunction, target, 3,
+            itemMod, itemLocal, static_cast<UInt32>(amount))) {
+        failureReason = "add_item_call_failed";
+        return false;
+    }
+    return true;
+}
+
+bool TeleportNativeActor(std::uint32_t targetFormId,
+                         std::uint32_t destinationFormId,
+                         std::string& failureReason) {
+    failureReason.clear();
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+    if (targetFormId == 0 || destinationFormId == 0) {
+        failureReason = "invalid_arguments";
+        return false;
+    }
+
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target != player && target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    if (!g_teleportActorFunction) {
+        static constexpr const char* kTeleportSource = R"(
+int iDestinationMod
+int iDestinationLocal
+ref rDestination
+begin function {iDestinationMod, iDestinationLocal}
+    let rDestination := BuildRef iDestinationMod iDestinationLocal
+    if eval !(rDestination)
+        SetFunctionValue 0
+        return
+    endif
+    MoveTo rDestination
+    SetFunctionValue 1
+end
+)";
+        g_teleportActorFunction = g_scriptInterface->CompileScript(kTeleportSource);
+        if (!g_teleportActorFunction) {
+            failureReason = "teleport_script_compile_failed";
+            return false;
+        }
+    }
+
+    const UInt32 destinationMod = (destinationFormId >> 24) & 0xFF;
+    const UInt32 destinationLocal = destinationFormId & 0x00FFFFFF;
+    if (!g_scriptInterface->CallFunctionAlt(g_teleportActorFunction, target, 2,
+            destinationMod, destinationLocal)) {
+        failureReason = "teleport_call_failed";
+        return false;
+    }
+    return true;
+}
+
+bool KillNativeActor(std::uint32_t targetFormId,
+                     std::string& failureReason) {
+    failureReason.clear();
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    if (!player || targetFormId == 0 || targetFormId == player->refID || targetFormId == 0x00000014) {
+        failureReason = "player_protected";
+        return false;
+    }
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    auto* actorBase = static_cast<TESActorBase*>(target->baseForm);
+    if ((actorBase->baseData.flags & TESActorBaseData::kFlags_Essential) != 0) {
+        failureReason = "essential_actor_protected";
+        return false;
+    }
+
+    if (!g_killActorFunction) {
+        static constexpr const char* kKillSource = R"(
+begin function {}
+    Kill
+    SetFunctionValue 1
+end
+)";
+        g_killActorFunction = g_scriptInterface->CompileScript(kKillSource);
+        if (!g_killActorFunction) {
+            failureReason = "kill_script_compile_failed";
+            return false;
+        }
+    }
+
+    if (!g_scriptInterface->CallFunctionAlt(g_killActorFunction, target, 0)) {
+        failureReason = "kill_call_failed";
+        return false;
+    }
+    return true;
 }
 
 bool TransferNativeWorldReferenceToActor(std::uint32_t actorFormId,

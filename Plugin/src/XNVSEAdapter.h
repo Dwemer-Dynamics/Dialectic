@@ -316,6 +316,15 @@ bool ExecuteNativeInventoryAction(std::uint32_t speakerFormId,
                                   std::uint32_t itemBaseFormId,
                                   int amount,
                                   int actionCode);
+bool AddNativeItemToActor(std::uint32_t targetFormId,
+                          std::uint32_t itemBaseFormId,
+                          int amount,
+                          std::string& failureReason);
+bool TeleportNativeActor(std::uint32_t targetFormId,
+                         std::uint32_t destinationFormId,
+                         std::string& failureReason);
+bool KillNativeActor(std::uint32_t targetFormId,
+                     std::string& failureReason);
 bool TransferNativeWorldReferenceToActor(std::uint32_t actorFormId,
                                          std::uint32_t itemReferenceFormId);
 bool OpenNativeTeammateContainer(std::uint32_t actorFormId);

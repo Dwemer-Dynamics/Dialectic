@@ -65,16 +65,19 @@ struct ActionRequest {
     std::string speaker;
     std::string target;
     std::string item;
+    std::string location;
     std::string instruction;
     int amount = 1;
     uint32_t speakerFormId = 0;
     uint32_t targetFormId = 0;
     uint32_t itemRefId = 0;
     uint32_t itemBaseId = 0;
+    uint32_t locationFormId = 0;
     int itemInventoryIndex = -1;
     int itemInventoryCount = 0;
     int itemInventoryType = 0;
     uint64_t runtimeGeneration = 0;
+    bool narratorAuthority = false;
 };
 
 struct PendingAction {
@@ -234,6 +237,13 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"pickupitem", "PickupItem"},
         {"readquests", "ReadQuests"},
         {"readquestjournal", "ReadQuests"},
+        {"directorcommand", "DirectorCommand"},
+        {"spawncaps", "SpawnCaps"},
+        {"spawngold", "SpawnCaps"},
+        {"spawnitem", "SpawnItem"},
+        {"teleportactor", "TeleportActor"},
+        {"teleportnpc", "TeleportActor"},
+        {"killtarget", "KillTarget"},
         {"sheatheweapon", "SheatheWeapon"},
         {"stopwalk", "StopWalk"},
         {"takeaseat", "TakeASeat"},
@@ -529,6 +539,11 @@ const std::set<std::string>& CanonicalActions() {
         "OpenInventory",
         "PickupItem",
         "ReadQuests",
+        "DirectorCommand",
+        "SpawnCaps",
+        "SpawnItem",
+        "TeleportActor",
+        "KillTarget",
         "SheatheWeapon",
         "StopFollowing",
         "StopWalk",
@@ -568,7 +583,22 @@ int ActionCodeForAction(const std::string& action) {
     if (action == "InspectSurroundings") return 24;
     if (action == "ReadQuests") return 25;
     if (action == "StopFollowing") return 26;
+    if (action == "SpawnCaps") return 27;
+    if (action == "SpawnItem") return 28;
+    if (action == "TeleportActor") return 29;
+    if (action == "KillTarget") return 30;
     return 0;
+}
+
+bool IsNarratorPluginAction(const std::string& action) {
+    return action == "ReadQuests" || action == "SpawnCaps" ||
+           action == "SpawnItem" || action == "TeleportActor" ||
+           action == "KillTarget";
+}
+
+bool IsNarratorMutatingAction(const std::string& action) {
+    return action == "SpawnCaps" || action == "SpawnItem" ||
+           action == "TeleportActor" || action == "KillTarget";
 }
 
 bool IsPlayerTargetName(const std::string& name) {
@@ -725,14 +755,17 @@ bool ApplyJsonActionPayload(ActionRequest& request, const std::string& payload) 
 
     bool changed = false;
     std::string target = Trim(ExtractJsonStringValue(payload, "target"));
-    if (target.empty()) {
-        target = Trim(ExtractJsonStringValue(payload, "location"));
-    }
-    if (target.empty()) {
-        target = Trim(ExtractJsonStringValue(payload, "destination"));
+    const std::string location = Trim(ExtractJsonStringValue(payload, "location"));
+    const std::string destination = Trim(ExtractJsonStringValue(payload, "destination"));
+    if (request.action == "TravelTo" && target.empty()) {
+        target = location.empty() ? destination : location;
     }
     if (!target.empty() && (request.target.empty() || request.action == "TravelTo")) {
         request.target = target;
+        changed = true;
+    }
+    if (!location.empty() || !destination.empty()) {
+        request.location = location.empty() ? destination : location;
         changed = true;
     }
 
@@ -756,11 +789,17 @@ bool ApplyJsonActionPayload(ActionRequest& request, const std::string& payload) 
     if (targetFormId == 0) {
         targetFormId = ParseActionFormId(ExtractJsonStringValue(payload, "target_formid"));
     }
-    if (targetFormId == 0) {
-        targetFormId = ParseActionFormId(ExtractJsonStringValue(payload, "location_refid"));
-    }
     if (targetFormId != 0 && request.targetFormId == 0) {
         request.targetFormId = targetFormId;
+        changed = true;
+    }
+
+    const uint32_t locationFormId = ParseActionFormId(ExtractJsonStringValue(payload, "location_refid"));
+    if (locationFormId != 0 && request.locationFormId == 0) {
+        request.locationFormId = locationFormId;
+        if (request.action == "TravelTo" && request.targetFormId == 0) {
+            request.targetFormId = locationFormId;
+        }
         changed = true;
     }
 
@@ -2647,6 +2686,46 @@ void ApplyStructuredCommandArgs(ActionRequest& request, const std::vector<std::s
         return;
     }
 
+    if (request.action == "SpawnCaps") {
+        if (!args.empty() && request.target.empty()) {
+            request.target = args[0];
+        }
+        if (args.size() >= 2) {
+            request.amount = NormalizeAmount(args[1], "");
+        }
+        return;
+    }
+
+    if (request.action == "SpawnItem") {
+        if (!args.empty() && request.target.empty()) {
+            request.target = args[0];
+        }
+        if (args.size() >= 2 && request.item.empty()) {
+            request.item = args[1];
+        }
+        if (args.size() >= 3) {
+            request.amount = NormalizeAmount(args[2], "");
+        }
+        return;
+    }
+
+    if (request.action == "TeleportActor") {
+        if (!args.empty() && request.target.empty()) {
+            request.target = args[0];
+        }
+        if (args.size() >= 2 && request.location.empty()) {
+            request.location = args[1];
+        }
+        return;
+    }
+
+    if (request.action == "KillTarget") {
+        if (!args.empty() && request.target.empty()) {
+            request.target = args[0];
+        }
+        return;
+    }
+
     if (!args.empty() && request.target.empty()) {
         request.target = args[0];
     }
@@ -2741,7 +2820,11 @@ bool IsPostDialogueActionName(const std::string& actionName) {
            normalized == "FollowPlayer" ||
            normalized == "MakeFollower" ||
            normalized == "MoveTo" ||
-           normalized == "TravelTo";
+           normalized == "TravelTo" ||
+           normalized == "SpawnCaps" ||
+           normalized == "SpawnItem" ||
+           normalized == "TeleportActor" ||
+           normalized == "KillTarget";
 }
 
 bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
@@ -2771,9 +2854,12 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
     request.target = Trim(ExtractJsonStringValue(lineObject, "target"));
     request.item = Trim(ExtractJsonStringValue(lineObject, "item"));
+    request.location = Trim(ExtractJsonStringValue(lineObject, "location"));
     request.amount = NormalizeAmount(
         ExtractJsonNumberValue(lineObject, "amount"),
         ExtractJsonStringValue(lineObject, "amount"));
+    const std::string actionSource = Trim(ExtractJsonStringValue(lineObject, "action_source"));
+    const std::string authority = Trim(ExtractJsonStringValue(lineObject, "authority"));
 
     const std::vector<std::string> commandArgs = ExtractJsonStringArrayValue(lineObject, "command_args");
     bool translatedRolemasterInstruction = false;
@@ -2804,8 +2890,17 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
         return false;
     }
 
+    request.narratorAuthority =
+        EqualsIgnoreCase(actionSource, "narrator") &&
+        EqualsIgnoreCase(authority, "narrator") &&
+        EqualsIgnoreCase(request.speaker, "The Narrator") &&
+        IsNarratorPluginAction(request.action);
+
     if (request.action == "TravelTo" && request.target.empty()) {
         request.target = Trim(ExtractJsonStringValue(lineObject, "location"));
+    }
+    if (request.action == "TeleportActor" && request.location.empty()) {
+        request.location = Trim(ExtractJsonStringValue(lineObject, "item"));
     }
     if (request.action == "Consume" && request.item.empty()) {
         request.item = request.target;
@@ -2821,6 +2916,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     if (request.itemRefId == 0) {
         request.itemRefId = ParseActionFormId(ExtractJsonStringValue(lineObject, "item_refid"));
     }
+    request.locationFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "location_refid"));
     if (request.itemBaseId == 0 && request.action != "PickupItem") {
         request.itemBaseId = ExtractLeadingFormId(request.item);
     }
@@ -2829,7 +2925,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     if (request.speakerFormId == 0) {
         request.speakerFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "speaker_formid"));
     }
-    if (request.speakerFormId == 0) {
+    if (request.speakerFormId == 0 && !request.narratorAuthority) {
         request.speakerFormId = ResolveSpeakerFormId(request.speaker);
     }
 
@@ -2839,6 +2935,16 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
     if (request.targetFormId == 0) {
         request.targetFormId = ResolveTargetFormId(request.target, request.speakerFormId);
+    }
+
+    if (request.narratorAuthority &&
+        (request.action == "SpawnCaps" || request.action == "SpawnItem" ||
+         request.action == "TeleportActor") && request.targetFormId == 0 &&
+        (request.target.empty() || IsPlayerTargetName(request.target))) {
+        request.target = PlayerDisplayNameForAction();
+        request.targetFormId = Misc::GetPlayerFormId() != 0
+            ? Misc::GetPlayerFormId()
+            : 0x00000014;
     }
 
     if ((request.action == "FollowPlayer" || request.action == "ComeCloser" ||
@@ -2866,14 +2972,117 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
         ResolveNearbyItem(request);
     }
 
-    if (request.speakerFormId == 0 && !IsPlayerTargetName(request.speaker)) {
+    if (request.speakerFormId == 0 && !request.narratorAuthority && !IsPlayerTargetName(request.speaker)) {
         Logger::LogWarning("%s: Action %s missing speaker ref for [%s]",
             source ? source : "ActionManager",
             request.action.c_str(),
             request.speaker.c_str());
     }
 
+    if (IsNarratorPluginAction(request.action) && !request.narratorAuthority) {
+        Logger::LogWarning("%s: Rejected narrator-only action %s without narrator authority",
+            source ? source : "ActionManager", request.action.c_str());
+        return false;
+    }
+
     return true;
+}
+
+bool ExecuteNarratorAction(ActionRequest request, const char* source) {
+    const std::string sourceName = source ? source : "ActionManager";
+    if (!request.narratorAuthority || !IsNarratorPluginAction(request.action)) {
+        return false;
+    }
+
+    if (request.action == "ReadQuests") {
+        LaunchPluginResultWorker(request);
+        Console::Print("[DIALECTIC] Narrator action: ReadQuests");
+        Logger::LogInfo("[NARRATOR_ACTION] launched ReadQuests result generation=%llu",
+            static_cast<unsigned long long>(request.runtimeGeneration));
+        return true;
+    }
+
+    if (!IsNarratorMutatingAction(request.action)) {
+        SendFuncretResult(request, request.action + " failed because unsupported_narrator_action.");
+        return false;
+    }
+
+    RuntimeSnapshot::GameState gameState;
+    if (!RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(1000))) {
+        SendFuncretResult(request, request.action + " failed because game_state_unavailable.");
+        return false;
+    }
+
+    if (request.targetFormId == 0) {
+        SendFuncretResult(request, request.action + " failed because target_unresolved.");
+        return false;
+    }
+
+    const bool targetIsPlayer = request.targetFormId == gameState.playerFormId ||
+        request.targetFormId == 0x00000014;
+    if (!targetIsPlayer) {
+        RuntimeSnapshot::ActorState targetState;
+        if (!RuntimeSnapshot::TryGetActor(request.targetFormId, targetState) ||
+            targetState.deleted || targetState.dead || !targetState.loaded3D ||
+            !RuntimeSnapshot::IsActorInScene(targetState, gameState)) {
+            SendFuncretResult(request, request.action + " failed because target_not_in_current_scene.");
+            return false;
+        }
+    }
+
+    if (request.action == "KillTarget" && targetIsPlayer) {
+        SendFuncretResult(request, "KillTarget failed because player_protected.");
+        return false;
+    }
+    if (request.action == "SpawnItem" && request.itemBaseId == 0) {
+        SendFuncretResult(request, "SpawnItem failed because item_base_unresolved.");
+        return false;
+    }
+    if (request.action == "TeleportActor" && request.locationFormId == 0) {
+        SendFuncretResult(request, "TeleportActor failed because destination_unresolved.");
+        return false;
+    }
+
+    const int maximum = request.action == "SpawnCaps" ? 1000000 : 100;
+    request.amount = std::max(1, std::min(request.amount, maximum));
+    const std::string commandKey = request.action + ":" + FormatRefId(request.targetFormId);
+    const std::uint64_t generation = request.runtimeGeneration;
+    return GameThreadDispatcher::Enqueue("narrator_action", commandKey, generation,
+        [request, sourceName]() {
+            std::string failure;
+            bool succeeded = false;
+            if (request.action == "SpawnCaps") {
+                succeeded = XNVSEAdapter::AddNativeItemToActor(
+                    request.targetFormId, 0x0000000F, request.amount, failure);
+            } else if (request.action == "SpawnItem") {
+                succeeded = XNVSEAdapter::AddNativeItemToActor(
+                    request.targetFormId, request.itemBaseId, request.amount, failure);
+            } else if (request.action == "TeleportActor") {
+                succeeded = XNVSEAdapter::TeleportNativeActor(
+                    request.targetFormId, request.locationFormId, failure);
+            } else if (request.action == "KillTarget") {
+                succeeded = XNVSEAdapter::KillNativeActor(request.targetFormId, failure);
+            }
+
+            if (!succeeded) {
+                if (failure.empty()) failure = "native_execution_failed";
+                SendFuncretResult(request, request.action + " failed because " + failure + ".");
+                Console::Print("[DIALECTIC] Narrator action failed: %s", request.action.c_str());
+                Logger::LogWarning("[NARRATOR_ACTION] action=%s target=0x%08X failed reason=%s source=%s",
+                    request.action.c_str(), request.targetFormId, failure.c_str(), sourceName.c_str());
+                return;
+            }
+
+            SendFuncretResult(request, request.action + " completed successfully.");
+            Console::Print("[DIALECTIC] Narrator action: %s", request.action.c_str());
+            Logger::LogInfo("[NARRATOR_ACTION] action=%s target=0x%08X amount=%d item=0x%08X location=0x%08X source=%s succeeded",
+                request.action.c_str(), request.targetFormId, request.amount,
+                request.itemBaseId, request.locationFormId, sourceName.c_str());
+        },
+        [request](const char* reason) {
+            Logger::LogWarning("[NARRATOR_ACTION] dropped action=%s target=0x%08X reason=%s",
+                request.action.c_str(), request.targetFormId, reason ? reason : "unknown");
+        });
 }
 
 bool ExecuteActionRequest(ActionRequest request, const char* source) {
@@ -2889,6 +3098,9 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
     }
     if (request.action == "Talk") {
         return SendDirectorTalkInstruction(request, source);
+    }
+    if (request.narratorAuthority) {
+        return ExecuteNarratorAction(request, source);
     }
 
     RuntimeSnapshot::GameState nativeGameState;
