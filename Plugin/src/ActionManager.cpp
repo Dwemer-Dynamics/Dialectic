@@ -3030,10 +3030,6 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
         }
     }
 
-    if (request.action == "KillTarget" && targetIsPlayer) {
-        SendFuncretResult(request, "KillTarget failed because player_protected.");
-        return false;
-    }
     if (request.action == "SpawnItem" && request.itemBaseId == 0) {
         SendFuncretResult(request, "SpawnItem failed because item_base_unresolved.");
         return false;

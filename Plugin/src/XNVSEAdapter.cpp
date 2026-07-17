@@ -2685,8 +2685,8 @@ bool KillNativeActor(std::uint32_t targetFormId,
                      std::string& failureReason) {
     failureReason.clear();
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
-    if (!player || targetFormId == 0 || targetFormId == player->refID || targetFormId == 0x00000014) {
-        failureReason = "player_protected";
+    if (!player || targetFormId == 0) {
+        failureReason = "invalid_target";
         return false;
     }
     if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
@@ -2700,12 +2700,6 @@ bool KillNativeActor(std::uint32_t targetFormId,
         (target->baseForm->typeID != kFormType_TESNPC &&
          target->baseForm->typeID != kFormType_TESCreature)) {
         failureReason = "target_not_loaded_actor";
-        return false;
-    }
-
-    auto* actorBase = static_cast<TESActorBase*>(target->baseForm);
-    if ((actorBase->baseData.flags & TESActorBaseData::kFlags_Essential) != 0) {
-        failureReason = "essential_actor_protected";
         return false;
     }
 
