@@ -152,6 +152,7 @@ namespace AgentManager {
     std::string GetAgentName(uint32_t formID);
     uint32_t FindAgentFormIdByName(const std::string& name);
     std::vector<std::pair<uint32_t, std::string>> GetRegisteredAgentSnapshot();
+    void RefreshRegisteredAgentVoices();
     bool SelectLeastBoredNearbyAgent(float maxDistance, uint32_t& outFormID, std::string& outName);
     bool SelectLeastBoredNearbyAgent(
         const std::vector<std::pair<uint32_t, std::string>>& candidates,

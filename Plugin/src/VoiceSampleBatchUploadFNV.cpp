@@ -4,6 +4,7 @@
 #include "VoiceSampleOverridesFNV.h"
 #include "VoiceSampleResolverFNV.h"
 #include "Console.h"
+#include "RuntimeSnapshot.h"
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -19,7 +21,21 @@ void Log(const char* fmt, ...);
 
 namespace VoiceSampleBatchUploadFNV {
     namespace {
-        constexpr auto kBatchTimeout = std::chrono::minutes(5);
+        constexpr auto kBatchTimeout = std::chrono::minutes(14);
+
+        bool IsActiveGameplay() {
+            RuntimeSnapshot::GameState state;
+            return RuntimeSnapshot::TryGetFreshGameState(state, std::chrono::seconds(2)) &&
+                state.inGame && !state.inMenu && !state.paused;
+        }
+
+        void ThrottleBackgroundWork(std::chrono::milliseconds activeGameplayDelay) {
+            if (IsActiveGameplay()) {
+                std::this_thread::sleep_for(activeGameplayDelay);
+            } else {
+                std::this_thread::yield();
+            }
+        }
 
         struct VoiceSampleCandidate {
             std::string voiceType;
@@ -256,6 +272,7 @@ namespace VoiceSampleBatchUploadFNV {
             if (!std::filesystem::exists(voiceRoot, ec) || ec) {
                 Log("[VOICE_BATCH] Loose voice root not found: %s", voiceRoot.string().c_str());
             } else {
+                std::size_t scannedEntries = 0;
                 for (std::filesystem::recursive_directory_iterator it(
                      voiceRoot,
                      std::filesystem::directory_options::skip_permission_denied,
@@ -263,6 +280,10 @@ namespace VoiceSampleBatchUploadFNV {
                  end;
                  it != end;
                  it.increment(ec)) {
+                ++scannedEntries;
+                if ((scannedEntries % 32) == 0) {
+                    ThrottleBackgroundWork(std::chrono::milliseconds(10));
+                }
                 if (cancelRequested && cancelRequested()) {
                     break;
                 }
@@ -318,6 +339,9 @@ namespace VoiceSampleBatchUploadFNV {
         summary = BatchUploadSummary{};
         const auto deadline = std::chrono::steady_clock::now() + kBatchTimeout;
         Log("[VOICE_BATCH] Request accepted; loading Fallout voice mappings");
+        if (IsActiveGameplay()) {
+            Log("[VOICE_BATCH] Active gameplay detected; disk scanning and uploads will be rate limited");
+        }
 
         bool scanTimedOut = false;
         auto candidates = CollectVoiceSampleCandidates(
@@ -363,6 +387,7 @@ namespace VoiceSampleBatchUploadFNV {
             });
 
         for (const auto& candidate : orderedCandidates) {
+            ThrottleBackgroundWork(std::chrono::milliseconds(75));
             if (cancelRequested && cancelRequested()) {
                 summary.cancelled = true;
                 break;
