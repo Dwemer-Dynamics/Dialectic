@@ -317,6 +317,15 @@ static bool IsConversationTargetEligible(
         return false;
     }
 
+    ActorEligibilityFNV::Metadata identityMetadata;
+    identityMetadata.name = name;
+    std::string identityReason;
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(identityMetadata, &identityReason)) {
+        Logger::LogInfo("GameLoop: Conversation target rejected: %s (0x%08X): %s",
+            name.c_str(), formId, identityReason.c_str());
+        return false;
+    }
+
     // Creatures remain available through explicit Manual Activate, matching CHIM's policy.
     if (Config::autoAddCreatures ||
         AgentManager::IsManuallyActivated(formId)) {

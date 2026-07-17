@@ -3,6 +3,7 @@
 #include "VoiceRecorder.h"
 #include "HTTPManager.h"
 #include "Config.h"
+#include "InputManager.h"
 #include "GameThreadDispatcher.h"
 #include "Misc.h"
 #include "RuntimeGeneration.h"
@@ -33,6 +34,12 @@
 void Log(const char* fmt, ...);
 
 namespace VoiceRecorder {
+
+static bool IsBoundKeyDown(int virtualKey) {
+    return InputManager::IsGameForeground() &&
+        virtualKey > 0 && virtualKey < 256 &&
+        (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+}
 
 // Recording state
 static std::atomic<bool> g_isRecording(false);
@@ -443,14 +450,18 @@ static bool CaptureWithWasapi(int boundKey, int silenceThreshold, int silenceSto
     }
     const DWORD startTime = timeGetTime();
     DWORD lastSignalTime = startTime;
-    const bool wasInitiallyPressed = (GetAsyncKeyState(boundKey) & 0x8000) != 0;
+    const bool wasInitiallyPressed = IsBoundKeyDown(boundKey);
     Sleep(50);
 
     while ((timeGetTime() - startTime) < static_cast<DWORD>(maxRecordingMs) && g_isRecording) {
         RecordServiceHeartbeat();
-        if (wasInitiallyPressed && !(GetAsyncKeyState(boundKey) & 0x8000)) {
+        if (!InputManager::IsGameForeground()) {
+            Log("VoiceRecorder: Fallout lost focus, stopping WASAPI recording");
+            break;
+        }
+        if (wasInitiallyPressed && !IsBoundKeyDown(boundKey)) {
             Sleep(10);
-            if (!(GetAsyncKeyState(boundKey) & 0x8000)) {
+            if (!IsBoundKeyDown(boundKey)) {
                 Log("VoiceRecorder: Key released, stopping WASAPI recording");
                 break;
             }
@@ -689,15 +700,19 @@ static void RecordingThreadFunc(int boundKey, STTCallback callback, int requeste
 
         const DWORD startTime = timeGetTime();
         signed long silenceTime = -500;
-        const bool wasInitiallyPressed = (GetAsyncKeyState(boundKey) & 0x8000) != 0;
+        const bool wasInitiallyPressed = IsBoundKeyDown(boundKey);
         Sleep(50);
 
         while (silenceTime < silenceStopMs &&
                (timeGetTime() - startTime) < static_cast<DWORD>(maxRecordingMs) && g_isRecording) {
             RecordServiceHeartbeat();
-            if (wasInitiallyPressed && !(GetAsyncKeyState(boundKey) & 0x8000)) {
+            if (!InputManager::IsGameForeground()) {
+                Log("VoiceRecorder: Fallout lost focus, stopping WinMM recording");
+                break;
+            }
+            if (wasInitiallyPressed && !IsBoundKeyDown(boundKey)) {
                 Sleep(10);
-                if (!(GetAsyncKeyState(boundKey) & 0x8000)) {
+                if (!IsBoundKeyDown(boundKey)) {
                     Log("VoiceRecorder: Key released, stopping WinMM fallback recording");
                     break;
                 }

@@ -278,20 +278,6 @@ static bool SetRawHotkeyConfigValue(const std::string& normalizedKey, int scanCo
     return true;
 }
 
-static bool IsDuplicateHotkeyInvocation(int scanCode) {
-    static int s_lastScanCode = 0;
-    static DWORD s_lastTick = 0;
-
-    const DWORD now = GetTickCount();
-    if (scanCode == s_lastScanCode && (now - s_lastTick) < 250) {
-        return true;
-    }
-
-    s_lastScanCode = scanCode;
-    s_lastTick = now;
-    return false;
-}
-
 static bool GetDialecticConfigValue(const char* section, const char* key, double fallback, double& outValue) {
     const std::string s = NormalizeConfigName(section);
     const std::string k = NormalizeConfigName(key);
@@ -1066,6 +1052,9 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
                 summary.failed,
                 summary.timedOut ? 1 : 0,
                 summary.cancelled ? 1 : 0);
+            if (uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success || summary.uploaded > 0) {
+                AgentManager::RefreshRegisteredAgentVoices();
+            }
         } catch (...) {
             g_voiceSampleBatchRunning = false;
             Logger::LogError("DialecticSendAllVoiceSamples worker failed with an exception");
@@ -1269,6 +1258,11 @@ static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
         return true;
     }
 
+    if (!InputManager::IsGameForeground()) {
+        WriteHotkeyDiagnostic("halt", scanCode, GetRawHotkeyScanCode("StopTalking"), "background_window");
+        return true;
+    }
+
     const int configured = GetRawHotkeyScanCode("StopTalking");
     Logger::LogInfo("GameLoop: Halt hotkey bridge scan=%d configured=%d", scanCode, configured);
 
@@ -1291,7 +1285,7 @@ static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
         return true;
     }
 
-    if (IsDuplicateHotkeyInvocation(scanCode)) {
+    if (!InputManager::TryClaimAction(InputManager::HotkeyAction::StopTalking)) {
         WriteHotkeyDiagnostic("halt", scanCode, configured, "duplicate");
         return true;
     }
@@ -1331,12 +1325,17 @@ static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
         return true;
     }
 
+    if (!InputManager::IsGameForeground()) {
+        WriteHotkeyDiagnostic("generic", scanCode, 0, "background_window");
+        return true;
+    }
+
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
     }
 
     if (RawHotkeyMatches("TalkToNPC", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
+        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::TalkToNPC)) {
             return true;
         }
         Logger::LogInfo("GameLoop: Chatbox hotkey pressed via xNVSE scan code %d", scanCode);
@@ -1346,7 +1345,7 @@ static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
     }
 
     if (RawHotkeyMatches("ToggleModes", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
+        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::ToggleModes)) {
             return true;
         }
         Logger::LogInfo("GameLoop: ToggleModes hotkey pressed via xNVSE scan code %d", scanCode);
@@ -1356,7 +1355,7 @@ static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
     }
 
     if (RawHotkeyMatches("ToggleLLMModel", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
+        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::ToggleLLMModel)) {
             return true;
         }
         Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed via xNVSE scan code %d", scanCode);
@@ -1366,7 +1365,7 @@ static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
     }
 
     if (RawHotkeyMatches("DynamicProfileMenu", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
+        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::DynamicProfileMenu)) {
             return true;
         }
         Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed via xNVSE scan code %d", scanCode);

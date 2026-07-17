@@ -19,6 +19,8 @@ static std::array<bool, 256> g_currKeyStates;
 
 // Action triggered flags for this frame
 static std::unordered_map<HotkeyAction, bool> g_actionTriggered;
+static std::unordered_map<HotkeyAction, ULONGLONG> g_lastActionClaims;
+static bool g_wasGameForeground = false;
 
 // Scancode to VK mapping (Fallout/Bethesda games use DirectInput scancodes)
 static std::unordered_map<int, int> g_scancodeToVK = {
@@ -63,6 +65,8 @@ void Initialize() {
     g_prevKeyStates.fill(false);
     g_currKeyStates.fill(false);
     g_actionTriggered.clear();
+    g_lastActionClaims.clear();
+    g_wasGameForeground = IsGameForeground();
     
     // Default hotkeys are unbound. V is handled separately by the in-game text script.
     g_hotkeyBindings[HotkeyAction::TalkToNPC] = 0;
@@ -89,9 +93,41 @@ void Shutdown() {
     Log("InputManager: Shutting down");
     g_hotkeyBindings.clear();
     g_actionTriggered.clear();
+    g_lastActionClaims.clear();
+}
+
+bool IsGameForeground() {
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground) {
+        return false;
+    }
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(foreground, &processId);
+    return processId != 0 && processId == GetCurrentProcessId();
 }
 
 void Update() {
+    const bool gameForeground = IsGameForeground();
+    if (!gameForeground) {
+        g_prevKeyStates.fill(false);
+        g_currKeyStates.fill(false);
+        g_actionTriggered.clear();
+        g_wasGameForeground = false;
+        return;
+    }
+
+    // Sample held keys without creating edges when focus returns to Fallout.
+    if (!g_wasGameForeground) {
+        for (int i = 0; i < 256; i++) {
+            g_currKeyStates[i] = (GetAsyncKeyState(i) & 0x8000) != 0;
+        }
+        g_prevKeyStates = g_currKeyStates;
+        g_actionTriggered.clear();
+        g_wasGameForeground = true;
+        return;
+    }
+
     // Save previous states
     g_prevKeyStates = g_currKeyStates;
     
@@ -115,7 +151,21 @@ void Update() {
 
 bool IsActionTriggered(HotkeyAction action) {
     auto it = g_actionTriggered.find(action);
-    return it != g_actionTriggered.end() && it->second;
+    return it != g_actionTriggered.end() && it->second && TryClaimAction(action);
+}
+
+bool TryClaimAction(HotkeyAction action, uint32_t debounceMs) {
+    if (!IsGameForeground()) {
+        return false;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    const auto found = g_lastActionClaims.find(action);
+    if (found != g_lastActionClaims.end() && now - found->second < debounceMs) {
+        return false;
+    }
+    g_lastActionClaims[action] = now;
+    return true;
 }
 
 bool IsKeyHeld(int virtualKey) {
