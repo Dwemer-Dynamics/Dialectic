@@ -786,9 +786,13 @@ namespace HTTPManager {
         }
         
         const uint64_t generation = g_responseGeneration.load();
-        const bool queueResponse =
-            (eventType != "captured_dialogue" &&
-             eventType != "setconf");
+        const bool eventOnlyResponse =
+            eventType == "captured_dialogue" ||
+            eventType == "setconf" ||
+            eventType == "goodnight" ||
+            eventType == "waitstart" ||
+            eventType == "waitstop";
+        const bool queueResponse = !eventOnlyResponse;
         if (queueResponse) {
             ResponseQueueFNV::SetActiveGeneration(generation, eventType.c_str());
         }
@@ -828,7 +832,10 @@ namespace HTTPManager {
                 Log("HTTPManager: Received response: %s", 
                     response.length() > 100 ? response.substr(0, 100).c_str() : response.c_str());
                 if (!queueResponse) {
-                    if (eventType == "setconf") {
+                    if (eventType == "setconf" ||
+                        eventType == "goodnight" ||
+                        eventType == "waitstart" ||
+                        eventType == "waitstop") {
                         const uint64_t commandGeneration = g_responseGeneration.load();
                         ResponseRouter::ProcessJsonActionsOnly(
                             response,

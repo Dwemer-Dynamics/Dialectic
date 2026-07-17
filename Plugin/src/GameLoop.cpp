@@ -2902,6 +2902,34 @@ static void ProcessRpgEventBridge() {
     flushPendingConsumed();
 
     for (const auto& event : events) {
+        if (event.eventType == "goodnight" ||
+            event.eventType == "waitstart" ||
+            event.eventType == "waitstop") {
+            RefreshPlayerNameFromGame();
+            const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
+            const std::string location = Misc::GetPlayerLocation();
+            const std::string audienceJson = BuildAudienceSnapshotJson("sleep_wait");
+            const std::string people = ExtractPeopleFromAudienceSnapshotJson(audienceJson);
+
+            std::ostringstream payload;
+            payload << "{"
+                    << "\"schema\":\"dialectic.sleep_wait.v1\","
+                    << "\"event\":\"" << HTTPManager::EscapeJson(event.eventType) << "\","
+                    << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\","
+                    << "\"text\":\"" << HTTPManager::EscapeJson(event.eventText) << "\","
+                    << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
+                    << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
+                    << "\"audience_snapshot\":" << audienceJson << ","
+                    << "\"game\":\"fnv\""
+                    << "}";
+
+            Logger::LogInfo("GameLoop: Forwarding sleep/wait lifecycle event %s: %s",
+                event.eventType.c_str(),
+                event.eventText.c_str());
+            HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
+            continue;
+        }
+
         uint32_t speakerFormId = 0;
         std::string speakerName;
         if (!SelectRpgCommentSpeaker(speakerFormId, speakerName)) {
