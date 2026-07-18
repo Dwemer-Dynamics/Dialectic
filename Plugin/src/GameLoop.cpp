@@ -27,6 +27,7 @@
 #include "NearbyPoiFNV.h"
 #include "QuestJournalFNV.h"
 #include "PlayerInventoryManagerFNV.h"
+#include "PlayerSurvivalManagerFNV.h"
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
@@ -61,7 +62,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.2"
+#define DIALECTIC_VERSION "0.5.5"
 #endif
 
 // Forward declarations
@@ -109,6 +110,7 @@ static constexpr float kNarratorLookUpPitchDegrees = -85.0f;
 static constexpr const char* kGameStateBridgePath = "Data\\NVSE\\Plugins\\dialectic_game_state.tmp";
 static bool g_loadedSaveInitSent = false;
 static long long g_lastSeenGamets = 0;
+static bool g_loadedSaveInitBlocked = false;
 
 // Voice input state
 static std::atomic<bool> g_voiceInputActive(false);
@@ -314,6 +316,15 @@ static bool IsConversationTargetEligible(
     bool isCreature = false) {
     const std::string name = TrimInput(rawName);
     if (formId == 0 || name.empty()) {
+        return false;
+    }
+
+    ActorEligibilityFNV::Metadata identityMetadata;
+    identityMetadata.name = name;
+    std::string identityReason;
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(identityMetadata, &identityReason)) {
+        Logger::LogInfo("GameLoop: Conversation target rejected: %s (0x%08X): %s",
+            name.c_str(), formId, identityReason.c_str());
         return false;
     }
 
@@ -2892,6 +2903,34 @@ static void ProcessRpgEventBridge() {
     flushPendingConsumed();
 
     for (const auto& event : events) {
+        if (event.eventType == "goodnight" ||
+            event.eventType == "waitstart" ||
+            event.eventType == "waitstop") {
+            RefreshPlayerNameFromGame();
+            const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
+            const std::string location = Misc::GetPlayerLocation();
+            const std::string audienceJson = BuildAudienceSnapshotJson("sleep_wait");
+            const std::string people = ExtractPeopleFromAudienceSnapshotJson(audienceJson);
+
+            std::ostringstream payload;
+            payload << "{"
+                    << "\"schema\":\"dialectic.sleep_wait.v1\","
+                    << "\"event\":\"" << HTTPManager::EscapeJson(event.eventType) << "\","
+                    << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\","
+                    << "\"text\":\"" << HTTPManager::EscapeJson(event.eventText) << "\","
+                    << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
+                    << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
+                    << "\"audience_snapshot\":" << audienceJson << ","
+                    << "\"game\":\"fnv\""
+                    << "}";
+
+            Logger::LogInfo("GameLoop: Forwarding sleep/wait lifecycle event %s: %s",
+                event.eventType.c_str(),
+                event.eventText.c_str());
+            HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
+            continue;
+        }
+
         uint32_t speakerFormId = 0;
         std::string speakerName;
         if (!SelectRpgCommentSpeaker(speakerFormId, speakerName)) {
@@ -3612,6 +3651,10 @@ static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool 
 }
 
 static void MaybeSendLoadedSaveInit() {
+    if (g_loadedSaveInitBlocked) {
+        return;
+    }
+
     const long long currentGamets = WorldContextFNV::GetGameTimestamp();
     if (currentGamets <= 0) {
         return;
@@ -3646,23 +3689,42 @@ static void ProcessNativeRuntimeEvents() {
         switch (event.type) {
             case Type::PreLoadGame:
                 PlayerInventoryManagerFNV::Reset("native_pre_load_game");
+                PlayerSurvivalManagerFNV::Reset("native_pre_load_game");
                 ResetRuntimeForAIActions("native_pre_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
                 break;
             case Type::LoadGame:
                 PlayerInventoryManagerFNV::Reset("native_load_game");
                 PlayerInventoryManagerFNV::ForceRefresh("native_load_game", 2000);
+                PlayerSurvivalManagerFNV::Reset("native_load_game");
+                PlayerSurvivalManagerFNV::ForceRefresh("native_load_game", 3000);
                 ResetRuntimeForAIActions("native_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("load game");
                 DelayDynamicProfileTimerAfterLoad("game load");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
+                break;
+            case Type::PostLoadGame:
+                g_lastSeenGamets = 0;
+                if (event.flag) {
+                    g_loadedSaveInitSent = false;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogInfo("GameLoop: successful PostLoadGame; waiting for fresh loaded-save timestamp");
+                } else {
+                    g_loadedSaveInitSent = true;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogWarning("GameLoop: PostLoadGame reported failure; suppressing loaded-save init");
+                }
                 break;
             case Type::NewGame:
                 PlayerInventoryManagerFNV::Reset("native_new_game");
                 PlayerInventoryManagerFNV::ForceRefresh("native_new_game", 3000);
+                PlayerSurvivalManagerFNV::Reset("native_new_game");
+                PlayerSurvivalManagerFNV::ForceRefresh("native_new_game", 4000);
                 ResetRuntimeForAIActions("native_new_game", false, false, false);
                 g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
                 g_dynamicProfileBlockedAt = {};
@@ -3670,14 +3732,17 @@ static void ProcessNativeRuntimeEvents() {
                 g_lastDynamicProfileLoadDelayAt = {};
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::ExitToMainMenu:
             case Type::ExitGame:
                 PlayerInventoryManagerFNV::Reset("native_runtime_exit");
+                PlayerSurvivalManagerFNV::Reset("native_runtime_exit");
                 ResetRuntimeForAIActions("native_runtime_exit", false, false, false);
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::CellChanged:
                 ResetRuntimeForAIActions("native_cell_changed", false, false, false);
@@ -3703,6 +3768,7 @@ void Initialize() {
     g_voiceInputActive = false;
     g_loadedSaveInitSent = false;
     g_lastSeenGamets = 0;
+    g_loadedSaveInitBlocked = false;
     {
         std::lock_guard<std::mutex> lock(g_conversationCooldownMutex);
         g_conversationCooldownByFormId.clear();
@@ -3723,7 +3789,9 @@ void Initialize() {
     
     ApplyModeIndex(Config::currentModeIndex, false);
     PlayerInventoryManagerFNV::Initialize();
+    PlayerSurvivalManagerFNV::Initialize();
     TradeManager::Initialize();
+    LoadedPluginsFNV::RequestSync();
     
     Log("GameLoop: Initialized (native frame and response queue pump)");
 }
@@ -3734,6 +3802,7 @@ void Shutdown() {
     VoiceRecorder::Shutdown();
     TradeManager::Shutdown();
     PlayerInventoryManagerFNV::Shutdown();
+    PlayerSurvivalManagerFNV::Shutdown();
     
     // Stop any active conversation
     if (g_conversationActive) {
@@ -3755,8 +3824,8 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
     ProfileUpdateSubsystem("RefreshGameStateBridge", []() { RefreshGameStateBridge(); });
-    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("MaybeSendLoadedSaveInit", []() { MaybeSendLoadedSaveInit(); });
+    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("NearbyActorsFNV::Update", []() { NearbyActorsFNV::Update(); });
     ProfileUpdateSubsystem("AutoGreetingFNV::Update", []() { AutoGreetingFNV::Update(); });
     ProfileUpdateSubsystem("ActivityStatusFNV::Update", []() { ActivityStatusFNV::Update(); });
@@ -3764,6 +3833,7 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("NearbyPoiFNV::Update", []() { NearbyPoiFNV::Update(); });
     ProfileUpdateSubsystem("QuestJournalFNV::Update", []() { QuestJournalFNV::Update(); });
     ProfileUpdateSubsystem("PlayerInventoryManagerFNV::Update", []() { PlayerInventoryManagerFNV::Update(); });
+    ProfileUpdateSubsystem("PlayerSurvivalManagerFNV::Update", []() { PlayerSurvivalManagerFNV::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });

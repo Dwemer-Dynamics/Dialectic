@@ -6,6 +6,7 @@
 #include "ActorPositionResolverFNV.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
+#include "HeadVoiceVolumeUtils.h"
 #include "HTTPManager.h"
 #include "Config.h"
 #include "Misc.h"
@@ -106,6 +107,7 @@ namespace SpeakManager {
     static ScriptLine g_currentPlaybackLine;
     static bool g_currentPlaybackLineActive = false;
     static bool g_currentPlaybackRechatLaunched = false;
+    static bool g_currentPlaybackIsHeadVoice = false;
     static bool g_faceTargetBridgeActive = false;
     static bool g_faceTargetScriptFallbackActive = false;
 static uint32_t g_faceTargetSpeakerFormId = 0;
@@ -2638,6 +2640,13 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return ClampFloat(Config::voiceVolume / 100.0f, 0.0f, 1.0f);
     }
 
+    static float GetCurrentLineVoiceVolume() {
+        return HeadVoiceVolumeUtils::ApplyToLine(
+            GetBaseVoiceVolume(),
+            g_currentPlaybackIsHeadVoice,
+            HeadVoiceVolumeUtils::PercentToMultiplier(Config::headVoiceVolume));
+    }
+
     static float ClampPlaybackDropoffPercent(float percent) {
         if (!std::isfinite(percent)) {
             return 70.0f;
@@ -2658,7 +2667,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         const ActorPositionResolverFNV::PositionResult& speaker,
         const ActorPositionResolverFNV::PositionResult& listener,
         const SpatialAwarenessFNV::Result& spatial) {
-        const float baseVolume = GetBaseVoiceVolume();
+        const float baseVolume = GetCurrentLineVoiceVolume();
         if (!speaker.resolved || !listener.resolved) {
             return baseVolume;
         }
@@ -2757,6 +2766,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         if (!AudioManager::IsPlaying()) {
             g_currentSpeakerFormId = 0;
             g_currentSpeaker.clear();
+            g_currentPlaybackIsHeadVoice = false;
             g_lastSpatialPlaybackUpdateTime = {};
             g_lastSpatialPlaybackSpeakerFormId = 0;
             AudioManager::Set3DPlaybackEnabled(false);
@@ -2767,7 +2777,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_lastSpatialPlaybackUpdateTime = {};
             g_lastSpatialPlaybackSpeakerFormId = 0;
             AudioManager::Set3DPlaybackEnabled(false);
-            AudioManager::SetVolume(GetBaseVoiceVolume());
+            AudioManager::SetVolume(GetCurrentLineVoiceVolume());
             return;
         }
 
@@ -3369,6 +3379,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_currentPlaybackLine = ScriptLine{};
         g_currentPlaybackLineActive = false;
         g_currentPlaybackRechatLaunched = false;
+        g_currentPlaybackIsHeadVoice = false;
         g_playbackPausedForMenu = false;
         ClearPlayerInputTtsGate("scene_change");
     }
@@ -4533,6 +4544,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_currentPlaybackLine = ScriptLine{};
             g_currentPlaybackLineActive = false;
             g_currentPlaybackRechatLaunched = false;
+            g_currentPlaybackIsHeadVoice = false;
             g_currentSpeakerFormId = 0;
             g_currentSpeaker.clear();
             AudioManager::Set3DPlaybackEnabled(false);
@@ -4646,10 +4658,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 g_currentPlaybackLine = readyAudio.line;
                 g_currentPlaybackLineActive = true;
                 g_currentPlaybackRechatLaunched = false;
+                g_currentPlaybackIsHeadVoice = HeadVoiceVolumeUtils::IsHeadVoice(
+                    IsNarratorLine(g_currentPlaybackLine),
+                    IsPlayerTtsLine(g_currentPlaybackLine));
                 g_lastSpatialPlaybackUpdateTime = {};
                 g_lastSpatialPlaybackSpeakerFormId = 0;
                 AudioManager::Set3DPlaybackEnabled(false);
-                AudioManager::SetVolume(GetBaseVoiceVolume());
+                AudioManager::SetVolume(GetCurrentLineVoiceVolume());
+                if (g_currentPlaybackIsHeadVoice) {
+                    Log("SpeakManager: Applying narrator/player TTS volume %.0f%% to speaker '%s'",
+                        Config::headVoiceVolume,
+                        g_currentSpeaker.c_str());
+                }
                 StartDialogueGuardBridge(g_currentPlaybackLine);
                 StartFaceTargetBridge(g_currentPlaybackLine);
                 if (AudioManager::Play()) {
@@ -4673,6 +4693,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     g_currentPlaybackLine = ScriptLine{};
                     g_currentPlaybackLineActive = false;
                     g_currentPlaybackRechatLaunched = false;
+                    g_currentPlaybackIsHeadVoice = false;
                     AudioManager::Set3DPlaybackEnabled(false);
                     AudioManager::SetVolume(GetBaseVoiceVolume());
                     ClearSubtitleBridge();
@@ -4951,6 +4972,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_currentSpeaker.clear();
         g_currentPlaybackLine = ScriptLine{};
         g_currentPlaybackLineActive = false;
+        g_currentPlaybackIsHeadVoice = false;
         AudioManager::Set3DPlaybackEnabled(false);
         AudioManager::SetVolume(GetBaseVoiceVolume());
         ClearSubtitleBridge();

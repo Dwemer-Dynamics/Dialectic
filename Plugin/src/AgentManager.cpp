@@ -1678,5 +1678,41 @@ namespace AgentManager {
             data.displayName.c_str(), data.refID, data.equipment.size(), data.inventory.size());
         return true;
     }
+
+    void RefreshRegisteredAgentVoices() {
+        if (!g_initialized) {
+            return;
+        }
+
+        const auto agents = GetRegisteredAgentSnapshot();
+        std::size_t queued = 0;
+        for (const auto& agent : agents) {
+            const uint32_t refID = agent.first;
+            if (refID == 0 || IsPlayerReference(refID)) {
+                continue;
+            }
+
+            RuntimeSnapshot::ActorState nativeActor;
+            if (!RuntimeSnapshot::TryGetActor(refID, nativeActor)) {
+                continue;
+            }
+
+            NPCData data = CollectNPCDataWithSnapshotPolicy(refID, false, 1000);
+            if (data.displayName.empty()) {
+                data.displayName = agent.second;
+            }
+            if (data.refID == 0) {
+                data.refID = refID;
+            }
+            if (data.voiceId.empty() && data.voiceFormId.empty() && data.voiceName.empty()) {
+                continue;
+            }
+
+            SendNpcVoiceUpdate(data);
+            ++queued;
+        }
+        Log("AgentManager: Refreshed voice mappings for %zu/%zu registered agents after voice sync",
+            queued, agents.size());
+    }
 }
 

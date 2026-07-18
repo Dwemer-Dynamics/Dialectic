@@ -57,6 +57,9 @@ Script* g_packageActionFunction = nullptr;
 Script* g_attackActionFunction = nullptr;
 Script* g_restoreCombatActorFunction = nullptr;
 Script* g_inventoryActionFunction = nullptr;
+Script* g_addItemToActorFunction = nullptr;
+Script* g_teleportActorFunction = nullptr;
+Script* g_killActorFunction = nullptr;
 Script* g_pickupTransferFunction = nullptr;
 Script* g_openTeammateContainerFunction = nullptr;
 Script* g_stopFollowingFunction = nullptr;
@@ -880,6 +883,10 @@ void OnNVSEMessage(NVSEMessagingInterface::Message* source) {
     message.event = event;
     message.data = source->data;
     message.dataLength = source->dataLen;
+    if (event == LifecycleEvent::PostLoadGame) {
+        // xNVSE encodes the load result directly in the data pointer value.
+        message.flag = source->data != nullptr;
+    }
     TryExtractMessageFormId(event, source->data, source->dataLen, message.formId);
     if (source->data && source->dataLen > 0 &&
         (event == LifecycleEvent::LoadGame || event == LifecycleEvent::SaveGame ||
@@ -982,6 +989,9 @@ void Shutdown() {
     g_attackActionFunction = nullptr;
     g_restoreCombatActorFunction = nullptr;
     g_inventoryActionFunction = nullptr;
+    g_addItemToActorFunction = nullptr;
+    g_teleportActorFunction = nullptr;
+    g_killActorFunction = nullptr;
     g_pickupTransferFunction = nullptr;
     g_openTeammateContainerFunction = nullptr;
     g_stopFollowingFunction = nullptr;
@@ -2561,6 +2571,182 @@ end
     return g_scriptInterface->CallFunctionAlt(g_inventoryActionFunction, speaker, 6,
         static_cast<UInt32>(actionCode), targetMod, targetLocal, itemMod, itemLocal,
         static_cast<UInt32>(amount));
+}
+
+bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
+    state = {};
+    PlayerCharacter* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    if (!player) {
+        return false;
+    }
+
+    auto readNeed = [player](UInt32 actorValue) {
+        const float value = player->avOwner.Fn_03(actorValue);
+        return std::isfinite(value) && value > 0.0f ? value : 0.0f;
+    };
+
+    state.valid = true;
+    state.hardcoreEnabled = player->isHardcore;
+    state.dehydration = readNeed(eActorVal_Dehydration);
+    state.hunger = readNeed(eActorVal_Hunger);
+    state.sleepDeprivation = readNeed(eActorVal_Sleepdeprevation);
+    state.radiation = readNeed(eActorVal_RadLevel);
+    return true;
+}
+
+bool AddNativeItemToActor(std::uint32_t targetFormId,
+                          std::uint32_t itemBaseFormId,
+                          int amount,
+                          std::string& failureReason) {
+    failureReason.clear();
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+    if (targetFormId == 0 || itemBaseFormId == 0 || amount <= 0 || amount > 1000000) {
+        failureReason = "invalid_arguments";
+        return false;
+    }
+
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target != player && target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    if (!g_addItemToActorFunction) {
+        static constexpr const char* kAddItemSource = R"(
+int iItemMod
+int iItemLocal
+int iAmount
+ref rItem
+begin function {iItemMod, iItemLocal, iAmount}
+    let rItem := BuildRef iItemMod iItemLocal
+    if eval !(rItem) || iAmount <= 0
+        SetFunctionValue 0
+        return
+    endif
+    AddItem rItem iAmount 1
+    SetFunctionValue 1
+end
+)";
+        g_addItemToActorFunction = g_scriptInterface->CompileScript(kAddItemSource);
+        if (!g_addItemToActorFunction) {
+            failureReason = "add_item_script_compile_failed";
+            return false;
+        }
+    }
+
+    const UInt32 itemMod = (itemBaseFormId >> 24) & 0xFF;
+    const UInt32 itemLocal = itemBaseFormId & 0x00FFFFFF;
+    if (!g_scriptInterface->CallFunctionAlt(g_addItemToActorFunction, target, 3,
+            itemMod, itemLocal, static_cast<UInt32>(amount))) {
+        failureReason = "add_item_call_failed";
+        return false;
+    }
+    return true;
+}
+
+bool TeleportNativeActor(std::uint32_t targetFormId,
+                         std::uint32_t destinationFormId,
+                         std::string& failureReason) {
+    failureReason.clear();
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+    if (targetFormId == 0 || destinationFormId == 0) {
+        failureReason = "invalid_arguments";
+        return false;
+    }
+
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target != player && target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    if (!g_teleportActorFunction) {
+        static constexpr const char* kTeleportSource = R"(
+int iDestinationMod
+int iDestinationLocal
+ref rDestination
+begin function {iDestinationMod, iDestinationLocal}
+    let rDestination := BuildRef iDestinationMod iDestinationLocal
+    if eval !(rDestination)
+        SetFunctionValue 0
+        return
+    endif
+    MoveTo rDestination
+    SetFunctionValue 1
+end
+)";
+        g_teleportActorFunction = g_scriptInterface->CompileScript(kTeleportSource);
+        if (!g_teleportActorFunction) {
+            failureReason = "teleport_script_compile_failed";
+            return false;
+        }
+    }
+
+    const UInt32 destinationMod = (destinationFormId >> 24) & 0xFF;
+    const UInt32 destinationLocal = destinationFormId & 0x00FFFFFF;
+    if (!g_scriptInterface->CallFunctionAlt(g_teleportActorFunction, target, 2,
+            destinationMod, destinationLocal)) {
+        failureReason = "teleport_call_failed";
+        return false;
+    }
+    return true;
+}
+
+bool KillNativeActor(std::uint32_t targetFormId,
+                     std::string& failureReason) {
+    failureReason.clear();
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    if (!player || targetFormId == 0) {
+        failureReason = "invalid_target";
+        return false;
+    }
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        failureReason = "script_interface_unavailable";
+        return false;
+    }
+
+    TESObjectREFR* target = FindLoadedReference(player, targetFormId);
+    if (!target || !target->baseForm ||
+        (target->baseForm->typeID != kFormType_TESNPC &&
+         target->baseForm->typeID != kFormType_TESCreature)) {
+        failureReason = "target_not_loaded_actor";
+        return false;
+    }
+
+    if (!g_killActorFunction) {
+        static constexpr const char* kKillSource = R"(
+begin function {}
+    Kill
+    SetFunctionValue 1
+end
+)";
+        g_killActorFunction = g_scriptInterface->CompileScript(kKillSource);
+        if (!g_killActorFunction) {
+            failureReason = "kill_script_compile_failed";
+            return false;
+        }
+    }
+
+    if (!g_scriptInterface->CallFunctionAlt(g_killActorFunction, target, 0)) {
+        failureReason = "kill_call_failed";
+        return false;
+    }
+    return true;
 }
 
 bool TransferNativeWorldReferenceToActor(std::uint32_t actorFormId,

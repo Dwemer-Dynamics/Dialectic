@@ -451,8 +451,8 @@ namespace AudioManager {
 
     void SetVolume(float volume) {
         g_volume = volume < 0.0f ? 0.0f : volume;
-        if (g_volume > 1.0f) {
-            g_volume = 1.0f;
+        if (g_volume > 2.0f) {
+            g_volume = 2.0f;
         }
 
         if (!g_pSourceVoice) {

@@ -41,8 +41,15 @@ void Shutdown();
 // Update input state - call this each frame
 void Update();
 
+// True only while the Fallout process owns the foreground window.
+bool IsGameForeground();
+
 // Check if a hotkey action was triggered this frame
 bool IsActionTriggered(HotkeyAction action);
+
+// Claim an action across native polling and xNVSE dispatch. Duplicate sources
+// for the same physical press are ignored for a short debounce window.
+bool TryClaimAction(HotkeyAction action, uint32_t debounceMs = 250);
 
 // Check if a key is currently held
 bool IsKeyHeld(int virtualKey);

@@ -39,7 +39,14 @@ static std::vector<uint32_t> g_agentList;
 // Target change callback
 static TargetChangeCallback g_targetChangeCallback = nullptr;
 
+static ActorEligibilityFNV::Metadata EligibilityMetadata(const RuntimeSnapshot::ActorState& actor);
+
 static void ApplyNativeActor(const RuntimeSnapshot::ActorState& actor) {
+    const ActorEligibilityFNV::Metadata metadata = EligibilityMetadata(actor);
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(metadata)) {
+        g_currentTarget = {};
+        return;
+    }
     const bool sameActor = g_currentTarget.formId == actor.formId;
     const std::string existingName = sameActor ? g_currentTarget.name : "";
     g_currentTarget.formId = actor.formId;
@@ -205,6 +212,9 @@ bool FindNearestNPC(float maxDistance) {
 }
 
 void SetNearbyNPC(uint32_t formId, const std::string& name, float distance) {
+    ActorEligibilityFNV::Metadata metadata;
+    metadata.name = name;
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(metadata)) return;
     // If formId is 0, generate a hash from the name as a unique ID
     if (formId == 0 && !name.empty()) {
         // Simple hash of the name
@@ -231,6 +241,12 @@ void SetNearbyNPC(uint32_t formId, const std::string& name, float distance) {
 }
 
 void SetCurrentTarget(uint32_t formId, const std::string& name, bool isActor) {
+    ActorEligibilityFNV::Metadata metadata;
+    metadata.name = name;
+    if (isActor && !ActorEligibilityFNV::IsTargetableActorIdentity(metadata)) {
+        ClearCurrentTarget();
+        return;
+    }
     // If formId is 0, generate a hash from the name as a unique ID
     if (formId == 0 && !name.empty()) {
         std::hash<std::string> hasher;

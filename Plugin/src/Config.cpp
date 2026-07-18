@@ -40,6 +40,7 @@ namespace Config {
     int animationResolution = 500;
     float animationIntensity = 1.0f;
     float voiceVolume = 75.0f;
+    float headVoiceVolume = 100.0f;
     bool audio3DPlaybackEnabled = true;
     bool audioCameraBased = false;
     float audio3DPanStrength = 2.5f;
@@ -646,6 +647,7 @@ namespace Config {
                 else if (key == "AnimationResolution") animationResolution = std::stoi(value);
                 else if (key == "AnimationIntensity") animationIntensity = std::stof(value);
                 else if (key == "VoiceVolume") voiceVolume = std::stof(value);
+                else if (key == "HeadVoiceVolume") headVoiceVolume = std::stof(value);
                 else if (key == "Enable3DPlayback" || key == "Playback3D") audio3DPlaybackEnabled = (value == "1" || value == "true");
                 else if (key == "CameraBasedAudio" || key == "CameraBased") audioCameraBased = (value == "1" || value == "true");
                 else if (key == "Playback2D" || key == "Force2D") audio3DPlaybackEnabled = !(value == "1" || value == "true");
@@ -937,6 +939,8 @@ namespace Config {
         iniFile << "[Audio]\n";
         iniFile << "; Player-heard AI voice playback settings.\n";
         iniFile << "VoiceVolume=" << voiceVolume << "\n";
+        iniFile << "; Narrator and player TTS volume relative to VoiceVolume. 100 keeps the current level.\n";
+        iniFile << "HeadVoiceVolume=" << headVoiceVolume << "\n";
         iniFile << "PreClipMs=" << preClipMs << "\n";
         iniFile << "PostClipMs=" << postClipMs << "\n";
         iniFile << "AnimationResolution=" << animationResolution << "\n";

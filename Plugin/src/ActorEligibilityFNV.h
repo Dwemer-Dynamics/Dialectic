@@ -18,6 +18,8 @@ struct Metadata {
 };
 
 bool IsClearlyDisallowedCreature(const Metadata& metadata, std::string* reason = nullptr);
+bool IsTargetableActorIdentity(const Metadata& metadata, std::string* reason = nullptr);
+bool IsManualActivationAllowed(const Metadata& metadata, std::string* reason = nullptr);
 bool IsAutoActivationAllowed(const Metadata& metadata, std::string* reason = nullptr);
 bool IsRechatAllowed(const Metadata& metadata, bool manuallyActivated, std::string* reason = nullptr);
 

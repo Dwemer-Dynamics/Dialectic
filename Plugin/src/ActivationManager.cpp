@@ -204,6 +204,19 @@ static bool ShouldSkipCandidate(
         return true;
     }
 
+    const ActorEligibilityFNV::Metadata metadata = ToEligibilityMetadata(candidate);
+    std::string identityReason;
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(metadata, &identityReason)) {
+        reason = identityReason;
+        return true;
+    }
+
+    if (source == ActivationSource::Manual &&
+        !ActorEligibilityFNV::IsManualActivationAllowed(metadata, &identityReason)) {
+        reason = identityReason;
+        return true;
+    }
+
     if (!candidate.isAlive) {
         reason = "target is dead";
         return true;
@@ -241,7 +254,6 @@ static bool ShouldSkipCandidate(
         }
 
         if (!Config::autoAddCreatures) {
-            const ActorEligibilityFNV::Metadata metadata = ToEligibilityMetadata(candidate);
             std::string eligibilityReason;
             if (ActorEligibilityFNV::IsClearlyDisallowedCreature(metadata, &eligibilityReason)) {
                 reason = eligibilityReason;

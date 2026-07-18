@@ -27,7 +27,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.2"
+#define DIALECTIC_VERSION "0.5.5"
 #endif
 
 #pragma comment(lib, "ws2_32.lib")
@@ -490,18 +490,103 @@ namespace HTTPManager {
         }
     }
 
-    std::string EscapeJson(const std::string& input) {
-        std::string out;
-        out.reserve(input.size());
+    static std::string NormalizeJsonUtf8(const std::string& input) {
+        if (input.empty()) {
+            return {};
+        }
 
-        for (char c : input) {
+        const int utf8Length = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            input.data(),
+            static_cast<int>(input.size()),
+            nullptr,
+            0);
+        if (utf8Length > 0) {
+            return input;
+        }
+
+        UINT sourceCodePage = CP_ACP;
+        int wideLength = MultiByteToWideChar(
+            sourceCodePage,
+            0,
+            input.data(),
+            static_cast<int>(input.size()),
+            nullptr,
+            0);
+        if (wideLength <= 0) {
+            sourceCodePage = 1252;
+            wideLength = MultiByteToWideChar(
+                sourceCodePage,
+                0,
+                input.data(),
+                static_cast<int>(input.size()),
+                nullptr,
+                0);
+        }
+        if (wideLength <= 0) {
+            return {};
+        }
+
+        std::wstring wide(static_cast<size_t>(wideLength), L'\0');
+        MultiByteToWideChar(
+            sourceCodePage,
+            0,
+            input.data(),
+            static_cast<int>(input.size()),
+            wide.data(),
+            wideLength);
+
+        const int convertedLength = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.data(),
+            wideLength,
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+        if (convertedLength <= 0) {
+            return {};
+        }
+
+        std::string converted(static_cast<size_t>(convertedLength), '\0');
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.data(),
+            wideLength,
+            converted.data(),
+            convertedLength,
+            nullptr,
+            nullptr);
+        return converted;
+    }
+
+    std::string EscapeJson(const std::string& input) {
+        const std::string normalized = NormalizeJsonUtf8(input);
+        std::string out;
+        out.reserve(normalized.size());
+
+        for (unsigned char c : normalized) {
             switch (c) {
                 case '"':  out += "\\\""; break;
                 case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b"; break;
+                case '\f': out += "\\f"; break;
                 case '\n': out += "\\n"; break;
                 case '\t': out += "\\t"; break;
                 case '\r': out += "\\r"; break;
-                default:   out += c; break;
+                default:
+                    if (c < 0x20) {
+                        static constexpr char kHex[] = "0123456789abcdef";
+                        out += "\\u00";
+                        out += kHex[(c >> 4) & 0x0F];
+                        out += kHex[c & 0x0F];
+                    } else {
+                        out += static_cast<char>(c);
+                    }
+                    break;
             }
         }
         return out;
@@ -786,9 +871,13 @@ namespace HTTPManager {
         }
         
         const uint64_t generation = g_responseGeneration.load();
-        const bool queueResponse =
-            (eventType != "captured_dialogue" &&
-             eventType != "setconf");
+        const bool eventOnlyResponse =
+            eventType == "captured_dialogue" ||
+            eventType == "setconf" ||
+            eventType == "goodnight" ||
+            eventType == "waitstart" ||
+            eventType == "waitstop";
+        const bool queueResponse = !eventOnlyResponse;
         if (queueResponse) {
             ResponseQueueFNV::SetActiveGeneration(generation, eventType.c_str());
         }
@@ -828,7 +917,10 @@ namespace HTTPManager {
                 Log("HTTPManager: Received response: %s", 
                     response.length() > 100 ? response.substr(0, 100).c_str() : response.c_str());
                 if (!queueResponse) {
-                    if (eventType == "setconf") {
+                    if (eventType == "setconf" ||
+                        eventType == "goodnight" ||
+                        eventType == "waitstart" ||
+                        eventType == "waitstop") {
                         const uint64_t commandGeneration = g_responseGeneration.load();
                         ResponseRouter::ProcessJsonActionsOnly(
                             response,
