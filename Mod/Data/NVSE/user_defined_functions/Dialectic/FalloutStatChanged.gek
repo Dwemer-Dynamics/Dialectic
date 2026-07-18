@@ -1,0 +1,9 @@
+int iStatCode
+int iDelta
+int iNewValue
+
+begin Function {iStatCode, iDelta, iNewValue}
+    if eval iStatCode >= 0 && iStatCode <= 42
+        DialecticUpdateFalloutStat iStatCode iNewValue
+    endif
+end

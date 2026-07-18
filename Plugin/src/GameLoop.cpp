@@ -28,6 +28,7 @@
 #include "QuestJournalFNV.h"
 #include "PlayerInventoryManagerFNV.h"
 #include "PlayerSurvivalManagerFNV.h"
+#include "FalloutStatsManagerFNV.h"
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
@@ -3735,6 +3736,7 @@ static void ProcessNativeRuntimeEvents() {
             case Type::PreLoadGame:
                 PlayerInventoryManagerFNV::Reset("native_pre_load_game");
                 PlayerSurvivalManagerFNV::Reset("native_pre_load_game");
+                FalloutStatsManagerFNV::Reset("native_pre_load_game");
                 ResetRuntimeForAIActions("native_pre_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
@@ -3746,6 +3748,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerInventoryManagerFNV::ForceRefresh("native_load_game", 2000);
                 PlayerSurvivalManagerFNV::Reset("native_load_game");
                 PlayerSurvivalManagerFNV::ForceRefresh("native_load_game", 3000);
+                FalloutStatsManagerFNV::Reset("native_load_game");
                 ResetRuntimeForAIActions("native_load_game", false, false, false);
                 BeginDynamicProfileTimerBlock("load game");
                 DelayDynamicProfileTimerAfterLoad("game load");
@@ -3770,6 +3773,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerInventoryManagerFNV::ForceRefresh("native_new_game", 3000);
                 PlayerSurvivalManagerFNV::Reset("native_new_game");
                 PlayerSurvivalManagerFNV::ForceRefresh("native_new_game", 4000);
+                FalloutStatsManagerFNV::Reset("native_new_game");
                 ResetRuntimeForAIActions("native_new_game", false, false, false);
                 g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
                 g_dynamicProfileBlockedAt = {};
@@ -3783,6 +3787,7 @@ static void ProcessNativeRuntimeEvents() {
             case Type::ExitGame:
                 PlayerInventoryManagerFNV::Reset("native_runtime_exit");
                 PlayerSurvivalManagerFNV::Reset("native_runtime_exit");
+                FalloutStatsManagerFNV::Reset("native_runtime_exit");
                 ResetRuntimeForAIActions("native_runtime_exit", false, false, false);
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
@@ -3847,6 +3852,7 @@ void Initialize() {
     ApplyModeIndex(Config::currentModeIndex, false);
     PlayerInventoryManagerFNV::Initialize();
     PlayerSurvivalManagerFNV::Initialize();
+    FalloutStatsManagerFNV::Initialize();
     TradeManager::Initialize();
     LoadedPluginsFNV::RequestSync();
     
@@ -3860,6 +3866,7 @@ void Shutdown() {
     TradeManager::Shutdown();
     PlayerInventoryManagerFNV::Shutdown();
     PlayerSurvivalManagerFNV::Shutdown();
+    FalloutStatsManagerFNV::Shutdown();
     
     // Stop any active conversation
     if (g_conversationActive) {
@@ -3895,6 +3902,7 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("QuestJournalFNV::Update", []() { QuestJournalFNV::Update(); });
     ProfileUpdateSubsystem("PlayerInventoryManagerFNV::Update", []() { PlayerInventoryManagerFNV::Update(); });
     ProfileUpdateSubsystem("PlayerSurvivalManagerFNV::Update", []() { PlayerSurvivalManagerFNV::Update(); });
+    ProfileUpdateSubsystem("FalloutStatsManagerFNV::Update", []() { FalloutStatsManagerFNV::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });

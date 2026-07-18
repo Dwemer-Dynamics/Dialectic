@@ -52,6 +52,7 @@
 #include "ImportDataSyncFNV.h"
 #include "QuestJournalFNV.h"
 #include "PlayerInventoryManagerFNV.h"
+#include "FalloutStatsManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
 #include "VoiceRecorder.h"
@@ -197,6 +198,11 @@ static ParamInfo kParams_ActiveQuestUpdate[3] = {
 };
 
 static ParamInfo kParams_Integer[1] = {
+    { "value", kParamType_Integer, 0 }
+};
+
+static ParamInfo kParams_TwoIntegers[2] = {
+    { "stat code", kParamType_Integer, 0 },
     { "value", kParamType_Integer, 0 }
 };
 
@@ -693,6 +699,14 @@ static bool ExtractIntegerArgs(COMMAND_ARGS, int* value) {
     return g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList, value);
 }
 
+static bool ExtractTwoIntegerArgs(COMMAND_ARGS, int* first, int* second) {
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx) {
+        return false;
+    }
+    return g_scriptInterface->ExtractArgsEx(
+        paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList, first, second);
+}
+
 static std::string TrimBridgeValue(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char c) {
         return !std::isspace(c);
@@ -1115,6 +1129,20 @@ static bool Cmd_DialecticSetRecordingDevice_Execute(COMMAND_ARGS) {
     }
     const std::string current = VoiceRecorder::GetCurrentRecordingDeviceDisplayName();
     return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, current.c_str());
+}
+
+static bool Cmd_DialecticUpdateFalloutStat_Execute(COMMAND_ARGS) {
+    int statCode = -1;
+    int value = 0;
+    *result = 0;
+    if (!ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &statCode, &value)) {
+        return true;
+    }
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    *result = FalloutStatsManagerFNV::UpdateStat(statCode, value) ? 1 : 0;
+    return true;
 }
 
 static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
@@ -1584,6 +1612,11 @@ static CommandInfo kCommandInfo_DialecticCaptureDialogue = {
     kParams_CapturedDialogue, Cmd_DialecticCaptureDialogue_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticUpdateFalloutStat = {
+    "DialecticUpdateFalloutStat", "", 0, "Submits one changed Fallout player stat.", 0, 2,
+    kParams_TwoIntegers, Cmd_DialecticUpdateFalloutStat_Execute, nullptr, nullptr, 0
+};
+
 static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
     constexpr UInt32 kDialecticOpcodeBase = 0x6D00;
     nvse->SetOpcodeBase(kDialecticOpcodeBase);
@@ -1620,7 +1653,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticGetRecordingDeviceCount,
         &kCommandInfo_DialecticGetRecordingDeviceName,
         &kCommandInfo_DialecticGetCurrentRecordingDevice,
-        &kCommandInfo_DialecticSetRecordingDevice
+        &kCommandInfo_DialecticSetRecordingDevice,
+        &kCommandInfo_DialecticUpdateFalloutStat
     };
 
     for (CommandInfo* command : commands) {

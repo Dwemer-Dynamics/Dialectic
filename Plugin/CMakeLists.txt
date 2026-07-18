@@ -42,6 +42,7 @@ add_library(${PROJECT_NAME} SHARED
     src/QuestJournalFNV.cpp
     src/PlayerInventoryManagerFNV.cpp
     src/PlayerSurvivalManagerFNV.cpp
+    src/FalloutStatsManagerFNV.cpp
     src/LoadedPluginsFNV.cpp
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp
