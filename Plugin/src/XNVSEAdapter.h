@@ -39,6 +39,7 @@ struct Message {
     const void* data{nullptr};
     std::uint32_t dataLength{0};
     std::uint32_t formId{0};
+    bool flag{false};
     std::string text;
 };
 

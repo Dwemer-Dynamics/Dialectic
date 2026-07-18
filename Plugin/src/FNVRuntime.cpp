@@ -16,6 +16,7 @@
 #include "SpeakManager.h"
 #include "TaskManager.h"
 #include "VoiceRecorder.h"
+#include "WorldContextFNV.h"
 #include "XNVSEAdapter.h"
 
 #include <atomic>
@@ -395,6 +396,7 @@ bool HasRuntimeEventConsumer(XNVSEAdapter::LifecycleEvent event) {
     switch (event) {
         case Event::PreLoadGame:
         case Event::LoadGame:
+        case Event::PostLoadGame:
         case Event::NewGame:
         case Event::ExitToMainMenu:
         case Event::ExitGame:
@@ -1015,6 +1017,12 @@ void OnMessage(const XNVSEAdapter::Message& message) {
         return;
     }
 
+    if (message.event == Event::PreLoadGame || message.event == Event::LoadGame) {
+        WorldContextFNV::BeginSaveLoad();
+    } else if (message.event == Event::PostLoadGame) {
+        WorldContextFNV::CompleteSaveLoad(message.flag);
+    }
+
     if (InvalidatesGeneration(message.event)) {
         ResetNativeState(message.event == Event::PreLoadGame ? "pre_load_game" :
             message.event == Event::LoadGame ? "load_game" :
@@ -1036,6 +1044,7 @@ void OnMessage(const XNVSEAdapter::Message& message) {
     event.type = MapEventType(message.event);
     event.generation = RuntimeGeneration::Current();
     event.formId = message.formId;
+    event.flag = message.flag;
     event.text = message.text;
     RuntimeEventBus::Publish(std::move(event));
 }

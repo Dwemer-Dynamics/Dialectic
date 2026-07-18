@@ -110,6 +110,7 @@ static constexpr float kNarratorLookUpPitchDegrees = -85.0f;
 static constexpr const char* kGameStateBridgePath = "Data\\NVSE\\Plugins\\dialectic_game_state.tmp";
 static bool g_loadedSaveInitSent = false;
 static long long g_lastSeenGamets = 0;
+static bool g_loadedSaveInitBlocked = false;
 
 // Voice input state
 static std::atomic<bool> g_voiceInputActive(false);
@@ -3650,6 +3651,10 @@ static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool 
 }
 
 static void MaybeSendLoadedSaveInit() {
+    if (g_loadedSaveInitBlocked) {
+        return;
+    }
+
     const long long currentGamets = WorldContextFNV::GetGameTimestamp();
     if (currentGamets <= 0) {
         return;
@@ -3689,6 +3694,7 @@ static void ProcessNativeRuntimeEvents() {
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
                 break;
             case Type::LoadGame:
                 PlayerInventoryManagerFNV::Reset("native_load_game");
@@ -3700,6 +3706,19 @@ static void ProcessNativeRuntimeEvents() {
                 DelayDynamicProfileTimerAfterLoad("game load");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
+                break;
+            case Type::PostLoadGame:
+                g_lastSeenGamets = 0;
+                if (event.flag) {
+                    g_loadedSaveInitSent = false;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogInfo("GameLoop: successful PostLoadGame; waiting for fresh loaded-save timestamp");
+                } else {
+                    g_loadedSaveInitSent = true;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogWarning("GameLoop: PostLoadGame reported failure; suppressing loaded-save init");
+                }
                 break;
             case Type::NewGame:
                 PlayerInventoryManagerFNV::Reset("native_new_game");
@@ -3713,6 +3732,7 @@ static void ProcessNativeRuntimeEvents() {
                 g_lastDynamicProfileLoadDelayAt = {};
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::ExitToMainMenu:
             case Type::ExitGame:
@@ -3722,6 +3742,7 @@ static void ProcessNativeRuntimeEvents() {
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::CellChanged:
                 ResetRuntimeForAIActions("native_cell_changed", false, false, false);
@@ -3747,6 +3768,7 @@ void Initialize() {
     g_voiceInputActive = false;
     g_loadedSaveInitSent = false;
     g_lastSeenGamets = 0;
+    g_loadedSaveInitBlocked = false;
     {
         std::lock_guard<std::mutex> lock(g_conversationCooldownMutex);
         g_conversationCooldownByFormId.clear();

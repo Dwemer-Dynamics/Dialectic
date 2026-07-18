@@ -33,6 +33,8 @@ struct Context {
 Context GetCurrent();
 std::string GetPlayerLocation();
 long long GetGameTimestamp();
+void BeginSaveLoad();
+void CompleteSaveLoad(bool succeeded);
 void Update();
 void SendNow(bool force = false);
 

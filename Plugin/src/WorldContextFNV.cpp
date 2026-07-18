@@ -35,6 +35,9 @@ static std::chrono::steady_clock::time_point g_lastBridgeReadTime;
 static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::string g_lastSentSignature;
 static constexpr auto kBridgeReadInterval = std::chrono::milliseconds(500);
+static bool g_saveLoadPending = false;
+static bool g_saveLoadCompleted = false;
+static uint64_t g_bridgeWriteFloor = 0;
 
 std::string Trim(const std::string& value) {
     const char* whitespace = " \t\r\n";
@@ -145,7 +148,7 @@ long long ParseLongLong(const std::string& value, long long fallback = 0) {
     }
 }
 
-bool GetFileModifiedAgeMs(const char* path, uint64_t& ageMs) {
+bool GetFileModifiedInfo(const char* path, uint64_t& ageMs, uint64_t& modifiedTicks) {
     WIN32_FILE_ATTRIBUTE_DATA attributes = {};
     if (!GetFileAttributesExA(path, GetFileExInfoStandard, &attributes)) {
         return false;
@@ -161,6 +164,7 @@ bool GetFileModifiedAgeMs(const char* path, uint64_t& ageMs) {
     ULARGE_INTEGER modified = {};
     modified.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
     modified.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+    modifiedTicks = modified.QuadPart;
 
     ageMs = current.QuadPart <= modified.QuadPart
         ? 0
@@ -251,8 +255,17 @@ bool RefreshFromBridge() {
     g_lastBridgeReadTime = now;
 
     uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kWorldContextPath, ageMs) || ageMs > 5000) {
+    uint64_t modifiedTicks = 0;
+    if (!GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks) || ageMs > 5000) {
         return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_contextMutex);
+        if (g_saveLoadPending &&
+            (!g_saveLoadCompleted || modifiedTicks <= g_bridgeWriteFloor)) {
+            return false;
+        }
     }
 
     std::ifstream input(kWorldContextPath, std::ios::binary);
@@ -296,6 +309,12 @@ bool RefreshFromBridge() {
 
     std::lock_guard<std::mutex> lock(g_contextMutex);
     g_context = next;
+    if (g_saveLoadPending) {
+        g_saveLoadPending = false;
+        g_saveLoadCompleted = false;
+        g_bridgeWriteFloor = 0;
+        Logger::LogInfo("WorldContextFNV: accepted fresh post-load bridge gamets=%lld", next.gamets);
+    }
     return next.resolved;
 }
 
@@ -421,6 +440,45 @@ std::string GetPlayerLocation() {
 long long GetGameTimestamp() {
     const Context context = GetCurrent();
     return context.gamets;
+}
+
+void BeginSaveLoad() {
+    uint64_t ageMs = 0;
+    uint64_t modifiedTicks = 0;
+    GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks);
+
+    std::lock_guard<std::mutex> lock(g_contextMutex);
+    g_context = {};
+    g_saveLoadPending = true;
+    g_saveLoadCompleted = false;
+    g_bridgeWriteFloor = modifiedTicks;
+    g_lastBridgeReadTime = {};
+    g_lastSendTime = {};
+    g_lastSentSignature.clear();
+    Logger::LogInfo("WorldContextFNV: waiting for fresh bridge after save load");
+}
+
+void CompleteSaveLoad(bool succeeded) {
+    uint64_t ageMs = 0;
+    uint64_t modifiedTicks = 0;
+    GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks);
+
+    std::lock_guard<std::mutex> lock(g_contextMutex);
+    if (!succeeded) {
+        g_saveLoadPending = false;
+        g_saveLoadCompleted = false;
+        g_bridgeWriteFloor = 0;
+        g_lastBridgeReadTime = {};
+        Logger::LogWarning("WorldContextFNV: save load failed; cancelled post-load bridge gate");
+        return;
+    }
+
+    g_context = {};
+    g_saveLoadPending = true;
+    g_saveLoadCompleted = true;
+    g_bridgeWriteFloor = (std::max)(g_bridgeWriteFloor, modifiedTicks);
+    g_lastBridgeReadTime = {};
+    Logger::LogInfo("WorldContextFNV: save load completed; awaiting post-load bridge write");
 }
 
 void SendNow(bool force) {

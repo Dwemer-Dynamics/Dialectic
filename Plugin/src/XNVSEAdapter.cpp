@@ -883,6 +883,10 @@ void OnNVSEMessage(NVSEMessagingInterface::Message* source) {
     message.event = event;
     message.data = source->data;
     message.dataLength = source->dataLen;
+    if (event == LifecycleEvent::PostLoadGame) {
+        // xNVSE encodes the load result directly in the data pointer value.
+        message.flag = source->data != nullptr;
+    }
     TryExtractMessageFormId(event, source->data, source->dataLen, message.formId);
     if (source->data && source->dataLen > 0 &&
         (event == LifecycleEvent::LoadGame || event == LifecycleEvent::SaveGame ||
