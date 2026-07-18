@@ -94,6 +94,7 @@ struct PendingTradeComparison {
 };
 PendingTradeComparison g_tradeComparison;
 bool g_lastObservedTradeMenuOpen = false;
+std::chrono::steady_clock::time_point g_lastManagerUpdate;
 
 std::string Trim(std::string value) {
     const char* whitespace = " \t\r\n";
@@ -820,6 +821,7 @@ void Initialize() {
     g_session = {};
     g_tradeComparison = {};
     g_lastObservedTradeMenuOpen = false;
+    g_lastManagerUpdate = {};
     CleanupBridgeFiles();
     Logger::LogInfo("TradeManager: initialized");
 }
@@ -886,6 +888,20 @@ void CancelAll(const char* reason) {
 
 void Update() {
     const auto now = std::chrono::steady_clock::now();
+    bool active = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        active = g_session.state != SessionState::Idle || g_tradeComparison.active;
+    }
+    const auto interval = active
+        ? std::chrono::milliseconds(100)
+        : std::chrono::milliseconds(1000);
+    if (g_lastManagerUpdate.time_since_epoch().count() != 0 &&
+        now - g_lastManagerUpdate < interval) {
+        return;
+    }
+    g_lastManagerUpdate = now;
+
     const bool tradeMenuOpen = IsTradeMenuOpen();
 
     MarkOpenIfNeeded(tradeMenuOpen, now);

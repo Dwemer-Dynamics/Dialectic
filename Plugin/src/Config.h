@@ -183,6 +183,7 @@ namespace Config {
     
     // Initialize and load configuration from INI
     void Load();
+    void LoadRuntimeSettings();
     void Save();
 
     // dialectic.ini contains shipped defaults. User and runtime changes belong in

@@ -87,20 +87,10 @@ begin Function {rSpeaker, rTopic, rTopicInfo, sText, sVoicePath}
         let iMenuMode := 0
         if MenuMode
             let iMenuMode := 1
-            DialecticCaptureDialogue "dialogue_menu_npc" "Unknown" "%e" "Player" "00000014" sText 0 1 iCaptureSeq
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 0 "source=dialogue_menu_npc\n"
+            DialecticCaptureDialogue "dialogue_menu_npc" $sSpeakerName $sSpeakerRef $sTargetName $sTargetRef sText 0 iMenuMode iCaptureSeq
         else
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 0 "source=radiant\n"
+            DialecticCaptureDialogue "radiant" $sSpeakerName $sSpeakerRef $sTargetName $sTargetRef sText 0 iMenuMode iCaptureSeq
         endif
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "speaker=%z\n" sSpeakerName
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "target=%z\n" sTargetName
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "target_refid=%z\n" sTargetRef
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "text=%z\n" sText
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "is_player_line=0\n"
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "menu_mode=%g\n" iMenuMode
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "capture_id=%g\n" iCaptureSeq
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp" 1 "end=1\n"
 
         sv_Destruct sSpeakerName
         sv_Destruct sTargetName

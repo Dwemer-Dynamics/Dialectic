@@ -61,6 +61,7 @@ bool IsVoiceInputActive();
 void HaltAIActionsNow();
 void RequestTextInputMenuOpen();
 bool IsTextInputMenuActiveOrRecentlyClosed();
+void MarkRuntimeConfigDirty();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
 void RequestDynamicProfileMenuOpen();

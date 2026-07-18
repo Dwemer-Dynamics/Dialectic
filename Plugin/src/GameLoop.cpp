@@ -126,6 +126,14 @@ static std::chrono::steady_clock::time_point g_lastDynamicProfileLoadDelayAt;
 static std::chrono::steady_clock::time_point g_lastBoredEventTimerUpdate;
 static std::chrono::steady_clock::time_point g_lastBoredBlockingActivityTime;
 static std::chrono::steady_clock::time_point g_lastVoiceSampleToolPoll;
+static std::chrono::steady_clock::time_point g_lastModeSelectionPoll;
+static std::chrono::steady_clock::time_point g_lastDynamicProfileSelectionPoll;
+static std::chrono::steady_clock::time_point g_lastLegacyToolPoll;
+static std::chrono::steady_clock::time_point g_lastTextInputPoll;
+static std::chrono::steady_clock::time_point g_lastRuntimeConfigFallbackPoll;
+static std::chrono::steady_clock::time_point g_lastRpgEventPoll;
+static std::atomic<bool> g_runtimeConfigDirty(false);
+static std::atomic<DWORD> g_runtimeConfigDirtyTick(0);
 
 static std::mutex g_runtimeStatusMutex;
 static bool g_runtimeStatusPending = false;
@@ -147,6 +155,16 @@ static uint64_t g_updatePerfTickCount = 0;
 static constexpr long long kPerfSlowSubsystemUs = 8000;
 static constexpr long long kPerfSlowFrameUs = 25000;
 static constexpr auto kPerfSummaryInterval = std::chrono::seconds(5);
+
+static bool ShouldPoll(std::chrono::steady_clock::time_point& lastPoll,
+                       std::chrono::milliseconds interval) {
+    const auto now = std::chrono::steady_clock::now();
+    if (lastPoll.time_since_epoch().count() != 0 && now - lastPoll < interval) {
+        return false;
+    }
+    lastPoll = now;
+    return true;
+}
 
 static long long ElapsedUsSince(const std::chrono::steady_clock::time_point& start) {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -827,6 +845,7 @@ static constexpr const char* kTextInputTargetPath = "Data\\NVSE\\Plugins\\dialec
 static constexpr const char* kTextInputStatusPath = "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp";
 static constexpr const char* kModeSelectPath = "Data\\NVSE\\Plugins\\dialectic_mode_select.tmp";
 static constexpr const char* kDynamicProfileSelectPath = "Data\\NVSE\\Plugins\\dialectic_dynamic_profile_select.tmp";
+static constexpr const char* kRuntimeConfigReloadPath = "Data\\NVSE\\Plugins\\dialectic_reload_runtime.tmp";
 static std::atomic<bool> g_textInputMenuPending(false);
 static std::atomic<DWORD> g_textInputMenuRequestTick(0);
 static std::atomic<DWORD> g_textInputMenuBlockUntilTick(0);
@@ -930,7 +949,7 @@ static void PollVoiceSampleToolRequest() {
     Dialectic_RequestVoiceSampleBatch("Tools INI flag");
 }
 
-static void PollDynamicProfileToolRequests() {
+static void PollDynamicProfileSelection() {
     int selectedProfileAction = -1;
     if (PollToolBridgeInt(kDynamicProfileSelectPath, selectedProfileAction)) {
         Logger::LogInfo("GameLoop: detected dynamic profile menu selection=%d", selectedProfileAction);
@@ -945,6 +964,9 @@ static void PollDynamicProfileToolRequests() {
         }
     }
 
+}
+
+static void PollLegacyDynamicProfileToolRequests() {
     const int updateTargetProfile = Config::ReadINIInt("Tools", "UpdateTargetProfile", 0);
     if (updateTargetProfile > 0) {
         Config::WriteCustomINIValue("Tools", "UpdateTargetProfile", "0");
@@ -1072,16 +1094,16 @@ static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
     }
 }
 
-static void PollModeToolRequests() {
-    MaybeSyncRuntimeStateFromServer(false);
-
+static void PollModeSelection() {
     int selectedModeIndex = 0;
     if (PollToolBridgeInt(kModeSelectPath, selectedModeIndex)) {
         Logger::LogInfo("GameLoop: detected mode menu selection=%d", selectedModeIndex);
         ApplyModeIndex(selectedModeIndex, true);
-        return;
     }
+}
 
+static void PollLegacyModeToolRequest() {
+    MaybeSyncRuntimeStateFromServer(false);
     const int modeChanged = Config::ReadINIInt("Tools", "ModeChanged", 0);
     if (modeChanged <= 0) {
         return;
@@ -1090,6 +1112,37 @@ static void PollModeToolRequests() {
     Config::WriteCustomINIValue("Tools", "ModeChanged", "0");
     const int legacySelectedModeIndex = Config::ReadINIInt("Modes", "CurrentIndex", 0);
     ApplyModeIndex(legacySelectedModeIndex, true);
+}
+
+void MarkRuntimeConfigDirty() {
+    g_runtimeConfigDirty.store(true);
+    g_runtimeConfigDirtyTick.store(GetTickCount());
+}
+
+static void PollRuntimeConfigReloadFallback() {
+    std::string signal;
+    if (!ReadToolBridgeLine(kRuntimeConfigReloadPath, signal)) {
+        return;
+    }
+    ClearToolBridgeFile(kRuntimeConfigReloadPath);
+    MarkRuntimeConfigDirty();
+}
+
+static void ApplyPendingRuntimeConfigReload() {
+    if (!g_runtimeConfigDirty.load() || g_gameState.isInMenu || g_gameState.isLoading) {
+        return;
+    }
+    const DWORD dirtyTick = g_runtimeConfigDirtyTick.load();
+    if (dirtyTick != 0 && GetTickCount() - dirtyTick < 250) {
+        return;
+    }
+
+    Config::LoadRuntimeSettings();
+    InputManager::LoadConfig();
+    g_runtimeConfigDirty.store(false);
+    g_runtimeConfigDirtyTick.store(0);
+    ClearToolBridgeFile(kRuntimeConfigReloadPath);
+    Logger::LogInfo("GameLoop: Applied deferred runtime settings after menu close");
 }
 
 void RequestModeMenuOpen() {
@@ -2153,10 +2206,20 @@ static void RefreshGameStateBridge() {
     static bool s_lastInCombat = false;
     static bool s_lastUsedNative = false;
     static std::chrono::steady_clock::time_point s_lastComparisonSample;
+    static std::chrono::steady_clock::time_point s_lastFallbackPoll;
 
     RuntimeSnapshot::GameState nativeState;
     const bool nativeFresh = RuntimeSnapshot::TryGetFreshGameState(
         nativeState, std::chrono::milliseconds(500));
+    const auto now = std::chrono::steady_clock::now();
+    const bool comparisonDue = s_lastComparisonSample.time_since_epoch().count() == 0 ||
+        now - s_lastComparisonSample >= std::chrono::seconds(1);
+    const bool fallbackDue = s_lastFallbackPoll.time_since_epoch().count() == 0 ||
+        now - s_lastFallbackPoll >= std::chrono::milliseconds(100);
+    const bool shouldReadBridge = nativeFresh ? comparisonDue : fallbackDue;
+    if (!nativeFresh && fallbackDue) {
+        s_lastFallbackPoll = now;
+    }
 
     bool bridgeFresh = false;
     bool bridgeInMenu = false;
@@ -2164,7 +2227,8 @@ static void RefreshGameStateBridge() {
     bool bridgeDialogue = false;
     bool bridgeCombat = false;
     uint64_t bridgeAgeMs = 0;
-    if (GetFileModifiedAgeMs(kGameStateBridgePath, bridgeAgeMs) && bridgeAgeMs <= 750) {
+    if (shouldReadBridge &&
+        GetFileModifiedAgeMs(kGameStateBridgePath, bridgeAgeMs) && bridgeAgeMs <= 750) {
         const std::string data = ReadFileIfExists(kGameStateBridgePath);
         if (!data.empty()) {
             const auto values = ParseBridgeKeyValueData(data);
@@ -2196,9 +2260,7 @@ static void RefreshGameStateBridge() {
     }
 
     if (nativeFresh && bridgeFresh) {
-        const auto now = std::chrono::steady_clock::now();
-        if (s_lastComparisonSample.time_since_epoch().count() == 0 ||
-            now - s_lastComparisonSample >= std::chrono::seconds(1)) {
+        if (comparisonDue) {
             const bool equivalent = nativeBlockingMenu == bridgeInMenu &&
                 nativeState.paused == bridgePaused &&
                 nativeState.dialogueMenuOpen == bridgeDialogue &&
@@ -3340,7 +3402,6 @@ static void ProcessDialogueCaptureBridge() {
         return;
     }
 
-    const char* dialogueCapturePath = nullptr;
     std::string bridgeData;
     {
         std::lock_guard<std::mutex> lock(g_nativeDialogueCaptureMutex);
@@ -3348,18 +3409,6 @@ static void ProcessDialogueCaptureBridge() {
             bridgeData = std::move(g_nativeDialogueCaptures.front());
             g_nativeDialogueCaptures.pop_front();
         }
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_player_choice.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
     }
     if (bridgeData.empty()) {
         return;
@@ -3380,10 +3429,6 @@ static void ProcessDialogueCaptureBridge() {
             lastIncompleteLogTime = now;
         }
         return;
-    }
-
-    if (dialogueCapturePath) {
-        DeleteFileIfExists(dialogueCapturePath);
     }
 
     std::string source = ToLowerCopy(getField("source"));
@@ -3748,7 +3793,7 @@ static void ProcessNativeRuntimeEvents() {
                 ResetRuntimeForAIActions("native_cell_changed", false, false, false);
                 break;
             case Type::ReloadConfig:
-                Config::Load();
+                MarkRuntimeConfigDirty();
                 break;
             default:
                 break;
@@ -3781,11 +3826,23 @@ void Initialize() {
     g_dynamicProfileBlockedAt = {};
     g_dynamicProfileResumeNotBefore = {};
     g_lastDynamicProfileLoadDelayAt = {};
+    g_lastModeSelectionPoll = {};
+    g_lastDynamicProfileSelectionPoll = {};
+    g_lastLegacyToolPoll = {};
+    g_lastTextInputPoll = {};
+    g_lastRuntimeConfigFallbackPoll = {};
+    g_lastRpgEventPoll = {};
+    g_runtimeConfigDirty.store(false);
+    g_runtimeConfigDirtyTick.store(0);
     g_lastBoredEventTimerUpdate = g_lastUpdateTime;
     g_lastBoredBlockingActivityTime = g_lastUpdateTime;
     g_lastUpdatePerfSummaryTime = {};
     g_updatePerfAggregates.clear();
     g_updatePerfTickCount = 0;
+    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_player_choice.tmp");
+    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp");
+    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp");
+    DeleteFileIfExists(kRuntimeConfigReloadPath);
     
     ApplyModeIndex(Config::currentModeIndex, false);
     PlayerInventoryManagerFNV::Initialize();
@@ -3824,6 +3881,10 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
     ProfileUpdateSubsystem("RefreshGameStateBridge", []() { RefreshGameStateBridge(); });
+    if (ShouldPoll(g_lastRuntimeConfigFallbackPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
+    }
+    ProfileUpdateSubsystem("ApplyPendingRuntimeConfigReload", []() { ApplyPendingRuntimeConfigReload(); });
     ProfileUpdateSubsystem("MaybeSendLoadedSaveInit", []() { MaybeSendLoadedSaveInit(); });
     ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("NearbyActorsFNV::Update", []() { NearbyActorsFNV::Update(); });
@@ -3838,12 +3899,25 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });
     ProfileUpdateSubsystem("UpdateBoredEventTimer", []() { UpdateBoredEventTimer(); });
-    ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
-    ProfileUpdateSubsystem("PollDynamicProfileToolRequests", []() { PollDynamicProfileToolRequests(); });
-    ProfileUpdateSubsystem("PollModeToolRequests", []() { PollModeToolRequests(); });
+    if (ShouldPoll(g_lastDynamicProfileSelectionPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("PollDynamicProfileSelection", []() { PollDynamicProfileSelection(); });
+    }
+    if (ShouldPoll(g_lastModeSelectionPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("PollModeSelection", []() { PollModeSelection(); });
+    }
+    if (ShouldPoll(g_lastLegacyToolPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
+        ProfileUpdateSubsystem("PollLegacyDynamicProfileToolRequests", []() { PollLegacyDynamicProfileToolRequests(); });
+        ProfileUpdateSubsystem("PollLegacyModeToolRequest", []() { PollLegacyModeToolRequest(); });
+    }
     ProfileUpdateSubsystem("ProcessDialogueCaptureBridge", []() { ProcessDialogueCaptureBridge(); });
-    ProfileUpdateSubsystem("ProcessRpgEventBridge", []() { ProcessRpgEventBridge(); });
-    ProfileUpdateSubsystem("ProcessTextInputBridge", []() { ProcessTextInputBridge(); });
+    if (ShouldPoll(g_lastRpgEventPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("ProcessRpgEventBridge", []() { ProcessRpgEventBridge(); });
+    }
+    if (g_textInputMenuPending.load() &&
+        ShouldPoll(g_lastTextInputPoll, std::chrono::milliseconds(50))) {
+        ProfileUpdateSubsystem("ProcessTextInputBridge", []() { ProcessTextInputBridge(); });
+    }
     
     // Process input actions
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ManualActivateNPC)) {

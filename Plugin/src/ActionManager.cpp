@@ -138,6 +138,7 @@ std::mutex g_nativeAttackMutex;
 std::unordered_map<std::uint32_t, NativeAttackState> g_nativeAttackStates;
 std::mutex g_nativePickupMutex;
 std::unordered_map<std::uint32_t, NativePickupState> g_nativePickupStates;
+std::chrono::steady_clock::time_point g_lastManagerUpdate;
 
 std::string Trim(std::string value) {
     const char* whitespace = " \t\r\n";
@@ -3875,7 +3876,51 @@ void UpdateNativePackageStates() {
     }
 }
 
+static bool HasActiveWork() {
+    {
+        std::lock_guard<std::mutex> lock(g_pendingMutex);
+        if (!g_pendingActions.empty()) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
+        if (!g_postDialogueActions.empty()) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_nativePackageMutex);
+        if (!g_nativePackageStates.empty() || !g_pendingNativeCleanupRefs.empty()) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_nativeAttackMutex);
+        if (!g_nativeAttackStates.empty()) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_nativePickupMutex);
+        if (!g_nativePickupStates.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Update() {
+    const auto now = std::chrono::steady_clock::now();
+    const auto interval = HasActiveWork()
+        ? std::chrono::milliseconds(50)
+        : std::chrono::milliseconds(1000);
+    if (g_lastManagerUpdate.time_since_epoch().count() != 0 &&
+        now - g_lastManagerUpdate < interval) {
+        return;
+    }
+    g_lastManagerUpdate = now;
+
     UpdateNativeAttackStates();
     UpdateNativePickupStates();
     UpdateNativePackageStates();

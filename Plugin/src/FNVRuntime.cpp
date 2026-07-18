@@ -1030,10 +1030,6 @@ void OnMessage(const XNVSEAdapter::Message& message) {
             message.event == Event::ExitToMainMenu ? "exit_to_main_menu" : "exit_game");
     }
 
-    if (message.event == Event::ReloadConfig) {
-        Config::Load();
-    }
-
     // Reference attach/detach notifications can fire thousands of times while
     // actors rebuild 3D. Do not queue lifecycle events that GameLoop ignores.
     if (!HasRuntimeEventConsumer(message.event)) {

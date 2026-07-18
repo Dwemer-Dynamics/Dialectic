@@ -994,11 +994,8 @@ static bool Cmd_DialecticSetConfigFloat_Execute(COMMAND_ARGS) {
 }
 
 static bool Cmd_DialecticReloadConfig_Execute(COMMAND_ARGS) {
-    Config::Load();
-    if (g_subsystemsInitialized) {
-        InputManager::LoadConfig();
-    }
-    Logger::LogInfo("Dialectic config reloaded from NVSE command");
+    GameLoop::MarkRuntimeConfigDirty();
+    Logger::LogInfo("Dialectic runtime config reload queued from NVSE command");
     *result = 1;
     return true;
 }
@@ -1989,11 +1986,8 @@ __declspec(dllexport) int Dialectic_SetConfigInt(const char* section, const char
 
 __declspec(dllexport) void Dialectic_ReloadConfig() {
     try {
-        Config::Load();
-        if (g_subsystemsInitialized) {
-            InputManager::LoadConfig();
-        }
-        Logger::LogInfo("Dialectic config reloaded");
+        GameLoop::MarkRuntimeConfigDirty();
+        Logger::LogInfo("Dialectic runtime config reload queued");
     } catch (...) {
         Logger::LogWarning("Dialectic_ReloadConfig failed");
     }

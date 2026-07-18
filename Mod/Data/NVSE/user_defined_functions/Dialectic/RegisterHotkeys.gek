@@ -1,12 +1,7 @@
 int iKey
-int iTalkKey
-int iStopKey
-int iModesKey
-int iLLMKey
-int iDynamicKey
-
 begin function {}
-    ; Clear old broad handlers from existing saves/runtime state first.
+    ; Hotkeys are owned by the DLL. Remove handlers retained by older saves so
+    ; one physical key press can never dispatch through two systems.
     set iKey to 1
     while eval iKey <= 88
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HaltActionsKeyDown.txt") 0 iKey
@@ -62,28 +57,5 @@ begin function {}
     SetOnKeyDownEventHandler (CompileScript "Dialectic/HaltHotkeyKeyDown.txt") 0 211
     SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 0 211
 
-    set iTalkKey to DialecticGetConfigInt "Hotkeys" "TalkToNPC" 0
-    set iStopKey to DialecticGetConfigInt "Hotkeys" "StopTalking" 0
-    set iModesKey to DialecticGetConfigInt "Hotkeys" "ToggleModes" 0
-    set iLLMKey to DialecticGetConfigInt "Hotkeys" "ToggleLLMModel" 0
-    set iDynamicKey to DialecticGetConfigInt "Hotkeys" "DynamicProfileMenu" 0
-
-    if eval iTalkKey > 0 && (iStopKey <= 0 || iTalkKey != iStopKey)
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iTalkKey
-    endif
-    if eval iModesKey > 0 && (iStopKey <= 0 || iModesKey != iStopKey)
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iModesKey
-    endif
-    if eval iLLMKey > 0 && (iStopKey <= 0 || iLLMKey != iStopKey)
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iLLMKey
-    endif
-    if eval iDynamicKey > 0 && (iStopKey <= 0 || iDynamicKey != iStopKey)
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iDynamicKey
-    endif
-    if eval iStopKey > 0
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HaltHotkeyKeyDown.txt") 1 iStopKey
-    endif
-
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 talk=%g stop=%g modes=%g llm=%g dynamic=%g%r" iTalkKey iStopKey iModesKey iLLMKey iDynamicKey
-    PrintC "[Dialectic] Registered configured hotkey bridges."
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=0 owner=dll legacy_handlers_cleared=1%r"
 end
