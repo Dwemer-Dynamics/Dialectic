@@ -6,6 +6,7 @@
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
+#include "WorldContextFNV.h"
 #include "XNVSEAdapter.h"
 
 #include <algorithm>
@@ -255,7 +256,7 @@ void Update() {
         }
         if (!g_dirty || now < g_dueAt) return;
         const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
-        if (!gameState.inGame) {
+        if (!gameState.inGame || WorldContextFNV::GetGameTimestamp() <= 0) {
             g_dueAt = now + std::chrono::seconds(1);
             return;
         }

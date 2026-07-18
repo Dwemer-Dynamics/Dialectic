@@ -493,7 +493,7 @@ void SendNow(bool force) {
         std::lock_guard<std::mutex> lock(g_contextMutex);
         context = g_context;
     }
-    if (!context.resolved) {
+    if (!context.resolved || context.gamets <= 0) {
         return;
     }
 
@@ -529,7 +529,7 @@ void Update() {
         std::lock_guard<std::mutex> lock(g_contextMutex);
         context = g_context;
     }
-    if (!context.resolved) {
+    if (!context.resolved || context.gamets <= 0) {
         return;
     }
 

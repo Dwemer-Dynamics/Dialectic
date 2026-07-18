@@ -62,7 +62,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.2"
+#define DIALECTIC_VERSION "0.5.5"
 #endif
 
 // Forward declarations
@@ -3824,8 +3824,8 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
     ProfileUpdateSubsystem("RefreshGameStateBridge", []() { RefreshGameStateBridge(); });
-    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("MaybeSendLoadedSaveInit", []() { MaybeSendLoadedSaveInit(); });
+    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("NearbyActorsFNV::Update", []() { NearbyActorsFNV::Update(); });
     ProfileUpdateSubsystem("AutoGreetingFNV::Update", []() { AutoGreetingFNV::Update(); });
     ProfileUpdateSubsystem("ActivityStatusFNV::Update", []() { ActivityStatusFNV::Update(); });
