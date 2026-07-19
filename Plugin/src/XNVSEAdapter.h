@@ -319,6 +319,10 @@ bool ResetNativeLipSync(std::uint32_t actorFormId);
 bool HaltNativeActor(std::uint32_t actorFormId);
 bool ExecuteSimpleNativeAction(std::uint32_t actorFormId, int actionCode);
 bool ExecuteNativePackageAction(std::uint32_t actorFormId, std::uint32_t targetFormId, int actionCode);
+bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
+                                   int actionCode,
+                                   bool& handled,
+                                   bool& usedCcc);
 bool CaptureNativeCombatActorState(std::uint32_t actorFormId, NativeCombatActorState& state);
 bool ExecuteNativeAttack(std::uint32_t speakerFormId, std::uint32_t targetFormId);
 bool RestoreNativeCombatActorState(const NativeCombatActorState& state);
