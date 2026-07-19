@@ -3,7 +3,6 @@
 #include "Config.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
-#include "GameLoop.h"
 #include "Logger.h"
 #include "Misc.h"
 #include "NativeComparisonTelemetry.h"
@@ -523,7 +522,6 @@ void EmitTradeSummaryEvent(const TradeSessionRequest& request,
     payload << "}";
 
     Logger::LogInfo("TradeManager: trade summary %s", text.c_str());
-    GameLoop::QueueRpgCommentEvent("trade_completed", text);
     const std::string json = payload.str();
     TaskManager::Enqueue("gamedata", "trade_summary", RuntimeGeneration::Current(), true,
         std::chrono::seconds(30), [json](const TaskManager::CancellationToken& token) {
