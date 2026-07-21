@@ -28,7 +28,6 @@ WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_pickup_state.tmp" 0 "%e"
 
-call (CompileScript "Dialectic/RegisterHotkeys.gek")
 call (CompileScript "Dialectic/RegisterAidUseEvents.txt")
 call (CompileScript "Dialectic/RegisterSleepWaitEvents.txt")
 

@@ -838,9 +838,6 @@ static void StartNarratorConversation(const char* reason) {
     HTTPManager::SendEvent("conversation_start", payload.str(), BuildPrivateNarratorAudienceSnapshotJson());
 }
 
-static constexpr const char* kOpenModeMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_mode_menu.tmp";
-static constexpr const char* kOpenLLMModelMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_llm_model_menu.tmp";
-static constexpr const char* kOpenDynamicProfileMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_dynamic_profile_menu.tmp";
 static constexpr const char* kOpenTextInputMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp";
 static constexpr const char* kTextInputTargetPath = "Data\\NVSE\\Plugins\\dialectic_textinput_target.tmp";
 static constexpr const char* kTextInputStatusPath = "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp";
@@ -1103,18 +1100,6 @@ static void PollModeSelection() {
     }
 }
 
-static void PollLegacyModeToolRequest() {
-    MaybeSyncRuntimeStateFromServer(false);
-    const int modeChanged = Config::ReadINIInt("Tools", "ModeChanged", 0);
-    if (modeChanged <= 0) {
-        return;
-    }
-
-    Config::WriteCustomINIValue("Tools", "ModeChanged", "0");
-    const int legacySelectedModeIndex = Config::ReadINIInt("Modes", "CurrentIndex", 0);
-    ApplyModeIndex(legacySelectedModeIndex, true);
-}
-
 void MarkRuntimeConfigDirty() {
     g_runtimeConfigDirty.store(true);
     g_runtimeConfigDirtyTick.store(GetTickCount());
@@ -1146,15 +1131,23 @@ static void ApplyPendingRuntimeConfigReload() {
     Logger::LogInfo("GameLoop: Applied deferred runtime settings after menu close");
 }
 
+static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
+    return !state.inGame || state.paused || state.pipboyOpen ||
+        state.pauseMenuOpen || state.dialogueMenuOpen || state.barterMenuOpen ||
+        state.containerMenuOpen || state.loadingMenuOpen;
+}
+
 void RequestModeMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring mode selector while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode)) {
         Logger::LogInfo("GameLoop: Opened mode selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenModeMenu", "1");
-    WriteToolBridgeSignal(kOpenModeMenuPath, "mode");
-    Logger::LogInfo("GameLoop: Requested mode selector menu");
+    Logger::LogError("GameLoop: Failed to open mode selector through native UI adapter");
 }
 
 void RequestTextInputMenuOpen() {
@@ -1217,24 +1210,28 @@ void RequestTextInputMenuOpen() {
 
 void RequestLLMModelMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::LlmModel)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring LLM model selector while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::LlmModel)) {
         Logger::LogInfo("GameLoop: Opened LLM model selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenLLMModelMenu", "1");
-    WriteToolBridgeSignal(kOpenLLMModelMenuPath, "llm_model");
-    Logger::LogInfo("GameLoop: Requested LLM model selector menu");
+    Logger::LogError("GameLoop: Failed to open LLM model selector through native UI adapter");
 }
 
 void RequestDynamicProfileMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DynamicProfile)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring dynamic profile selector while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DynamicProfile)) {
         Logger::LogInfo("GameLoop: Opened dynamic profile selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenDynamicProfileMenu", "1");
-    WriteToolBridgeSignal(kOpenDynamicProfileMenuPath, "dynamic_profile");
-    Logger::LogInfo("GameLoop: Requested dynamic profile selector menu");
+    Logger::LogError("GameLoop: Failed to open dynamic profile selector through native UI adapter");
 }
 
 static std::string BuildAgentNameSummary(
@@ -3946,7 +3943,6 @@ void Update(float deltaTime) {
     if (ShouldPoll(g_lastLegacyToolPoll, std::chrono::seconds(1))) {
         ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
         ProfileUpdateSubsystem("PollLegacyDynamicProfileToolRequests", []() { PollLegacyDynamicProfileToolRequests(); });
-        ProfileUpdateSubsystem("PollLegacyModeToolRequest", []() { PollLegacyModeToolRequest(); });
     }
     ProfileUpdateSubsystem("ProcessDialogueCaptureBridge", []() { ProcessDialogueCaptureBridge(); });
     if (ShouldPoll(g_lastRpgEventPoll, std::chrono::milliseconds(100))) {
@@ -3958,6 +3954,11 @@ void Update(float deltaTime) {
     }
     
     // Process input actions
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::StopTalking)) {
+        Logger::LogInfo("GameLoop: Halt AI Actions hotkey pressed through native input");
+        HaltAIActionsNow();
+    }
+
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ManualActivateNPC)) {
         Logger::LogInfo("GameLoop: ManualActivateNPC hotkey pressed");
         ActivationManager::ActivateCurrentTarget(ActivationManager::ActivationSource::Manual);

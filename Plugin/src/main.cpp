@@ -244,23 +244,6 @@ static int GetRawHotkeyScanCode(const char* key) {
     return Config::ReadINIInt("Hotkeys", key, 0);
 }
 
-static bool RawHotkeyMatches(const char* key, int scanCode) {
-    const int configured = GetRawHotkeyScanCode(key);
-    return configured > 0 && scanCode == configured;
-}
-
-static void WriteHotkeyDiagnostic(const char* handler, int scanCode, int configured, const char* status) {
-    std::ofstream out("Data\\NVSE\\Plugins\\dialectic_hotkey_diagnostics.txt", std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        return;
-    }
-
-    out << "handler=" << (handler ? handler : "") << "\n";
-    out << "key=" << scanCode << "\n";
-    out << "configured=" << configured << "\n";
-    out << "status=" << (status ? status : "") << "\n";
-}
-
 static bool GetRawHotkeyConfigValue(const std::string& normalizedKey, double fallback, double& outValue) {
     const char* key = CanonicalHotkeyKey(normalizedKey);
     if (!key) {
@@ -1275,131 +1258,14 @@ static bool Cmd_DialecticMarkPlayerInventoryDirty_Execute(COMMAND_ARGS) {
 }
 
 static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
-    int scanCode = 0;
+    // Deprecated ABI slot. Runtime hotkeys are owned exclusively by InputManager.
     *result = 0;
-
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
-        WriteHotkeyDiagnostic("halt", 0, GetRawHotkeyScanCode("StopTalking"), "extract_failed");
-        return true;
-    }
-
-    if (!InputManager::IsGameForeground()) {
-        WriteHotkeyDiagnostic("halt", scanCode, GetRawHotkeyScanCode("StopTalking"), "background_window");
-        return true;
-    }
-
-    const int configured = GetRawHotkeyScanCode("StopTalking");
-    Logger::LogInfo("GameLoop: Halt hotkey bridge scan=%d configured=%d", scanCode, configured);
-
-    if (scanCode <= 0) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "invalid_key");
-        return true;
-    }
-
-    if (configured <= 0) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "unbound");
-        Logger::LogInfo("GameLoop: Halt AI Actions ignored because StopTalking is unbound");
-        return true;
-    }
-
-    if (scanCode != configured) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "mismatch");
-        Logger::LogInfo("GameLoop: Halt AI Actions ignored because key %d does not match configured %d",
-                        scanCode,
-                        configured);
-        return true;
-    }
-
-    if (!InputManager::TryClaimAction(InputManager::HotkeyAction::StopTalking)) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "duplicate");
-        return true;
-    }
-
-    if (scanCode == 1 || scanCode == 15) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "blocked_menu_key");
-        Logger::LogWarning("GameLoop: Ignoring Halt AI Actions because StopTalking is mapped to a game menu scan code (%d)", scanCode);
-        return true;
-    }
-
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-
-    if (GameLoop::IsTextInputMenuActiveOrRecentlyClosed()) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "chatbox_active");
-        Logger::LogInfo("GameLoop: Ignoring Halt AI Actions while chatbox is active or just submitted");
-        return true;
-    }
-
-    WriteHotkeyDiagnostic("halt", scanCode, configured, "matched");
-    Logger::LogInfo("GameLoop: Halt AI Actions hotkey pressed via dedicated xNVSE scan code %d", scanCode);
-    GameLoop::HaltAIActionsNow();
-    *result = 1;
     return true;
 }
 
 static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
-    int scanCode = 0;
+    // Deprecated ABI slot. Runtime hotkeys are owned exclusively by InputManager.
     *result = 0;
-
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
-        return true;
-    }
-
-    if (scanCode <= 0) {
-        return true;
-    }
-
-    if (!InputManager::IsGameForeground()) {
-        WriteHotkeyDiagnostic("generic", scanCode, 0, "background_window");
-        return true;
-    }
-
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-
-    if (RawHotkeyMatches("TalkToNPC", scanCode)) {
-        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::TalkToNPC)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: Chatbox hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestTextInputMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("ToggleModes", scanCode)) {
-        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::ToggleModes)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestModeMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("ToggleLLMModel", scanCode)) {
-        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::ToggleLLMModel)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestLLMModelMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("DynamicProfileMenu", scanCode)) {
-        if (!InputManager::TryClaimAction(InputManager::HotkeyAction::DynamicProfileMenu)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestDynamicProfileMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    WriteHotkeyDiagnostic("generic", scanCode, 0, "unmatched");
     return true;
 }
 
@@ -1573,12 +1439,12 @@ static CommandInfo kCommandInfo_DialecticMarkPlayerInventoryDirty = {
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHotkey = {
-    "DialecticHandleHotkey", "", 0, "Routes a raw xNVSE/Fallout scan-code hotkey through Dialectic.", 0, 1,
+    "DialecticHandleHotkey", "", 0, "Deprecated hotkey bridge ABI slot.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkey_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHaltHotkey = {
-    "DialecticHandleHaltHotkey", "", 0, "Routes the configured Halt AI Actions xNVSE hotkey through Dialectic.", 0, 1,
+    "DialecticHandleHaltHotkey", "", 0, "Deprecated halt-hotkey bridge ABI slot.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHaltHotkey_Execute, nullptr, nullptr, 0
 };
 

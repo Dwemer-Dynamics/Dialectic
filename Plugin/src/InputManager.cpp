@@ -95,11 +95,13 @@ static bool IsRuntimeInputAllowed() {
     RuntimeSnapshot::GameState state;
     if (!RuntimeSnapshot::TryGetFreshGameState(state, std::chrono::milliseconds(500))) {
         const GameLoop::GameState& fallback = GameLoop::GetGameState();
-        return fallback.isInGame && !fallback.isInMenu && !fallback.isPaused &&
+        return fallback.isInGame && !fallback.isPaused &&
             !fallback.isInDialogue && !fallback.isLoading;
     }
 
-    return state.inGame && !state.inMenu && !state.paused && !state.pipboyOpen &&
+    // InterfaceManager's broad menu-mode flag can remain set briefly after
+    // lightweight UI closes. Explicit blocking menus are authoritative here.
+    return state.inGame && !state.paused && !state.pipboyOpen &&
         !state.pauseMenuOpen && !state.dialogueMenuOpen && !state.barterMenuOpen &&
         !state.containerMenuOpen && !state.loadingMenuOpen;
 }
