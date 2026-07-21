@@ -2828,15 +2828,6 @@ static bool SelectRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
         return outFormId != 0 && !outName.empty();
     }
 
-    const auto registered = AgentManager::GetRegisteredAgentSnapshot();
-    for (const auto& [formId, name] : registered) {
-        if (formId != 0 && !name.empty()) {
-            outFormId = formId;
-            outName = name;
-            return true;
-        }
-    }
-
     return false;
 }
 
@@ -2847,6 +2838,38 @@ struct RpgBridgeEvent {
     std::string itemName;
     std::vector<std::pair<std::string, std::string>> items;
 };
+
+static std::mutex g_rpgCommentQueueMutex;
+static std::deque<RpgBridgeEvent> g_rpgCommentQueue;
+static std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastQueuedRpgEvent;
+
+void QueueRpgCommentEvent(const std::string& eventType, const std::string& eventText) {
+    const std::string type = TrimInput(eventType);
+    const std::string text = TrimInput(eventText);
+    if (type.empty() || text.empty()) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const std::string dedupeKey = type + "\n" + text;
+    std::lock_guard<std::mutex> lock(g_rpgCommentQueueMutex);
+    for (auto it = g_lastQueuedRpgEvent.begin(); it != g_lastQueuedRpgEvent.end();) {
+        if (now - it->second >= std::chrono::minutes(1)) {
+            it = g_lastQueuedRpgEvent.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    const auto previous = g_lastQueuedRpgEvent.find(dedupeKey);
+    if (previous != g_lastQueuedRpgEvent.end() && now - previous->second < std::chrono::seconds(10)) {
+        return;
+    }
+    g_lastQueuedRpgEvent[dedupeKey] = now;
+    g_rpgCommentQueue.push_back({type, text});
+    while (g_rpgCommentQueue.size() > 16) {
+        g_rpgCommentQueue.pop_front();
+    }
+}
 
 static std::string JoinHumanList(const std::vector<std::string>& values) {
     if (values.empty()) {
@@ -2908,11 +2931,18 @@ static RpgBridgeEvent CombinePlayerConsumedEvents(const std::vector<RpgBridgeEve
 
 static void ProcessRpgEventBridge() {
     const std::string data = ReadAndDeleteTextInputFile("Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp");
-    if (data.empty()) {
+    std::vector<RpgBridgeEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(g_rpgCommentQueueMutex);
+        while (!g_rpgCommentQueue.empty()) {
+            events.push_back(std::move(g_rpgCommentQueue.front()));
+            g_rpgCommentQueue.pop_front();
+        }
+    }
+    if (data.empty() && events.empty()) {
         return;
     }
 
-    std::vector<RpgBridgeEvent> events;
     std::vector<RpgBridgeEvent> pendingConsumed;
     auto flushPendingConsumed = [&events, &pendingConsumed]() {
         if (!pendingConsumed.empty()) {

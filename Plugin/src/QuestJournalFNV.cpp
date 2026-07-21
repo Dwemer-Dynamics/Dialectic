@@ -3,6 +3,7 @@
 #include "QuestJournalFNV.h"
 
 #include "Config.h"
+#include "GameLoop.h"
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
@@ -553,9 +554,12 @@ void SendNow(bool force) {
     }
 
     const std::string signature = BuildSignature(quests);
+    bool changed = false;
+    bool hadPreviousSnapshot = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        const bool changed = signature != g_lastSentSignature;
+        changed = signature != g_lastSentSignature;
+        hadPreviousSnapshot = !g_lastSentSignature.empty();
         if (!force && !changed) {
             return;
         }
@@ -565,6 +569,18 @@ void SendNow(bool force) {
     }
 
     SendQuests(quests);
+    if (changed && hadPreviousSnapshot) {
+        const auto selected = std::find_if(quests.begin(), quests.end(),
+            [](const QuestEntry& quest) { return quest.selected; });
+        if (selected != quests.end() && !selected->name.empty()) {
+            const std::string briefing = BuildBriefing(*selected);
+            std::string text = "The active quest changed to " + selected->name;
+            if (!briefing.empty() && briefing != selected->name) {
+                text += ": " + briefing;
+            }
+            GameLoop::QueueRpgCommentEvent("quest_updated", text);
+        }
+    }
 }
 
 void UpdateActiveQuestFromScript(const char* formId, const char* name, const char* editorId) {

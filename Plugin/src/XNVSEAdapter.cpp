@@ -54,6 +54,8 @@ Script* g_mfgResetFunction = nullptr;
 Script* g_haltActorFunction = nullptr;
 Script* g_simpleActionFunction = nullptr;
 Script* g_packageActionFunction = nullptr;
+Script* g_cccManagedQueryFunction = nullptr;
+Script* g_cccCompanionCommandFunction = nullptr;
 Script* g_attackActionFunction = nullptr;
 Script* g_restoreCombatActorFunction = nullptr;
 Script* g_inventoryActionFunction = nullptr;
@@ -986,6 +988,8 @@ void Shutdown() {
     g_haltActorFunction = nullptr;
     g_simpleActionFunction = nullptr;
     g_packageActionFunction = nullptr;
+    g_cccManagedQueryFunction = nullptr;
+    g_cccCompanionCommandFunction = nullptr;
     g_attackActionFunction = nullptr;
     g_restoreCombatActorFunction = nullptr;
     g_inventoryActionFunction = nullptr;
@@ -2274,7 +2278,7 @@ bool ExecuteNativePackageAction(std::uint32_t actorFormId, std::uint32_t targetF
     }
     if (targetFormId == 0 && (actionCode == 4 || actionCode == 5 || actionCode == 6)) {
         targetFormId = player ? player->refID : 0x14;
-    } else if (targetFormId == 0 && actionCode == 18) {
+    } else if (targetFormId == 0 && (actionCode == 18 || actionCode == 33)) {
         targetFormId = actorFormId;
     }
     TESObjectREFR* target = targetFormId == 0 ? nullptr : FindLoadedReference(player, targetFormId);
@@ -2326,6 +2330,11 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
         AddToFaction DialecticWaitFaction 0
         SetPackageLocationReference DialecticWaitPackage rTarget
         SetPackageTargetDistance DialecticWaitPackage 64
+        AddScriptPackage DialecticWaitPackage
+    elseif eval iActionCode == 33
+        AddToFaction DialecticWaitFaction 0
+        SetPackageLocationReference DialecticWaitPackage rTarget
+        SetPackageTargetDistance DialecticWaitPackage 96
         AddScriptPackage DialecticWaitPackage
     elseif eval iActionCode == 20 && rTarget
         AddToFaction DialecticSeatFaction 0
@@ -2517,7 +2526,8 @@ bool ExecuteNativeInventoryAction(std::uint32_t speakerFormId,
         !FindLoadedReference(player, targetFormId)) {
         return false;
     }
-    if ((actionCode == 11 || actionCode == 13) && itemBaseFormId == 0) {
+    if ((actionCode == 11 || actionCode == 13 || actionCode == 31 || actionCode == 32) &&
+        itemBaseFormId == 0) {
         return false;
     }
 
@@ -2550,6 +2560,14 @@ begin function {iActionCode, iTargetMod, iTargetLocal, iItemMod, iItemLocal, iAm
         if eval GetItemCount rItem > 0
             EquipItem rItem 1 1
         endif
+    elseif eval iActionCode == 31 && rItem
+        if eval GetItemCount rItem > 0
+            EquipItem rItem 1 1
+        endif
+    elseif eval iActionCode == 32 && rItem
+        if eval GetItemCount rItem > 0
+            UnequipItem rItem 1
+        endif
     else
         SetFunctionValue 0
         return
@@ -2571,6 +2589,119 @@ end
     return g_scriptInterface->CallFunctionAlt(g_inventoryActionFunction, speaker, 6,
         static_cast<UInt32>(actionCode), targetMod, targetLocal, itemMod, itemLocal,
         static_cast<UInt32>(amount));
+}
+
+bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
+                                   int actionCode,
+                                   bool& handled,
+                                   bool& usedCcc) {
+    handled = false;
+    usedCcc = false;
+    if (actionCode != 4 && actionCode != 5 && actionCode != 33) {
+        return false;
+    }
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunction || actorFormId == 0) {
+        return false;
+    }
+
+    std::vector<NativeLoadedPlugin> plugins;
+    if (!CaptureNativeLoadedPlugins(plugins)) {
+        return false;
+    }
+    const bool cccLoaded = std::any_of(plugins.begin(), plugins.end(), [](const NativeLoadedPlugin& plugin) {
+        std::string name = plugin.name;
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return name == "jip companions command & control.esp";
+    });
+    if (!cccLoaded) {
+        return false;
+    }
+
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* actor = FindLoadedReference(player, actorFormId);
+    if (!actor) {
+        return false;
+    }
+    if (!g_cccManagedQueryFunction) {
+        g_cccManagedQueryFunction = g_scriptInterface->CompileScript(R"(
+begin function {}
+    SetFunctionValue CCCInFaction JIPCCCIsHired
+end
+)");
+    }
+    if (!g_cccManagedQueryFunction) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC detected but managed companion query did not compile");
+        return false;
+    }
+
+    alignas(NVSEArrayVarInterface::Element)
+        unsigned char managedStorage[sizeof(NVSEArrayVarInterface::Element)]{};
+    auto* managedResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(managedStorage);
+    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult, 0) ||
+        managedResult->GetNumber() == 0.0) {
+        return false;
+    }
+    handled = true;
+    usedCcc = true;
+
+    if (!g_cccCompanionCommandFunction) {
+        g_cccCompanionCommandFunction = g_scriptInterface->CompileScript(R"(
+int iActionCode
+int iSlot
+int iTask
+ref rSelf
+begin function {iActionCode}
+    let rSelf := GetSelf
+    if eval CCCInFaction JIPCCCIsHired == 0
+        SetFunctionValue 0
+        return
+    endif
+    let iSlot := rSelf.Call JIPCCCGetSlot
+    if eval iSlot != -1
+        let iTask := JIPCCCActiveTasks.aTaskData[iSlot][0]
+        Call JIPCCCAbortTask iSlot, iTask, rSelf, 3
+    endif
+    RemoveScriptPackage
+    SetRestrained 0
+    StopCombat
+    RemoveFromFaction DialecticMoveToFaction
+    RemoveFromFaction DialecticFollowFaction
+    RemoveFromFaction DialecticTravelFaction
+    RemoveFromFaction DialecticWaitFaction
+    RemoveFromFaction DialecticSeatFaction
+    if eval iActionCode == 33
+        SetFactionRank JIPCCCCurrentTask 13
+        AddScriptPackage JIPCCCRelax
+    elseif eval iActionCode == 4 || iActionCode == 5
+        RemoveFromFaction JIPCCCCurrentTask
+        SetFactionRank JIPCCCFollowState 1
+        CCCSetFollowState 1
+        rSelf.Call JIPCCCAddPackages
+    else
+        SetFunctionValue 0
+        return
+    endif
+    EvaluatePackage
+    SetFunctionValue 1
+end
+)");
+    }
+    if (!g_cccCompanionCommandFunction) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion command did not compile");
+        return false;
+    }
+
+    alignas(NVSEArrayVarInterface::Element)
+        unsigned char commandStorage[sizeof(NVSEArrayVarInterface::Element)]{};
+    auto* commandResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(commandStorage);
+    if (!g_scriptInterface->CallFunction(g_cccCompanionCommandFunction, actor, nullptr,
+            commandResult, 1, static_cast<UInt32>(actionCode))) {
+        return false;
+    }
+    return commandResult->GetNumber() != 0.0;
 }
 
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {

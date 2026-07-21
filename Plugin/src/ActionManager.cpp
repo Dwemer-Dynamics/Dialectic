@@ -210,6 +210,8 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"consume", "Consume"},
         {"decreasewalkspeed", "DecreaseWalkSpeed"},
         {"endconversation", "EndConversation"},
+        {"equip", "EquipItem"},
+        {"equipitem", "EquipItem"},
         {"follow", "Follow"},
         {"followplayer", "FollowPlayer"},
         {"stopfollow", "StopFollowing"},
@@ -238,6 +240,8 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"pickupitem", "PickupItem"},
         {"readquests", "ReadQuests"},
         {"readquestjournal", "ReadQuests"},
+        {"relax", "Relax"},
+        {"relaxhere", "Relax"},
         {"directorcommand", "DirectorCommand"},
         {"spawncaps", "SpawnCaps"},
         {"spawngold", "SpawnCaps"},
@@ -252,6 +256,8 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"takegoldfromplayer", "TakeCapsFromPlayer"},
         {"travelto", "TravelTo"},
         {"traveltoraw", "TravelTo"},
+        {"unequip", "UnequipItem"},
+        {"unequipitem", "UnequipItem"},
         {"waithere", "WaitHere"},
         {"talk", "Talk"},
         {"justtalk", "Talk"},
@@ -527,6 +533,7 @@ const std::set<std::string>& CanonicalActions() {
         "Consume",
         "DecreaseWalkSpeed",
         "EndConversation",
+        "EquipItem",
         "Follow",
         "FollowPlayer",
         "GiveCapsTo",
@@ -540,6 +547,7 @@ const std::set<std::string>& CanonicalActions() {
         "OpenInventory",
         "PickupItem",
         "ReadQuests",
+        "Relax",
         "DirectorCommand",
         "SpawnCaps",
         "SpawnItem",
@@ -551,6 +559,7 @@ const std::set<std::string>& CanonicalActions() {
         "TakeASeat",
         "TakeCapsFromPlayer",
         "TravelTo",
+        "UnequipItem",
         "WaitHere",
         "Talk",
     };
@@ -588,6 +597,9 @@ int ActionCodeForAction(const std::string& action) {
     if (action == "SpawnItem") return 28;
     if (action == "TeleportActor") return 29;
     if (action == "KillTarget") return 30;
+    if (action == "EquipItem") return 31;
+    if (action == "UnequipItem") return 32;
+    if (action == "Relax") return 33;
     return 0;
 }
 
@@ -1084,6 +1096,21 @@ int NativeInventoryCount(std::uint32_t ownerFormId, std::uint32_t itemBaseFormId
     return 0;
 }
 
+bool NativeInventoryEquipped(std::uint32_t ownerFormId, std::uint32_t itemBaseFormId,
+                             bool& captured) {
+    std::vector<XNVSEAdapter::NativeInventoryItem> items;
+    captured = XNVSEAdapter::CaptureNativeInventory(ownerFormId, items);
+    if (!captured) {
+        return false;
+    }
+    for (const auto& item : items) {
+        if (item.baseFormId == itemBaseFormId) {
+            return item.equipped;
+        }
+    }
+    return false;
+}
+
 bool TryExecuteNativeInventoryAction(const ActionRequest& request, int actionCode, bool& handled) {
     handled = false;
     const std::uint32_t capsFormId = 0x0000000F;
@@ -1097,19 +1124,24 @@ bool TryExecuteNativeInventoryAction(const ActionRequest& request, int actionCod
         targetFormId = request.speakerFormId;
         itemBaseFormId = capsFormId;
     }
-    if (sourceFormId == 0 || (actionCode != 13 && targetFormId == 0) ||
+    const bool equipmentAction = actionCode == 31 || actionCode == 32;
+    if (sourceFormId == 0 || (actionCode != 13 && !equipmentAction && targetFormId == 0) ||
         itemBaseFormId == 0 || request.amount <= 0) {
         return false;
     }
 
     bool sourceCaptured = false;
-    bool targetCaptured = actionCode == 13;
+    bool targetCaptured = actionCode == 13 || equipmentAction;
     const int sourceBefore = NativeInventoryCount(sourceFormId, itemBaseFormId, sourceCaptured);
+    bool equippedBeforeCaptured = false;
+    const bool equippedBefore = equipmentAction
+        ? NativeInventoryEquipped(sourceFormId, itemBaseFormId, equippedBeforeCaptured)
+        : false;
     int targetBefore = 0;
-    if (actionCode != 13) {
+    if (actionCode != 13 && !equipmentAction) {
         targetBefore = NativeInventoryCount(targetFormId, itemBaseFormId, targetCaptured);
     }
-    if (!sourceCaptured || !targetCaptured) {
+    if (!sourceCaptured || !targetCaptured || (equipmentAction && !equippedBeforeCaptured)) {
         return false;
     }
     handled = true;
@@ -1119,13 +1151,35 @@ bool TryExecuteNativeInventoryAction(const ActionRequest& request, int actionCod
             request.action.c_str(), sourceFormId, itemBaseFormId, sourceBefore, request.amount);
         return false;
     }
+    if (actionCode == 31 && equippedBefore) {
+        SendFuncretResult(request, "EquipItem completed because the item was already equipped.");
+        return true;
+    }
+    if (actionCode == 32 && !equippedBefore) {
+        SendFuncretResult(request, "UnequipItem failed because item_not_equipped.");
+        return false;
+    }
     if (!XNVSEAdapter::ExecuteNativeInventoryAction(request.speakerFormId, targetFormId,
             itemBaseFormId, request.amount, actionCode)) {
         handled = false;
         return false;
     }
 
-    if (actionCode != 13) {
+    if (equipmentAction) {
+        bool equippedAfterCaptured = false;
+        const bool equippedAfter = NativeInventoryEquipped(
+            sourceFormId, itemBaseFormId, equippedAfterCaptured);
+        const bool expectedEquipped = actionCode == 31;
+        if (!equippedAfterCaptured || equippedAfter != expectedEquipped) {
+            SendFuncretResult(request, request.action +
+                " failed because equipment_state_not_observed.");
+            Logger::LogWarning("[NATIVE_ACTION] %s state mismatch item=0x%08X equipped=%d->%d expected=%d",
+                request.action.c_str(), itemBaseFormId, equippedBefore ? 1 : 0,
+                equippedAfter ? 1 : 0, expectedEquipped ? 1 : 0);
+            return false;
+        }
+        AgentManager::RequestActorSnapshot(request.speakerFormId, request.speaker);
+    } else if (actionCode != 13) {
         bool sourceAfterCaptured = false;
         bool targetAfterCaptured = false;
         const int sourceAfter = NativeInventoryCount(sourceFormId, itemBaseFormId, sourceAfterCaptured);
@@ -1764,7 +1818,8 @@ AgentManager::NPCData CollectSnapshotForAction(uint32_t actorRefId, const std::s
 }
 
 bool ResolveInventoryItemBase(ActionRequest& request, std::string& errorReason) {
-    if (request.action != "GiveItemTo" && request.action != "Consume") {
+    const bool equipmentAction = request.action == "EquipItem" || request.action == "UnequipItem";
+    if (request.action != "GiveItemTo" && request.action != "Consume" && !equipmentAction) {
         return true;
     }
 
@@ -1812,6 +1867,15 @@ bool ResolveInventoryItemBase(ActionRequest& request, std::string& errorReason) 
     request.itemInventoryIndex = selectedIndex;
     request.itemInventoryCount = selected->count;
     request.itemInventoryType = selected->type;
+
+    if (equipmentAction && selected->type != 0x18 && selected->type != 0x28) {
+        errorReason = "item_not_equippable";
+        return false;
+    }
+    if (request.action == "UnequipItem" && !selected->equipped) {
+        errorReason = "item_not_equipped";
+        return false;
+    }
 
     if (request.action == "GiveItemTo") {
         const std::string selectedName = selected->name.empty() ? itemText : selected->name;
@@ -3209,7 +3273,8 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                     request.speakerFormId, request.targetFormId);
                 return;
             }
-            if (actionCode == 9 || actionCode == 10 || actionCode == 11 || actionCode == 13) {
+            if (actionCode == 9 || actionCode == 10 || actionCode == 11 || actionCode == 13 ||
+                actionCode == 31 || actionCode == 32) {
                 bool handled = false;
                 TryExecuteNativeInventoryAction(request, actionCode, handled);
                 if (handled) {
@@ -3250,7 +3315,21 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
 
             const bool packageNativeAction = actionCode == 4 || actionCode == 5 ||
                 actionCode == 6 || actionCode == 7 || actionCode == 8 ||
-                actionCode == 18 || actionCode == 20 || actionCode == 21;
+                actionCode == 18 || actionCode == 20 || actionCode == 21 || actionCode == 33;
+            if ((actionCode == 4 || actionCode == 5 || actionCode == 33)) {
+                bool handledByCompanionAdapter = false;
+                bool usedCcc = false;
+                if (XNVSEAdapter::ExecuteNativeCompanionCommand(
+                        request.speakerFormId, actionCode, handledByCompanionAdapter, usedCcc) &&
+                    handledByCompanionAdapter) {
+                    TrackNativePackageAction(request);
+                    SendFuncretResult(request, request.action + " started successfully.");
+                    Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                    Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
+                        request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                    return;
+                }
+            }
             if (packageNativeAction && XNVSEAdapter::ExecuteNativePackageAction(
                     request.speakerFormId, request.targetFormId, actionCode)) {
                 TrackNativePackageAction(request);
@@ -3798,12 +3877,14 @@ void UpdateNativePackageStates() {
             RuntimeSnapshot::ActorState speaker;
             const bool speakerReady = RuntimeSnapshot::TryGetActor(it->first, speaker) &&
                 !speaker.deleted && !speaker.dead && speaker.loaded3D;
-            if (!shouldCleanup && !speakerReady) {
+            const std::string& action = state.request.action;
+            const bool persistentCompanionState = action == "MakeFollower" || action == "FollowPlayer" ||
+                action == "WaitHere" || action == "Relax";
+            if (!shouldCleanup && !speakerReady && !persistentCompanionState) {
                 shouldCleanup = true;
                 reason = "speaker_left_scene";
             }
 
-            const std::string& action = state.request.action;
             if (!shouldCleanup && (action == "ComeCloser" || action == "MoveTo" || action == "TravelTo")) {
                 float distance = speaker.distanceToPlayer;
                 float threshold = action == "TravelTo" ? 180.0f : 110.0f;

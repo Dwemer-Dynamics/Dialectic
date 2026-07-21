@@ -76,4 +76,7 @@ void SubmitCapturedDialogue(const std::string& source,
                             bool menuMode,
                             const std::string& captureId);
 
+// Queue a normalized gameplay event for the existing RPG comment pipeline.
+void QueueRpgCommentEvent(const std::string& eventType, const std::string& eventText);
+
 } // namespace GameLoop
