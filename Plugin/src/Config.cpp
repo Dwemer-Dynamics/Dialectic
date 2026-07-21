@@ -1144,11 +1144,7 @@ namespace Config {
         iniFile << "SendVoiceSamples=0\n";
         iniFile << "UpdateTargetProfile=0\n";
         iniFile << "UpdateNearbyProfiles=0\n";
-        iniFile << "UpdateNarratorProfile=0\n";
-        iniFile << "OpenModeMenu=0\n";
-        iniFile << "ModeChanged=0\n";
-        iniFile << "OpenLLMModelMenu=0\n";
-        iniFile << "OpenDynamicProfileMenu=0\n\n";
+        iniFile << "UpdateNarratorProfile=0\n\n";
         
         iniFile << "[ExcludedRaces]\n";
         iniFile << "; Races to exclude from AI agents (by name, one per line)\n";

@@ -1973,9 +1973,6 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
             name = "mode";
             source = R"(
 begin function {}
-    if MenuMode
-        return
-    endif
     MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Modes^Select active mode:|Standard|Whisper|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode"
 end
 )";
@@ -1985,9 +1982,6 @@ end
             name = "llm_model";
             source = R"(
 begin function {}
-    if MenuMode
-        return
-    endif
     MessageBoxExAlt (CompileScript "Dialectic/LLMModelMenuSelect.gek") "^Dialectic LLM Model^Select active LLM connector slot:|Standard LLM|Fast LLM|Powerful LLM|Experimental LLM"
 end
 )";
@@ -1997,9 +1991,6 @@ end
             name = "dynamic_profile";
             source = R"(
 begin function {}
-    if MenuMode
-        return
-    endif
     MessageBoxExAlt (CompileScript "Dialectic/DynamicProfileMenuSelect.gek") "^Dialectic Dynamic Profiles^Select profile update target:|Target NPC|Nearby AI NPCs|Narrator"
 end
 )";

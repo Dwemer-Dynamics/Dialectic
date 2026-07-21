@@ -1,7 +1,0 @@
-int iButton
-
-begin function {iButton}
-    ; Deprecated compatibility shim.
-    ; Older saves may still have this handler registered broadly. Do not halt
-    ; here; the configurable hotkey path is handled by HotkeyKeyDown.txt.
-end
