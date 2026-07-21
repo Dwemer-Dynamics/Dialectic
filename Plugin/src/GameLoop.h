@@ -61,6 +61,7 @@ bool IsVoiceInputActive();
 void HaltAIActionsNow();
 void RequestTextInputMenuOpen();
 bool IsTextInputMenuActiveOrRecentlyClosed();
+void MarkRuntimeConfigDirty();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
 void RequestDynamicProfileMenuOpen();
@@ -74,5 +75,8 @@ void SubmitCapturedDialogue(const std::string& source,
                             bool isPlayerLine,
                             bool menuMode,
                             const std::string& captureId);
+
+// Queue a normalized gameplay event for the existing RPG comment pipeline.
+void QueueRpgCommentEvent(const std::string& eventType, const std::string& eventText);
 
 } // namespace GameLoop

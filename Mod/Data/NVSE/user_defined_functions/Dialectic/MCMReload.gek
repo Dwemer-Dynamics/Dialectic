@@ -6,5 +6,6 @@ array_var aJSON
 
 Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
     DialecticReloadConfig
-    call (CompileScript "Dialectic/RegisterHotkeys.gek")
+    ; Fallback for environments where the native command is unavailable.
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_reload_runtime.tmp" 0 "reload=1%r"
 End

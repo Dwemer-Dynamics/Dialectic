@@ -7,15 +7,12 @@ Begin Function {iButton}
 
     if eval iButton == 0
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dynamic_profile_select.tmp" 0 "0\n"
-        SetINIIntC "Tools:UpdateTargetProfile" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
         PrintC "[Dialectic] Requesting target dynamic profile update"
     elseif eval iButton == 1
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dynamic_profile_select.tmp" 0 "1\n"
-        SetINIIntC "Tools:UpdateNearbyProfiles" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
         PrintC "[Dialectic] Requesting nearby dynamic profile updates"
     elseif eval iButton == 2
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dynamic_profile_select.tmp" 0 "2\n"
-        SetINIIntC "Tools:UpdateNarratorProfile" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
         PrintC "[Dialectic] Requesting Narrator dynamic profile update"
     endif
 End

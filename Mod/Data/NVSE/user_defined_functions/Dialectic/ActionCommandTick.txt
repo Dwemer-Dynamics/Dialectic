@@ -879,6 +879,20 @@ begin function {}
         else
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=missing_item_base item=%z%r" sRequestId sAction sItem
         endif
+    elseif eval iActionCode == 31
+        if eval sItemBase && sv_Length sItemBase > 0
+            set fResult1 to Console "EquipItem %z 1 1" sItemBase
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok item_base=%z%r" sRequestId sAction sItemBase
+        else
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=missing_item_base item=%z%r" sRequestId sAction sItemBase
+        endif
+    elseif eval iActionCode == 32
+        if eval sItemBase && sv_Length sItemBase > 0
+            set fResult1 to Console "UnequipItem %z 1" sItemBase
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok item_base=%z%r" sRequestId sAction sItemBase
+        else
+            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=error reason=missing_item_base item=%z%r" sRequestId sAction sItemBase
+        endif
     elseif eval iActionCode == 14
         set fResult1 to Console "ModAV SpeedMult 20"
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok speaker=%z result=%.0f%r" sRequestId sAction sSpeakerRef fResult1
@@ -918,6 +932,15 @@ begin function {}
             let fResult4 := 1
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok speaker=%z%r" sRequestId sAction sSpeakerRef
         endif
+    elseif eval iActionCode == 33
+        rSpeaker.AddToFaction DialecticWaitFaction 0
+        SetPackageLocationReference DialecticWaitPackage rSpeaker
+        SetPackageTargetDistance DialecticWaitPackage 96
+        rSpeaker.AddScriptPackage DialecticWaitPackage
+        rSpeaker.StopCombat
+        rSpeaker.SetWeaponOut 0
+        rSpeaker.EvaluatePackage
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "id=%z action=%z status=ok speaker=%z reason=relax_wait_fallback%r" sRequestId sAction sSpeakerRef
     elseif eval iActionCode == 19
         rSpeaker.RemoveScriptPackage
         rSpeaker.StopCombat

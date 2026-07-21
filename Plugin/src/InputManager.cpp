@@ -2,8 +2,12 @@
 
 #include "InputManager.h"
 #include "Config.h"
+#include "GameLoop.h"
+#include "RuntimeSnapshot.h"
 #include <unordered_map>
 #include <array>
+#include <algorithm>
+#include <vector>
 
 // Forward declare Log from main.cpp
 void Log(const char* fmt, ...);
@@ -16,11 +20,13 @@ static std::unordered_map<HotkeyAction, int> g_hotkeyBindings;
 // Previous frame key states
 static std::array<bool, 256> g_prevKeyStates;
 static std::array<bool, 256> g_currKeyStates;
+static std::vector<int> g_polledVirtualKeys;
 
 // Action triggered flags for this frame
 static std::unordered_map<HotkeyAction, bool> g_actionTriggered;
 static std::unordered_map<HotkeyAction, ULONGLONG> g_lastActionClaims;
 static bool g_wasGameForeground = false;
+static bool g_wasInputAllowed = false;
 
 // Scancode to VK mapping (Fallout/Bethesda games use DirectInput scancodes)
 static std::unordered_map<int, int> g_scancodeToVK = {
@@ -58,6 +64,46 @@ static std::unordered_map<int, int> g_scancodeToVK = {
     {259, VK_XBUTTON1}, {260, VK_XBUTTON2}
 };
 
+static void RebuildPolledKeys() {
+    g_polledVirtualKeys.clear();
+    for (const auto& [action, virtualKey] : g_hotkeyBindings) {
+        (void)action;
+        if (virtualKey <= 0 || virtualKey >= 256) {
+            continue;
+        }
+        if (std::find(g_polledVirtualKeys.begin(), g_polledVirtualKeys.end(), virtualKey) ==
+            g_polledVirtualKeys.end()) {
+            g_polledVirtualKeys.push_back(virtualKey);
+        }
+    }
+}
+
+static void PrimePolledKeys() {
+    for (const int virtualKey : g_polledVirtualKeys) {
+        const bool held = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+        g_currKeyStates[virtualKey] = held;
+        g_prevKeyStates[virtualKey] = held;
+    }
+    g_actionTriggered.clear();
+}
+
+static bool IsRuntimeInputAllowed() {
+    if (!IsGameForeground() || GameLoop::IsTextInputMenuActiveOrRecentlyClosed()) {
+        return false;
+    }
+
+    RuntimeSnapshot::GameState state;
+    if (!RuntimeSnapshot::TryGetFreshGameState(state, std::chrono::milliseconds(500))) {
+        const GameLoop::GameState& fallback = GameLoop::GetGameState();
+        return fallback.isInGame && !fallback.isInMenu && !fallback.isPaused &&
+            !fallback.isInDialogue && !fallback.isLoading;
+    }
+
+    return state.inGame && !state.inMenu && !state.paused && !state.pipboyOpen &&
+        !state.pauseMenuOpen && !state.dialogueMenuOpen && !state.barterMenuOpen &&
+        !state.containerMenuOpen && !state.loadingMenuOpen;
+}
+
 void Initialize() {
     Log("InputManager: Initializing...");
     
@@ -67,8 +113,9 @@ void Initialize() {
     g_actionTriggered.clear();
     g_lastActionClaims.clear();
     g_wasGameForeground = IsGameForeground();
+    g_wasInputAllowed = false;
     
-    // Default hotkeys are unbound. V is handled separately by the in-game text script.
+    // Default hotkeys are unbound and become active only after MCM/INI configuration.
     g_hotkeyBindings[HotkeyAction::TalkToNPC] = 0;
     g_hotkeyBindings[HotkeyAction::StopTalking] = 0;
     g_hotkeyBindings[HotkeyAction::ToggleVoice] = 0;
@@ -94,6 +141,7 @@ void Shutdown() {
     g_hotkeyBindings.clear();
     g_actionTriggered.clear();
     g_lastActionClaims.clear();
+    g_polledVirtualKeys.clear();
 }
 
 bool IsGameForeground() {
@@ -110,30 +158,27 @@ bool IsGameForeground() {
 void Update() {
     const bool gameForeground = IsGameForeground();
     if (!gameForeground) {
-        g_prevKeyStates.fill(false);
-        g_currKeyStates.fill(false);
+        for (const int virtualKey : g_polledVirtualKeys) {
+            g_prevKeyStates[virtualKey] = false;
+            g_currKeyStates[virtualKey] = false;
+        }
         g_actionTriggered.clear();
         g_wasGameForeground = false;
+        g_wasInputAllowed = false;
         return;
     }
 
-    // Sample held keys without creating edges when focus returns to Fallout.
-    if (!g_wasGameForeground) {
-        for (int i = 0; i < 256; i++) {
-            g_currKeyStates[i] = (GetAsyncKeyState(i) & 0x8000) != 0;
-        }
-        g_prevKeyStates = g_currKeyStates;
-        g_actionTriggered.clear();
+    const bool inputAllowed = IsRuntimeInputAllowed();
+    if (!g_wasGameForeground || !inputAllowed || !g_wasInputAllowed) {
+        PrimePolledKeys();
         g_wasGameForeground = true;
+        g_wasInputAllowed = inputAllowed;
         return;
     }
 
-    // Save previous states
-    g_prevKeyStates = g_currKeyStates;
-    
-    // Poll current key states
-    for (int i = 0; i < 256; i++) {
-        g_currKeyStates[i] = (GetAsyncKeyState(i) & 0x8000) != 0;
+    for (const int virtualKey : g_polledVirtualKeys) {
+        g_prevKeyStates[virtualKey] = g_currKeyStates[virtualKey];
+        g_currKeyStates[virtualKey] = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
     }
     
     // Check hotkey actions
@@ -187,6 +232,8 @@ KeyState GetKeyState(int virtualKey) {
 
 void SetHotkey(HotkeyAction action, int virtualKey) {
     g_hotkeyBindings[action] = virtualKey;
+    RebuildPolledKeys();
+    PrimePolledKeys();
 }
 
 int GetHotkey(HotkeyAction action) {
@@ -240,6 +287,8 @@ void LoadConfig() {
     g_hotkeyBindings[HotkeyAction::DynamicProfileMenu] = normalizeConfiguredKey(HotkeyAction::DynamicProfileMenu, dynamicProfileMenuKey);
     g_hotkeyBindings[HotkeyAction::ToggleModes] = normalizeConfiguredKey(HotkeyAction::ToggleModes, toggleModesKey);
     g_hotkeyBindings[HotkeyAction::ToggleLLMModel] = normalizeConfiguredKey(HotkeyAction::ToggleLLMModel, toggleLLMModelKey);
+    RebuildPolledKeys();
+    PrimePolledKeys();
 
     Log("InputManager: loaded raw hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d",
         talkKey,
@@ -259,6 +308,7 @@ void LoadConfig() {
         g_hotkeyBindings[HotkeyAction::ToggleModes],
         g_hotkeyBindings[HotkeyAction::ToggleLLMModel],
         g_hotkeyBindings[HotkeyAction::DynamicProfileMenu]);
+    Log("InputManager: polling %zu configured unique keys", g_polledVirtualKeys.size());
 }
 
 void SaveConfig() {

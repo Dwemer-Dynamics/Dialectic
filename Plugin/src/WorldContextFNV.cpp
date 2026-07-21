@@ -3,6 +3,7 @@
 #include "WorldContextFNV.h"
 
 #include "Config.h"
+#include "GameLoop.h"
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
@@ -34,6 +35,7 @@ static Context g_context;
 static std::chrono::steady_clock::time_point g_lastBridgeReadTime;
 static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::string g_lastSentSignature;
+static std::string g_lastCommentLocation;
 static constexpr auto kBridgeReadInterval = std::chrono::milliseconds(500);
 static bool g_saveLoadPending = false;
 static bool g_saveLoadCompleted = false;
@@ -88,6 +90,27 @@ std::string ToLower(std::string value) {
 bool IsUnknown(const std::string& value) {
     const std::string lower = ToLower(Trim(value));
     return lower.empty() || lower == "unknown" || lower == "none" || lower == "null";
+}
+
+bool IsCommentableLocation(const std::string& value) {
+    return !IsUnknown(value) && ToLower(Trim(value)) != "unknown location";
+}
+
+void QueueLocationChangedComment(const Context& context) {
+    if (!IsCommentableLocation(context.location)) {
+        return;
+    }
+    if (g_lastCommentLocation.empty()) {
+        g_lastCommentLocation = context.location;
+        return;
+    }
+    if (context.location == g_lastCommentLocation) {
+        return;
+    }
+    const std::string previousLocation = g_lastCommentLocation;
+    g_lastCommentLocation = context.location;
+    GameLoop::QueueRpgCommentEvent("location_changed",
+        "The group entered " + context.location + " after leaving " + previousLocation);
 }
 
 bool ParseBool(const std::string& value, bool fallback = false) {
@@ -455,6 +478,7 @@ void BeginSaveLoad() {
     g_lastBridgeReadTime = {};
     g_lastSendTime = {};
     g_lastSentSignature.clear();
+    g_lastCommentLocation.clear();
     Logger::LogInfo("WorldContextFNV: waiting for fresh bridge after save load");
 }
 
@@ -507,6 +531,7 @@ void SendNow(bool force) {
     g_lastSendTime = now;
     g_lastSentSignature = signature;
     SendContext(context);
+    QueueLocationChangedComment(context);
 }
 
 void Update() {
@@ -539,6 +564,7 @@ void Update() {
         g_lastSendTime = now;
         g_lastSentSignature = signature;
         SendContext(context);
+        QueueLocationChangedComment(context);
     }
 }
 

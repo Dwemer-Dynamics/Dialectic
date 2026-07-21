@@ -42,6 +42,7 @@ SetEventHandler "OnLockPickSuccess" (CompileScript "Dialectic/RpgLockpickSuccess
 SetEventHandler "ITR:OnDialogueText" (CompileScript "Dialectic/DialogueGuardInterruptHandler.txt")
 SetEventHandler "ITR:OnSoundPlayed" (CompileScript "Dialectic/DialogueGuardSoundHandler.txt")
 SetEventHandler "MCMExtMenuState" (CompileScript "Dialectic/RecordingDeviceMenuState.gek")
+SetEventHandlerAlt "ShowOff:OnPCMiscStatChange" (CompileScript "Dialectic/FalloutStatChanged.gek")
 
 if IsComponentLoaded "HUDMainMenu\DialecticPassiveSubtitle"
     UnloadUIComponent "HUDMainMenu\DialecticPassiveSubtitle"
@@ -71,6 +72,7 @@ CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/ActiveQuestDirectTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/VoiceSampleUploadTick.txt") 0
+CallAfterSeconds 3.00 (CompileScript "Dialectic/CollectFalloutStats.gek") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
 

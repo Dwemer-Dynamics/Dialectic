@@ -592,8 +592,8 @@ namespace Config {
             serverPath.c_str());
     }
 
-    void Load() {
-        Logger::LogSection("LOADING CONFIGURATION");
+    static void LoadInternal(bool resolveConnection) {
+        Logger::LogSection(resolveConnection ? "LOADING CONFIGURATION" : "RELOADING RUNTIME SETTINGS");
         
         EnsureCustomINIExists();
         const std::string defaultIniPath = GetDefaultINIPath();
@@ -632,7 +632,7 @@ namespace Config {
                 std::string key = Trim(line.substr(0, equalsPos));
                 std::string value = Trim(line.substr(equalsPos + 1));
                 
-                if (currentSection == "Server") {
+                if (currentSection == "Server" && resolveConnection) {
                     if (key == "Host") serverHost = value;
                     else if (key == "Port") ParsePort(value, serverPort, iniPath.c_str());
                     else if (key == "Path") serverPath = value;
@@ -837,7 +837,9 @@ namespace Config {
             iniFile.close();
         }
 
-        ResolveServerConnection();
+        if (resolveConnection) {
+            ResolveServerConnection();
+        }
 
         // Always protect AI speech from overlapping vanilla/radiant dialogue.
         suppressVanillaDialogueDuringAI = true;
@@ -864,11 +866,21 @@ namespace Config {
         nearbyItemsEnabled = true;
         pointsOfInterestEnabled = true;
 
-        currentModeIndex = 0;
-        currentMode = kModeNames[0];
-        currentProfileModelSlot = 1;
-        narratorModeEnabled = false;
+        if (resolveConnection) {
+            currentModeIndex = 0;
+            currentMode = kModeNames[0];
+            currentProfileModelSlot = 1;
+            narratorModeEnabled = false;
+        }
 
+    }
+
+    void Load() {
+        LoadInternal(true);
+    }
+
+    void LoadRuntimeSettings() {
+        LoadInternal(false);
     }
 
     void Save() {
