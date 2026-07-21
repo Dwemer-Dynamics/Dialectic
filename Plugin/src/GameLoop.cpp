@@ -63,7 +63,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.5"
+#define DIALECTIC_VERSION "0.5.7"
 #endif
 
 // Forward declarations
