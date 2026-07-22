@@ -59,11 +59,11 @@
 #include "Console.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.7"
+#define DIALECTIC_VERSION "0.6.0"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
-#define DIALECTIC_PLUGIN_INFO_VERSION 505
+#define DIALECTIC_PLUGIN_INFO_VERSION 600
 #endif
 
 // Global variables
@@ -1258,14 +1258,32 @@ static bool Cmd_DialecticMarkPlayerInventoryDirty_Execute(COMMAND_ARGS) {
 }
 
 static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
-    // Deprecated ABI slot. Runtime hotkeys are owned exclusively by InputManager.
+    int scanCode = 0;
     *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, true) ? 1 : 0;
+    }
     return true;
 }
 
 static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
-    // Deprecated ABI slot. Runtime hotkeys are owned exclusively by InputManager.
+    int scanCode = 0;
     *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, true) ? 1 : 0;
+    }
+    return true;
+}
+
+static bool Cmd_DialecticHandleHotkeyUp_Execute(COMMAND_ARGS) {
+    int scanCode = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, false) ? 1 : 0;
+    }
     return true;
 }
 
@@ -1439,13 +1457,18 @@ static CommandInfo kCommandInfo_DialecticMarkPlayerInventoryDirty = {
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHotkey = {
-    "DialecticHandleHotkey", "", 0, "Deprecated hotkey bridge ABI slot.", 0, 1,
+    "DialecticHandleHotkey", "", 0, "Queues a configured Dialectic hotkey scan-code press.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkey_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHaltHotkey = {
-    "DialecticHandleHaltHotkey", "", 0, "Deprecated halt-hotkey bridge ABI slot.", 0, 1,
+    "DialecticHandleHaltHotkey", "", 0, "Compatibility alias for a configured hotkey scan-code press.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHaltHotkey_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticHandleHotkeyUp = {
+    "DialecticHandleHotkeyUp", "", 0, "Releases a configured Dialectic hotkey scan code.", 0, 1,
+    kParams_Integer, Cmd_DialecticHandleHotkeyUp_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigIntById = {
@@ -1520,7 +1543,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticGetRecordingDeviceName,
         &kCommandInfo_DialecticGetCurrentRecordingDevice,
         &kCommandInfo_DialecticSetRecordingDevice,
-        &kCommandInfo_DialecticUpdateFalloutStat
+        &kCommandInfo_DialecticUpdateFalloutStat,
+        &kCommandInfo_DialecticHandleHotkeyUp
     };
 
     for (CommandInfo* command : commands) {

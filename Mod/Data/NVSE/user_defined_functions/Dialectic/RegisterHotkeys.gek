@@ -1,0 +1,59 @@
+int iTalk
+int iVoice
+int iManual
+int iModes
+int iLLM
+int iHalt
+int iDynamic
+int iOpenMicMute
+
+begin function {}
+    ; A handler without a scan-code argument removes every prior registration
+    ; for that UDF, including bindings retained by an existing save.
+    SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 0
+    SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 0
+
+    let iTalk := DialecticGetConfigInt "Hotkeys" "TalkToNPC" 0
+    let iVoice := DialecticGetConfigInt "Hotkeys" "ToggleVoice" 0
+    let iManual := DialecticGetConfigInt "Hotkeys" "ManualActivate" 0
+    let iModes := DialecticGetConfigInt "Hotkeys" "ToggleModes" 0
+    let iLLM := DialecticGetConfigInt "Hotkeys" "ToggleLLMModel" 0
+    let iHalt := DialecticGetConfigInt "Hotkeys" "StopTalking" 0
+    let iDynamic := DialecticGetConfigInt "Hotkeys" "DynamicProfileMenu" 0
+    let iOpenMicMute := DialecticGetConfigInt "Hotkeys" "OpenMicMute" 0
+
+    if iTalk > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iTalk
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iTalk
+    endif
+    if iVoice > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iVoice
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iVoice
+    endif
+    if iManual > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iManual
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iManual
+    endif
+    if iModes > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iModes
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iModes
+    endif
+    if iLLM > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iLLM
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iLLM
+    endif
+    if iHalt > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iHalt
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iHalt
+    endif
+    if iDynamic > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iDynamic
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iDynamic
+    endif
+    if iOpenMicMute > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iOpenMicMute
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iOpenMicMute
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 owner=jip_events talk=%g voice=%g manual=%g modes=%g llm=%g halt=%g dynamic=%g open_mic_mute=%g%r" iTalk iVoice iManual iModes iLLM iHalt iDynamic iOpenMicMute
+end

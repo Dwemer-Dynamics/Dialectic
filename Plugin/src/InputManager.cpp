@@ -1,93 +1,57 @@
-// InputManager.cpp - Hotkey input handling for Dialectic
+// InputManager.cpp - Event-driven hotkey input handling for Dialectic
 
 #include "InputManager.h"
 #include "Config.h"
 #include "GameLoop.h"
 #include "RuntimeSnapshot.h"
-#include <unordered_map>
-#include <array>
-#include <algorithm>
-#include <vector>
 
-// Forward declare Log from main.cpp
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
+#include <array>
+#include <atomic>
+#include <chrono>
+
 void Log(const char* fmt, ...);
 
 namespace InputManager {
+namespace {
 
-// Hotkey bindings (action -> virtual key code)
-static std::unordered_map<HotkeyAction, int> g_hotkeyBindings;
+constexpr std::size_t kActionCount = static_cast<std::size_t>(HotkeyAction::Count);
+static_assert(kActionCount <= 32, "Hotkey pending-state mask must fit in uint32_t");
 
-// Previous frame key states
-static std::array<bool, 256> g_prevKeyStates;
-static std::array<bool, 256> g_currKeyStates;
-static std::vector<int> g_polledVirtualKeys;
+std::array<std::atomic<int>, kActionCount> g_hotkeyBindings{};
+std::array<ULONGLONG, kActionCount> g_lastActionClaims{};
+std::atomic<uint32_t> g_pendingActions{0};
+std::atomic<uint32_t> g_heldActions{0};
 
-// Action triggered flags for this frame
-static std::unordered_map<HotkeyAction, bool> g_actionTriggered;
-static std::unordered_map<HotkeyAction, ULONGLONG> g_lastActionClaims;
-static bool g_wasGameForeground = false;
-static bool g_wasInputAllowed = false;
-
-// Scancode to VK mapping (Fallout/Bethesda games use DirectInput scancodes)
-static std::unordered_map<int, int> g_scancodeToVK = {
-    {1, VK_ESCAPE},
-    {2, '1'}, {3, '2'}, {4, '3'}, {5, '4'}, {6, '5'},
-    {7, '6'}, {8, '7'}, {9, '8'}, {10, '9'}, {11, '0'},
-    {12, VK_OEM_MINUS}, {13, VK_OEM_PLUS}, {14, VK_BACK}, {15, VK_TAB},
-    {16, 'Q'}, {17, 'W'}, {18, 'E'}, {19, 'R'}, {20, 'T'},
-    {21, 'Y'}, {22, 'U'}, {23, 'I'}, {24, 'O'}, {25, 'P'},
-    {26, VK_OEM_4}, {27, VK_OEM_6}, {28, VK_RETURN}, {29, VK_CONTROL},
-    {30, 'A'}, {31, 'S'}, {32, 'D'}, {33, 'F'}, {34, 'G'},
-    {35, 'H'}, {36, 'J'}, {37, 'K'}, {38, 'L'},
-    {39, VK_OEM_1}, {40, VK_OEM_7}, {41, VK_OEM_3}, {42, VK_SHIFT},
-    {43, VK_OEM_5}, {44, 'Z'}, {45, 'X'}, {46, 'C'}, {47, 'V'},
-    {48, 'B'}, {49, 'N'}, {50, 'M'},
-    {51, VK_OEM_COMMA}, {52, VK_OEM_PERIOD}, {53, VK_OEM_2},
-    {54, VK_RSHIFT}, {55, VK_MULTIPLY}, {56, VK_MENU}, {57, VK_SPACE},
-    {58, VK_CAPITAL},
-    {59, VK_F1}, {60, VK_F2}, {61, VK_F3}, {62, VK_F4}, {63, VK_F5},
-    {64, VK_F6}, {65, VK_F7}, {66, VK_F8}, {67, VK_F9}, {68, VK_F10},
-    {69, VK_NUMLOCK}, {70, VK_SCROLL},
-    {71, VK_NUMPAD7}, {72, VK_NUMPAD8}, {73, VK_NUMPAD9}, {74, VK_SUBTRACT},
-    {75, VK_NUMPAD4}, {76, VK_NUMPAD5}, {77, VK_NUMPAD6}, {78, VK_ADD},
-    {79, VK_NUMPAD1}, {80, VK_NUMPAD2}, {81, VK_NUMPAD3},
-    {82, VK_NUMPAD0}, {83, VK_DECIMAL},
-    {87, VK_F11}, {88, VK_F12},
-    {156, VK_RETURN}, {157, VK_RCONTROL}, {181, VK_DIVIDE},
-    {183, VK_SNAPSHOT}, {184, VK_RMENU},
-    {199, VK_HOME}, {200, VK_UP}, {201, VK_PRIOR},
-    {203, VK_LEFT}, {205, VK_RIGHT},
-    {207, VK_END}, {208, VK_DOWN}, {209, VK_NEXT},
-    {210, VK_INSERT}, {211, VK_DELETE},
-    // Mouse buttons
-    {256, VK_LBUTTON}, {257, VK_RBUTTON}, {258, VK_MBUTTON},
-    {259, VK_XBUTTON1}, {260, VK_XBUTTON2}
-};
-
-static void RebuildPolledKeys() {
-    g_polledVirtualKeys.clear();
-    for (const auto& [action, virtualKey] : g_hotkeyBindings) {
-        (void)action;
-        if (virtualKey <= 0 || virtualKey >= 256) {
-            continue;
-        }
-        if (std::find(g_polledVirtualKeys.begin(), g_polledVirtualKeys.end(), virtualKey) ==
-            g_polledVirtualKeys.end()) {
-            g_polledVirtualKeys.push_back(virtualKey);
-        }
-    }
+constexpr std::size_t ActionIndex(HotkeyAction action) {
+    return static_cast<std::size_t>(action);
 }
 
-static void PrimePolledKeys() {
-    for (const int virtualKey : g_polledVirtualKeys) {
-        const bool held = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
-        g_currKeyStates[virtualKey] = held;
-        g_prevKeyStates[virtualKey] = held;
-    }
-    g_actionTriggered.clear();
+constexpr uint32_t ActionBit(HotkeyAction action) {
+    return uint32_t{1} << ActionIndex(action);
 }
 
-static bool IsRuntimeInputAllowed() {
+const char* ActionName(HotkeyAction action) {
+    switch (action) {
+        case HotkeyAction::TalkToNPC: return "TalkToNPC";
+        case HotkeyAction::StopTalking: return "StopTalking";
+        case HotkeyAction::ToggleVoice: return "ToggleVoice";
+        case HotkeyAction::OpenMicMute: return "OpenMicMute";
+        case HotkeyAction::ManualActivateNPC: return "ManualActivateNPC";
+        case HotkeyAction::OpenMenu: return "OpenMenu";
+        case HotkeyAction::QuickCommand: return "QuickCommand";
+        case HotkeyAction::DynamicProfileMenu: return "DynamicProfileMenu";
+        case HotkeyAction::ToggleModes: return "ToggleModes";
+        case HotkeyAction::ToggleLLMModel: return "ToggleLLMModel";
+        case HotkeyAction::Count: break;
+    }
+    return "Unknown";
+}
+
+bool IsRuntimeInputAllowed() {
     if (!IsGameForeground() || GameLoop::IsTextInputMenuActiveOrRecentlyClosed()) {
         return false;
     }
@@ -99,58 +63,50 @@ static bool IsRuntimeInputAllowed() {
             !fallback.isInDialogue && !fallback.isLoading;
     }
 
-    // InterfaceManager's broad menu-mode flag can remain set briefly after
-    // lightweight UI closes. Explicit blocking menus are authoritative here.
     return state.inGame && !state.paused && !state.pipboyOpen &&
         !state.pauseMenuOpen && !state.dialogueMenuOpen && !state.barterMenuOpen &&
         !state.containerMenuOpen && !state.loadingMenuOpen;
 }
 
+uint32_t MatchingActionMask(int scanCode) {
+    if (scanCode <= 0) return 0;
+
+    uint32_t mask = 0;
+    for (std::size_t i = 0; i < kActionCount; ++i) {
+        if (g_hotkeyBindings[i].load(std::memory_order_relaxed) == scanCode) {
+            mask |= uint32_t{1} << i;
+        }
+    }
+    return mask;
+}
+
+void WriteBinding(const char* key, HotkeyAction action) {
+    char buffer[32] = {};
+    sprintf_s(buffer, "%d", GetHotkey(action));
+    WritePrivateProfileStringA("Hotkeys", key, buffer, Config::GetCustomINIPath());
+}
+
+} // namespace
+
 void Initialize() {
-    Log("InputManager: Initializing...");
-    
-    // Clear states
-    g_prevKeyStates.fill(false);
-    g_currKeyStates.fill(false);
-    g_actionTriggered.clear();
-    g_lastActionClaims.clear();
-    g_wasGameForeground = IsGameForeground();
-    g_wasInputAllowed = false;
-    
-    // Default hotkeys are unbound and become active only after MCM/INI configuration.
-    g_hotkeyBindings[HotkeyAction::TalkToNPC] = 0;
-    g_hotkeyBindings[HotkeyAction::StopTalking] = 0;
-    g_hotkeyBindings[HotkeyAction::ToggleVoice] = 0;
-    g_hotkeyBindings[HotkeyAction::OpenMicMute] = 0;
-    g_hotkeyBindings[HotkeyAction::ManualActivateNPC] = 0;
-    g_hotkeyBindings[HotkeyAction::OpenMenu] = 0;
-    g_hotkeyBindings[HotkeyAction::QuickCommand] = 0;
-    g_hotkeyBindings[HotkeyAction::DynamicProfileMenu] = 0;
-    g_hotkeyBindings[HotkeyAction::ToggleModes] = 0;
-    g_hotkeyBindings[HotkeyAction::ToggleLLMModel] = 0;
-    
-    // Load from config
+    Log("InputManager: Initializing event-driven hotkeys");
+    for (auto& binding : g_hotkeyBindings) binding.store(0, std::memory_order_relaxed);
+    g_lastActionClaims.fill(0);
+    g_pendingActions.store(0, std::memory_order_relaxed);
+    g_heldActions.store(0, std::memory_order_relaxed);
     LoadConfig();
-    
-    Log("InputManager: Initialized with hotkeys - Talk: 0x%02X, Voice: 0x%02X, ManualActivate: 0x%02X",
-        g_hotkeyBindings[HotkeyAction::TalkToNPC],
-        g_hotkeyBindings[HotkeyAction::ToggleVoice],
-        g_hotkeyBindings[HotkeyAction::ManualActivateNPC]);
 }
 
 void Shutdown() {
     Log("InputManager: Shutting down");
-    g_hotkeyBindings.clear();
-    g_actionTriggered.clear();
-    g_lastActionClaims.clear();
-    g_polledVirtualKeys.clear();
+    for (auto& binding : g_hotkeyBindings) binding.store(0, std::memory_order_relaxed);
+    g_pendingActions.store(0, std::memory_order_relaxed);
+    g_heldActions.store(0, std::memory_order_relaxed);
 }
 
 bool IsGameForeground() {
     const HWND foreground = GetForegroundWindow();
-    if (!foreground) {
-        return false;
-    }
+    if (!foreground) return false;
 
     DWORD processId = 0;
     GetWindowThreadProcessId(foreground, &processId);
@@ -158,200 +114,110 @@ bool IsGameForeground() {
 }
 
 void Update() {
-    const bool gameForeground = IsGameForeground();
-    if (!gameForeground) {
-        for (const int virtualKey : g_polledVirtualKeys) {
-            g_prevKeyStates[virtualKey] = false;
-            g_currKeyStates[virtualKey] = false;
-        }
-        g_actionTriggered.clear();
-        g_wasGameForeground = false;
-        g_wasInputAllowed = false;
-        return;
-    }
+    if (IsRuntimeInputAllowed()) return;
 
-    const bool inputAllowed = IsRuntimeInputAllowed();
-    if (!g_wasGameForeground || !inputAllowed || !g_wasInputAllowed) {
-        PrimePolledKeys();
-        g_wasGameForeground = true;
-        g_wasInputAllowed = inputAllowed;
-        return;
-    }
-
-    for (const int virtualKey : g_polledVirtualKeys) {
-        g_prevKeyStates[virtualKey] = g_currKeyStates[virtualKey];
-        g_currKeyStates[virtualKey] = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
-    }
-    
-    // Check hotkey actions
-    g_actionTriggered.clear();
-    for (const auto& [action, vk] : g_hotkeyBindings) {
-        if (vk <= 0 || vk >= 256) {
-            continue;
-        }
-        // Action triggers on key press (not held)
-        if (g_currKeyStates[vk] && !g_prevKeyStates[vk]) {
-            g_actionTriggered[action] = true;
-        }
-    }
+    g_pendingActions.store(0, std::memory_order_release);
+    g_heldActions.store(0, std::memory_order_release);
 }
 
-bool IsActionTriggered(HotkeyAction action) {
-    auto it = g_actionTriggered.find(action);
-    return it != g_actionTriggered.end() && it->second && TryClaimAction(action);
-}
+bool HandleScanCodeEvent(int scanCode, bool pressed) {
+    const uint32_t matchedActions = MatchingActionMask(scanCode);
+    if (matchedActions == 0) return false;
 
-bool TryClaimAction(HotkeyAction action, uint32_t debounceMs) {
-    if (!IsGameForeground()) {
+    if (!pressed) {
+        g_heldActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
+        return true;
+    }
+
+    if (!IsRuntimeInputAllowed()) {
+        g_heldActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
+        Log("InputManager: ignored scan code %d while runtime input is blocked", scanCode);
         return false;
     }
 
-    const ULONGLONG now = GetTickCount64();
-    const auto found = g_lastActionClaims.find(action);
-    if (found != g_lastActionClaims.end() && now - found->second < debounceMs) {
-        return false;
+    g_heldActions.fetch_or(matchedActions, std::memory_order_acq_rel);
+    g_pendingActions.fetch_or(matchedActions, std::memory_order_acq_rel);
+
+    for (std::size_t i = 0; i < kActionCount; ++i) {
+        if ((matchedActions & (uint32_t{1} << i)) != 0) {
+            Log("InputManager: queued %s from scan code %d",
+                ActionName(static_cast<HotkeyAction>(i)), scanCode);
+        }
     }
-    g_lastActionClaims[action] = now;
     return true;
 }
 
-bool IsKeyHeld(int virtualKey) {
-    if (virtualKey <= 0 || virtualKey >= 256) return false;
-    return g_currKeyStates[virtualKey];
+bool IsActionTriggered(HotkeyAction action) {
+    const uint32_t bit = ActionBit(action);
+    const uint32_t previous = g_pendingActions.fetch_and(~bit, std::memory_order_acq_rel);
+    return (previous & bit) != 0 && TryClaimAction(action);
 }
 
-KeyState GetKeyState(int virtualKey) {
-    if (virtualKey <= 0 || virtualKey >= 256) return KeyState::None;
-    
-    bool curr = g_currKeyStates[virtualKey];
-    bool prev = g_prevKeyStates[virtualKey];
-    
-    if (curr && !prev) return KeyState::JustPressed;
-    if (curr && prev) return KeyState::Held;
-    if (!curr && prev) return KeyState::JustReleased;
-    return KeyState::None;
+bool TryClaimAction(HotkeyAction action, uint32_t debounceMs) {
+    if (!IsGameForeground()) return false;
+
+    const std::size_t index = ActionIndex(action);
+    const ULONGLONG now = GetTickCount64();
+    if (g_lastActionClaims[index] != 0 && now - g_lastActionClaims[index] < debounceMs) {
+        return false;
+    }
+    g_lastActionClaims[index] = now;
+    return true;
 }
 
-void SetHotkey(HotkeyAction action, int virtualKey) {
-    g_hotkeyBindings[action] = virtualKey;
-    RebuildPolledKeys();
-    PrimePolledKeys();
+bool IsScanCodeHeld(int scanCode) {
+    if (!IsGameForeground()) return false;
+    const uint32_t matchedActions = MatchingActionMask(scanCode);
+    return matchedActions != 0 &&
+        (g_heldActions.load(std::memory_order_acquire) & matchedActions) != 0;
+}
+
+void SetHotkey(HotkeyAction action, int scanCode) {
+    g_hotkeyBindings[ActionIndex(action)].store(scanCode > 0 ? scanCode : 0,
+                                                std::memory_order_release);
 }
 
 int GetHotkey(HotkeyAction action) {
-    auto it = g_hotkeyBindings.find(action);
-    return (it != g_hotkeyBindings.end()) ? it->second : 0;
+    return g_hotkeyBindings[ActionIndex(action)].load(std::memory_order_acquire);
 }
 
 void LoadConfig() {
-    // User overrides win over shipped defaults.
-    int talkKey = Config::ReadINIInt("Hotkeys", "TalkToNPC", 0);
-    int stopKey = Config::ReadINIInt("Hotkeys", "StopTalking", 0);
-    int voiceKey = Config::ReadINIInt("Hotkeys", "ToggleVoice", 0);
-    int openMicMuteKey = Config::ReadINIInt("Hotkeys", "OpenMicMute", 0);
-    int manualActivateKey = Config::ReadINIInt("Hotkeys", "ManualActivate", 0);
-    int menuKey = Config::ReadINIInt("Hotkeys", "OpenMenu", 0);
-    int commandKey = Config::ReadINIInt("Hotkeys", "QuickCommand", 0);
-    int dynamicProfileMenuKey = Config::ReadINIInt("Hotkeys", "DynamicProfileMenu", 0);
-    int toggleModesKey = Config::ReadINIInt("Hotkeys", "ToggleModes", 0);
-    int toggleLLMModelKey = Config::ReadINIInt("Hotkeys", "ToggleLLMModel", 0);
-    
-    auto normalizeConfiguredKey = [](HotkeyAction action, int keyCode) {
-        if (keyCode <= 0) {
-            return 0;
-        }
+    SetHotkey(HotkeyAction::TalkToNPC, Config::ReadINIInt("Hotkeys", "TalkToNPC", 0));
+    SetHotkey(HotkeyAction::StopTalking, Config::ReadINIInt("Hotkeys", "StopTalking", 0));
+    SetHotkey(HotkeyAction::ToggleVoice, Config::ReadINIInt("Hotkeys", "ToggleVoice", 0));
+    SetHotkey(HotkeyAction::OpenMicMute, Config::ReadINIInt("Hotkeys", "OpenMicMute", 0));
+    SetHotkey(HotkeyAction::ManualActivateNPC, Config::ReadINIInt("Hotkeys", "ManualActivate", 0));
+    SetHotkey(HotkeyAction::OpenMenu, Config::ReadINIInt("Hotkeys", "OpenMenu", 0));
+    SetHotkey(HotkeyAction::QuickCommand, Config::ReadINIInt("Hotkeys", "QuickCommand", 0));
+    SetHotkey(HotkeyAction::DynamicProfileMenu, Config::ReadINIInt("Hotkeys", "DynamicProfileMenu", 0));
+    SetHotkey(HotkeyAction::ToggleModes, Config::ReadINIInt("Hotkeys", "ToggleModes", 0));
+    SetHotkey(HotkeyAction::ToggleLLMModel, Config::ReadINIInt("Hotkeys", "ToggleLLMModel", 0));
 
-        // MCM Extender keyboard keybinds are stored as Fallout/xNVSE scancodes.
-        // Existing Dialectic defaults are Windows VK codes, so preserve those two
-        // legacy defaults while accepting scancode values written by the MCM menu.
-        if ((action == HotkeyAction::StopTalking && keyCode == VK_ESCAPE) ||
-            (action == HotkeyAction::ToggleVoice && keyCode == 'G') ||
-            (action == HotkeyAction::ManualActivateNPC && keyCode == 'H')) {
-            return keyCode;
-        }
+    g_pendingActions.store(0, std::memory_order_release);
+    g_heldActions.store(0, std::memory_order_release);
 
-        const int mapped = ScancodeToVirtualKey(keyCode);
-        if (mapped > 0) {
-            Log("InputManager: mapped configured key %d to virtual key 0x%02X", keyCode, mapped);
-            return mapped;
-        }
-
-        return keyCode;
-    };
-
-    g_hotkeyBindings[HotkeyAction::TalkToNPC] = normalizeConfiguredKey(HotkeyAction::TalkToNPC, talkKey);
-    g_hotkeyBindings[HotkeyAction::StopTalking] = normalizeConfiguredKey(HotkeyAction::StopTalking, stopKey);
-    g_hotkeyBindings[HotkeyAction::ToggleVoice] = normalizeConfiguredKey(HotkeyAction::ToggleVoice, voiceKey);
-    g_hotkeyBindings[HotkeyAction::OpenMicMute] = normalizeConfiguredKey(HotkeyAction::OpenMicMute, openMicMuteKey);
-    g_hotkeyBindings[HotkeyAction::ManualActivateNPC] = normalizeConfiguredKey(HotkeyAction::ManualActivateNPC, manualActivateKey);
-    g_hotkeyBindings[HotkeyAction::OpenMenu] = normalizeConfiguredKey(HotkeyAction::OpenMenu, menuKey);
-    g_hotkeyBindings[HotkeyAction::QuickCommand] = normalizeConfiguredKey(HotkeyAction::QuickCommand, commandKey);
-    g_hotkeyBindings[HotkeyAction::DynamicProfileMenu] = normalizeConfiguredKey(HotkeyAction::DynamicProfileMenu, dynamicProfileMenuKey);
-    g_hotkeyBindings[HotkeyAction::ToggleModes] = normalizeConfiguredKey(HotkeyAction::ToggleModes, toggleModesKey);
-    g_hotkeyBindings[HotkeyAction::ToggleLLMModel] = normalizeConfiguredKey(HotkeyAction::ToggleLLMModel, toggleLLMModelKey);
-    RebuildPolledKeys();
-    PrimePolledKeys();
-
-    Log("InputManager: loaded raw hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d",
-        talkKey,
-        voiceKey,
-        openMicMuteKey,
-        stopKey,
-        manualActivateKey,
-        toggleModesKey,
-        toggleLLMModelKey,
-        dynamicProfileMenuKey);
-    Log("InputManager: active VK hotkeys Talk=0x%02X Voice=0x%02X OpenMicMute=0x%02X Stop=0x%02X Manual=0x%02X Modes=0x%02X LLM=0x%02X Dynamic=0x%02X",
-        g_hotkeyBindings[HotkeyAction::TalkToNPC],
-        g_hotkeyBindings[HotkeyAction::ToggleVoice],
-        g_hotkeyBindings[HotkeyAction::OpenMicMute],
-        g_hotkeyBindings[HotkeyAction::StopTalking],
-        g_hotkeyBindings[HotkeyAction::ManualActivateNPC],
-        g_hotkeyBindings[HotkeyAction::ToggleModes],
-        g_hotkeyBindings[HotkeyAction::ToggleLLMModel],
-        g_hotkeyBindings[HotkeyAction::DynamicProfileMenu]);
-    Log("InputManager: polling %zu configured unique keys", g_polledVirtualKeys.size());
+    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d",
+        GetHotkey(HotkeyAction::TalkToNPC),
+        GetHotkey(HotkeyAction::ToggleVoice),
+        GetHotkey(HotkeyAction::OpenMicMute),
+        GetHotkey(HotkeyAction::StopTalking),
+        GetHotkey(HotkeyAction::ManualActivateNPC),
+        GetHotkey(HotkeyAction::ToggleModes),
+        GetHotkey(HotkeyAction::ToggleLLMModel),
+        GetHotkey(HotkeyAction::DynamicProfileMenu));
 }
 
 void SaveConfig() {
-    const char* iniPath = Config::GetCustomINIPath();
-    char buffer[32];
-    
-    // Write hotkey bindings to INI
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::TalkToNPC]);
-    WritePrivateProfileStringA("Hotkeys", "TalkToNPC", buffer, iniPath);
-
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::StopTalking]);
-    WritePrivateProfileStringA("Hotkeys", "StopTalking", buffer, iniPath);
-    
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::ToggleVoice]);
-    WritePrivateProfileStringA("Hotkeys", "ToggleVoice", buffer, iniPath);
-
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::OpenMicMute]);
-    WritePrivateProfileStringA("Hotkeys", "OpenMicMute", buffer, iniPath);
-    
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::ManualActivateNPC]);
-    WritePrivateProfileStringA("Hotkeys", "ManualActivate", buffer, iniPath);
-    
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::OpenMenu]);
-    WritePrivateProfileStringA("Hotkeys", "OpenMenu", buffer, iniPath);
-    
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::QuickCommand]);
-    WritePrivateProfileStringA("Hotkeys", "QuickCommand", buffer, iniPath);
-
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::DynamicProfileMenu]);
-    WritePrivateProfileStringA("Hotkeys", "DynamicProfileMenu", buffer, iniPath);
-
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::ToggleModes]);
-    WritePrivateProfileStringA("Hotkeys", "ToggleModes", buffer, iniPath);
-
-    sprintf_s(buffer, "%d", g_hotkeyBindings[HotkeyAction::ToggleLLMModel]);
-    WritePrivateProfileStringA("Hotkeys", "ToggleLLMModel", buffer, iniPath);
-}
-
-int ScancodeToVirtualKey(int scancode) {
-    auto it = g_scancodeToVK.find(scancode);
-    return (it != g_scancodeToVK.end()) ? it->second : 0;
+    WriteBinding("TalkToNPC", HotkeyAction::TalkToNPC);
+    WriteBinding("StopTalking", HotkeyAction::StopTalking);
+    WriteBinding("ToggleVoice", HotkeyAction::ToggleVoice);
+    WriteBinding("OpenMicMute", HotkeyAction::OpenMicMute);
+    WriteBinding("ManualActivate", HotkeyAction::ManualActivateNPC);
+    WriteBinding("OpenMenu", HotkeyAction::OpenMenu);
+    WriteBinding("QuickCommand", HotkeyAction::QuickCommand);
+    WriteBinding("DynamicProfileMenu", HotkeyAction::DynamicProfileMenu);
+    WriteBinding("ToggleModes", HotkeyAction::ToggleModes);
+    WriteBinding("ToggleLLMModel", HotkeyAction::ToggleLLMModel);
 }
 
 } // namespace InputManager

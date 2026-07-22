@@ -1,0 +1,5 @@
+int iButton
+
+begin function {iButton}
+    DialecticHandleHotkey iButton
+end

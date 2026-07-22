@@ -28,6 +28,7 @@ WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%e"
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_pickup_state.tmp" 0 "%e"
 
+call (CompileScript "Dialectic/RegisterHotkeys.gek")
 call (CompileScript "Dialectic/RegisterAidUseEvents.txt")
 call (CompileScript "Dialectic/RegisterSleepWaitEvents.txt")
 
@@ -75,5 +76,4 @@ CallAfterSeconds 3.00 (CompileScript "Dialectic/CollectFalloutStats.gek") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
 
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 source=load_bootstrap\n"
 PrintC "[Dialectic] Registered runtime bridges."

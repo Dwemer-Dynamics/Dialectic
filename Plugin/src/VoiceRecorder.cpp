@@ -35,10 +35,8 @@ void Log(const char* fmt, ...);
 
 namespace VoiceRecorder {
 
-static bool IsBoundKeyDown(int virtualKey) {
-    return InputManager::IsGameForeground() &&
-        virtualKey > 0 && virtualKey < 256 &&
-        (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+static bool IsBoundKeyDown(int scanCode) {
+    return InputManager::IsScanCodeHeld(scanCode);
 }
 
 // Recording state
