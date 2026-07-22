@@ -59,11 +59,11 @@
 #include "Console.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.7"
+#define DIALECTIC_VERSION "0.6.0"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
-#define DIALECTIC_PLUGIN_INFO_VERSION 505
+#define DIALECTIC_PLUGIN_INFO_VERSION 600
 #endif
 
 // Global variables
