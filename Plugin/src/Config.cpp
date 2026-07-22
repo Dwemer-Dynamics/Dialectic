@@ -935,8 +935,7 @@ namespace Config {
         }
         
         iniFile << "[Hotkeys]\n";
-        iniFile << "; V is reserved for the in-game JIP text input quest script.\n";
-        iniFile << "; Other DLL hotkeys are disabled by default. Set them in MCM to enable.\n";
+        iniFile << "; Hotkeys use Fallout DirectInput scan codes. Set them in MCM to enable.\n";
         iniFile << "TalkToNPC=" << hotkeyTalkToNPC << "\n";
         iniFile << "StopTalking=" << hotkeyStopTalking << "\n";
         iniFile << "ToggleVoice=" << hotkeyToggleVoice << "\n";
