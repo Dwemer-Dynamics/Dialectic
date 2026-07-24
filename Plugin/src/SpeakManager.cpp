@@ -102,7 +102,7 @@ namespace SpeakManager {
     static bool g_playerInputTtsGateActive = false;
     static std::chrono::steady_clock::time_point g_playerInputTtsGateUntil = {};
     static constexpr auto kPlayerInputTtsGateTimeout = std::chrono::seconds(5);
-    static constexpr int kNpcTtsMaxHttpAttempts = 50;
+    static constexpr int kNpcTtsMaxDownloadAttempts = 50;
     static constexpr auto kNpcTtsPreparationTimeout = std::chrono::seconds(20);
     static uint32_t g_currentSpeakerFormId = 0;
     static std::string g_currentSpeaker;
@@ -3655,7 +3655,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WinHttpCloseHandle(hSession);
         };
 
-        for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        int attempt = 1;
+        while (attempt <= maxAttempts) {
             if (generation != g_audioGeneration.load() || token.IsCancellationRequested()) {
                 Log("SpeakManager: [Thread] TTS download cancelled before attempt %d for %s",
                     attempt, path.c_str());
@@ -3677,6 +3678,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
                         closeHandles();
                         return {};
                     }
+                    // A confirmed server-side job should remain eligible until
+                    // the task deadline. Download attempts still stay bounded
+                    // for unknown status or transient cache-read failures.
                     continue;
                 }
             }
@@ -3784,6 +3788,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 closeHandles();
                 return {};
             }
+            ++attempt;
         }
 
         closeHandles();
@@ -4772,7 +4777,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         // Local voice-clone generation can legitimately take longer than ten
         // seconds. Keep polling while the server reports a pending job so the
         // generated cache file is not discarded just before it becomes ready.
-        const int maxHttpAttempts = isPlayerTts ? 4 : kNpcTtsMaxHttpAttempts;
+        const int maxHttpAttempts = isPlayerTts ? 4 : kNpcTtsMaxDownloadAttempts;
         Log("SpeakManager: utterance state=preparing_audio speaker='%s' utterance='%s' cache='%s'",
             item.actor.c_str(),
             item.utteranceId.c_str(),
