@@ -102,6 +102,8 @@ namespace SpeakManager {
     static bool g_playerInputTtsGateActive = false;
     static std::chrono::steady_clock::time_point g_playerInputTtsGateUntil = {};
     static constexpr auto kPlayerInputTtsGateTimeout = std::chrono::seconds(5);
+    static constexpr int kNpcTtsMaxHttpAttempts = 50;
+    static constexpr auto kNpcTtsPreparationTimeout = std::chrono::seconds(20);
     static uint32_t g_currentSpeakerFormId = 0;
     static std::string g_currentSpeaker;
     static ScriptLine g_currentPlaybackLine;
@@ -4767,7 +4769,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
         std::string textHash = item.ttsCacheKey.empty() ? Misc::MD5Hash(item.text) : item.ttsCacheKey;
         const uint64_t audioGeneration = g_audioGeneration.load();
         const bool isPlayerTts = IsPlayerTtsLine(item);
-        const int maxHttpAttempts = isPlayerTts ? 4 : 30;
+        // Local voice-clone generation can legitimately take longer than ten
+        // seconds. Keep polling while the server reports a pending job so the
+        // generated cache file is not discarded just before it becomes ready.
+        const int maxHttpAttempts = isPlayerTts ? 4 : kNpcTtsMaxHttpAttempts;
         Log("SpeakManager: utterance state=preparing_audio speaker='%s' utterance='%s' cache='%s'",
             item.actor.c_str(),
             item.utteranceId.c_str(),
@@ -4782,7 +4787,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         audioTask.lane = TaskManager::Lane::Audio;
         audioTask.priority = IsPlayerTtsLine(item);
         audioTask.deadlineFromEnqueue = true;
-        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : std::chrono::seconds(12);
+        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : kNpcTtsPreparationTimeout;
         audioTask.coalescing = TaskManager::CoalescingPolicy::RejectIfPendingOrActive;
         audioTask.concurrencyLimit = 2;
         const TaskManager::TaskHandle audioTaskHandle = TaskManager::Submit(std::move(audioTask), [item,
