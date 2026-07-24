@@ -2237,6 +2237,11 @@ static void RefreshGameStateBridge() {
             bridgePaused = tradeMenuOpen || pipboyOpen || pauseMenuOpen;
             bridgeInMenu = bridgePaused || bridgeDialogue;
             bridgeCombat = ParseBridgeFlag(values, "combat", ParseBridgeFlag(values, "in_combat", false));
+            const auto playerSneaking = values.find("player_sneaking");
+            if (playerSneaking != values.end()) {
+                ActorPositionResolverFNV::RememberPlayerSneaking(
+                    ParseBridgeFlag(values, "player_sneaking", false));
+            }
             bridgeFresh = true;
         }
     }

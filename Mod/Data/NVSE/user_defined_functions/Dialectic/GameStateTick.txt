@@ -4,6 +4,7 @@ int iPipboyOpen
 int iPauseMenuOpen
 int iDialogueMenuOpen
 int iCombat
+int iPlayerSneaking
 
 begin function {}
     CallAfterSeconds 0.05 (CompileScript "Dialectic/GameStateTick.txt") 1
@@ -44,6 +45,7 @@ begin function {}
         let iDialogueMenuOpen := 1
     endif
     let iCombat := PlayerRef.IsInCombat
+    let iPlayerSneaking := PlayerRef.IsSneaking
     let iMenuMode := iTradeMenuMode
     if iPipboyOpen
         let iMenuMode := 1
@@ -52,7 +54,7 @@ begin function {}
         let iMenuMode := 1
     endif
 
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_game_state.tmp" 0 "source=game_state%r"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_game_state.tmp" 0 "source=game_state%rplayer_sneaking=%g%r" iPlayerSneaking
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_game_state.tmp" 1 "menu_mode=%g%r" iMenuMode
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_game_state.tmp" 1 "trade_menu_mode=%g%r" iTradeMenuMode
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_game_state.tmp" 1 "pipboy_open=%g%r" iPipboyOpen

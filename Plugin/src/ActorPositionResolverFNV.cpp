@@ -1025,6 +1025,12 @@ void RememberActorPosition(const PositionResult& position) {
     CachePosition(position);
 }
 
+void RememberPlayerSneaking(bool sneaking) {
+    std::lock_guard<std::mutex> playerStateLock(g_playerStateMutex);
+    g_playerSneaking = sneaking;
+    g_playerSneakingTimestamp = std::chrono::steady_clock::now();
+}
+
 bool IsPlayerSneaking() {
     // PlayerRef.IsSneaking is the authoritative FNV script result. Prefer its
     // fresh bridge value because PlayerMover movement bit 9 can remain set
