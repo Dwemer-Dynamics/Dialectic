@@ -71,6 +71,7 @@ bool IsActorInLatestScan(uint32_t formId, int maxAgeMs = 5000);
 std::vector<PositionResult> GetRecentActorPositions();
 std::vector<DoorPosition> GetRecentDoorPositions();
 void RememberActorPosition(const PositionResult& position);
+void RememberPlayerSneaking(bool sneaking);
 bool IsPlayerSneaking();
 void InvalidateCache();
 
