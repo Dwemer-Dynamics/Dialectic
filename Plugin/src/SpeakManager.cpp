@@ -4481,7 +4481,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     static bool ShouldPauseDialogueForMenu() {
         const auto& state = GameLoop::GetGameState();
-        return Config::pauseDialogueOnMenu && state.isPaused;
+        return Config::pauseDialogueOnMenu &&
+            (state.isPaused || GameLoop::IsTextInputMenuActiveOrRecentlyClosed());
     }
 
     // Functions required by GameLoop
@@ -4500,7 +4501,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 if (!g_playbackPausedForMenu) {
                     AudioManager::Pause();
                     g_playbackPausedForMenu = true;
-                    Log("SpeakManager: Paused AI dialogue because menu/Pip-Boy is open "
+                    Log("SpeakManager: Paused AI dialogue because a blocking menu/chatbox is open "
                         "(paused=%d inMenu=%d)",
                         state.isPaused ? 1 : 0,
                         state.isInMenu ? 1 : 0);
@@ -4511,7 +4512,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_playbackPausedForMenu) {
                 AudioManager::Resume();
                 g_playbackPausedForMenu = false;
-                Log("SpeakManager: Resumed AI dialogue after menu/Pip-Boy closed");
+                Log("SpeakManager: Resumed AI dialogue after blocking menu/chatbox closed");
             }
 
             UpdateCurrentSpatialPlayback();
@@ -4606,7 +4607,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             }
             if (!g_playbackPausedForMenu) {
                 g_playbackPausedForMenu = true;
-                Log("SpeakManager: Holding AI dialogue because menu/Pip-Boy is open "
+                Log("SpeakManager: Holding AI dialogue because a blocking menu/chatbox is open "
                     "(paused=%d inMenu=%d)",
                     state.isPaused ? 1 : 0,
                     state.isInMenu ? 1 : 0);
@@ -4615,7 +4616,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         if (g_playbackPausedForMenu && !audioPlaying && !audioPaused) {
             g_playbackPausedForMenu = false;
-            Log("SpeakManager: Releasing held AI dialogue after menu/Pip-Boy closed");
+            Log("SpeakManager: Releasing held AI dialogue after blocking menu/chatbox closed");
         }
 
         PendingAudio readyAudio;
