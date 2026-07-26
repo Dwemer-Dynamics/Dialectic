@@ -102,6 +102,8 @@ namespace SpeakManager {
     static bool g_playerInputTtsGateActive = false;
     static std::chrono::steady_clock::time_point g_playerInputTtsGateUntil = {};
     static constexpr auto kPlayerInputTtsGateTimeout = std::chrono::seconds(5);
+    static constexpr int kNpcTtsMaxDownloadAttempts = 50;
+    static constexpr auto kNpcTtsPreparationTimeout = std::chrono::seconds(20);
     static uint32_t g_currentSpeakerFormId = 0;
     static std::string g_currentSpeaker;
     static ScriptLine g_currentPlaybackLine;
@@ -3653,7 +3655,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WinHttpCloseHandle(hSession);
         };
 
-        for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        int attempt = 1;
+        while (attempt <= maxAttempts) {
             if (generation != g_audioGeneration.load() || token.IsCancellationRequested()) {
                 Log("SpeakManager: [Thread] TTS download cancelled before attempt %d for %s",
                     attempt, path.c_str());
@@ -3675,6 +3678,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
                         closeHandles();
                         return {};
                     }
+                    // A confirmed server-side job should remain eligible until
+                    // the task deadline. Download attempts still stay bounded
+                    // for unknown status or transient cache-read failures.
                     continue;
                 }
             }
@@ -3782,6 +3788,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 closeHandles();
                 return {};
             }
+            ++attempt;
         }
 
         closeHandles();
@@ -4474,7 +4481,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     static bool ShouldPauseDialogueForMenu() {
         const auto& state = GameLoop::GetGameState();
-        return Config::pauseDialogueOnMenu && state.isPaused;
+        return Config::pauseDialogueOnMenu &&
+            (state.isPaused || GameLoop::IsTextInputMenuActiveOrRecentlyClosed());
     }
 
     // Functions required by GameLoop
@@ -4493,7 +4501,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 if (!g_playbackPausedForMenu) {
                     AudioManager::Pause();
                     g_playbackPausedForMenu = true;
-                    Log("SpeakManager: Paused AI dialogue because menu/Pip-Boy is open "
+                    Log("SpeakManager: Paused AI dialogue because a blocking menu/chatbox is open "
                         "(paused=%d inMenu=%d)",
                         state.isPaused ? 1 : 0,
                         state.isInMenu ? 1 : 0);
@@ -4504,7 +4512,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_playbackPausedForMenu) {
                 AudioManager::Resume();
                 g_playbackPausedForMenu = false;
-                Log("SpeakManager: Resumed AI dialogue after menu/Pip-Boy closed");
+                Log("SpeakManager: Resumed AI dialogue after blocking menu/chatbox closed");
             }
 
             UpdateCurrentSpatialPlayback();
@@ -4599,7 +4607,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             }
             if (!g_playbackPausedForMenu) {
                 g_playbackPausedForMenu = true;
-                Log("SpeakManager: Holding AI dialogue because menu/Pip-Boy is open "
+                Log("SpeakManager: Holding AI dialogue because a blocking menu/chatbox is open "
                     "(paused=%d inMenu=%d)",
                     state.isPaused ? 1 : 0,
                     state.isInMenu ? 1 : 0);
@@ -4608,7 +4616,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         if (g_playbackPausedForMenu && !audioPlaying && !audioPaused) {
             g_playbackPausedForMenu = false;
-            Log("SpeakManager: Releasing held AI dialogue after menu/Pip-Boy closed");
+            Log("SpeakManager: Releasing held AI dialogue after blocking menu/chatbox closed");
         }
 
         PendingAudio readyAudio;
@@ -4767,7 +4775,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
         std::string textHash = item.ttsCacheKey.empty() ? Misc::MD5Hash(item.text) : item.ttsCacheKey;
         const uint64_t audioGeneration = g_audioGeneration.load();
         const bool isPlayerTts = IsPlayerTtsLine(item);
-        const int maxHttpAttempts = isPlayerTts ? 4 : 30;
+        // Local voice-clone generation can legitimately take longer than ten
+        // seconds. Keep polling while the server reports a pending job so the
+        // generated cache file is not discarded just before it becomes ready.
+        const int maxHttpAttempts = isPlayerTts ? 4 : kNpcTtsMaxDownloadAttempts;
         Log("SpeakManager: utterance state=preparing_audio speaker='%s' utterance='%s' cache='%s'",
             item.actor.c_str(),
             item.utteranceId.c_str(),
@@ -4782,7 +4793,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         audioTask.lane = TaskManager::Lane::Audio;
         audioTask.priority = IsPlayerTtsLine(item);
         audioTask.deadlineFromEnqueue = true;
-        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : std::chrono::seconds(12);
+        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : kNpcTtsPreparationTimeout;
         audioTask.coalescing = TaskManager::CoalescingPolicy::RejectIfPendingOrActive;
         audioTask.concurrencyLimit = 2;
         const TaskManager::TaskHandle audioTaskHandle = TaskManager::Submit(std::move(audioTask), [item,
