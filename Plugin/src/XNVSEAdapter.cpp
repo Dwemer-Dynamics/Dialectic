@@ -525,6 +525,28 @@ std::string CopyFormName(TESForm* form) {
     return fullName ? CopyGameString(fullName->name) : std::string{};
 }
 
+// Match xNVSE GetValue semantics, including ingestibles that store value directly.
+int ResolveBaseItemValue(TESForm* form) {
+    if (!form) return 0;
+    if (form->typeID == kFormType_AlchemyItem) {
+        return static_cast<int>(static_cast<AlchemyItem*>(form)->value);
+    }
+
+    using DynamicCast = void* (*)(void*, UInt32, const void*, const void*, UInt32);
+    constexpr std::uintptr_t kDynamicCastAddress = 0x00EC43FB;
+    constexpr std::uintptr_t kDynamicCastNoGoreAddress = 0x00EC438B;
+    constexpr std::uintptr_t kRttiTesForm = 0x01183028;
+    constexpr std::uintptr_t kRttiTesValueForm = 0x01186B6C;
+    const auto dynamicCastAddress = (g_nvse && g_nvse->isNogore)
+        ? kDynamicCastNoGoreAddress
+        : kDynamicCastAddress;
+    auto dynamicCast = reinterpret_cast<DynamicCast>(dynamicCastAddress);
+    auto* valueForm = static_cast<TESValueForm*>(dynamicCast(
+        form, 0, reinterpret_cast<const void*>(kRttiTesForm),
+        reinterpret_cast<const void*>(kRttiTesValueForm), 0));
+    return valueForm ? static_cast<int>(valueForm->value) : 0;
+}
+
 TESObjectREFR* FindLoadedReference(PlayerCharacter* player, std::uint32_t formId) {
     if (!player || formId == 0) return nullptr;
     if (player->refID == formId) return player;
@@ -1542,6 +1564,7 @@ bool CaptureNativeInventory(std::uint32_t ownerFormId, std::vector<NativeInvento
         item.baseFormId = source.form->refID;
         item.type = source.form->typeID;
         item.count = source.count;
+        item.value = ResolveBaseItemValue(source.form);
         item.equipped = source.equipped;
         item.condition = source.condition;
         items.push_back(std::move(item));

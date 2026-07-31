@@ -1669,10 +1669,25 @@ static bool IsBoredEventBlocked(std::string& reason) {
     return false;
 }
 
-static std::string BuildBoredEventPayload(uint32_t actorFormId, const std::string& actorName) {
+static std::string BuildBoredEventPayload(
+    uint32_t actorFormId,
+    const std::string& actorName,
+    const std::vector<std::pair<uint32_t, std::string>>& eligibleActors) {
     const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
     const std::string location = Misc::GetPlayerLocation();
-    const std::string people = "|" + actorName + "|" + playerName + "|";
+    std::ostringstream people;
+    people << "|";
+    std::set<std::string> seenNames;
+    for (const auto& candidate : eligibleActors) {
+        if (candidate.second.empty() || !seenNames.insert(candidate.second).second) {
+            continue;
+        }
+        people << candidate.second << "|";
+    }
+    if (seenNames.insert(actorName).second) {
+        people << actorName << "|";
+    }
+    people << playerName << "|";
 
     std::ostringstream payload;
     payload << "{";
@@ -1687,8 +1702,22 @@ static std::string BuildBoredEventPayload(uint32_t actorFormId, const std::strin
     payload << "\"listener\":\"" << HTTPManager::EscapeJson(playerName) << "\",";
     payload << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\",";
     payload << "\"reason\":\"idle_bored\",";
-    payload << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\",";
-    payload << "\"audience_snapshot\":" << BuildAudienceSnapshotJson();
+    payload << "\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",";
+    payload << "\"eligible_actors\":[";
+    for (size_t index = 0; index < eligibleActors.size(); ++index) {
+        if (index > 0) {
+            payload << ",";
+        }
+        payload << "{\"name\":\"" << HTTPManager::EscapeJson(eligibleActors[index].second) << "\",";
+        payload << "\"refid\":\""
+            << HTTPManager::EscapeJson(FormatFormIdJsonValue(eligibleActors[index].first)) << "\"}";
+    }
+    payload << "],";
+    payload << "\"audience_snapshot\":{";
+    payload << "\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",";
+    payload << "\"target_only\":false,";
+    payload << "\"target_form_id\":\""
+        << HTTPManager::EscapeJson(FormatFormIdJsonValue(actorFormId)) << "\"}";
     payload << "}";
     return payload.str();
 }
@@ -1813,7 +1842,7 @@ static void UpdateBoredEventTimer() {
     }
 
     RefreshPlayerNameFromGame();
-    const std::string payload = BuildBoredEventPayload(selectedFormId, selectedName);
+    const std::string payload = BuildBoredEventPayload(selectedFormId, selectedName, freshCandidates);
     AgentManager::MarkBoredEventFired(selectedFormId);
     Logger::LogInfo("GameLoop: Sending bored event for %s (0x%08X)", selectedName.c_str(), selectedFormId);
     HTTPManager::SendEvent("bored", payload);

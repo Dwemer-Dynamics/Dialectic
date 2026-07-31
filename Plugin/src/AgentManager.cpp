@@ -1056,6 +1056,7 @@ namespace AgentManager {
                         item.name = nativeItem.name;
                         item.baseid = formatFormId(nativeItem.baseFormId);
                         item.count = nativeItem.count;
+                        item.value = nativeItem.value;
                         item.equipped = nativeItem.equipped;
                         item.type = nativeItem.type;
                         item.condition = nativeItem.condition;
@@ -1451,7 +1452,9 @@ namespace AgentManager {
     static std::string FormatInventoryJson(const NPCData& data) {
         std::ostringstream json;
         json << "{";
+        json << "\"schema\":\"dialectic.inventory.v1\",";
         json << "\"type\":\"inventory\",";
+        json << "\"game\":\"fnv\",";
         json << "\"actor_name\":\"" << HTTPManager::EscapeJson(data.displayName) << "\",";
         json << "\"actor_type\":\"npc\",";
         json << "\"refid\":\"";
@@ -1471,6 +1474,7 @@ namespace AgentManager {
             json << "\"name\":\"" << HTTPManager::EscapeJson(item.name) << "\",";
             json << "\"baseid\":\"" << HTTPManager::EscapeJson(item.baseid) << "\",";
             json << "\"count\":" << item.count << ",";
+            json << "\"value\":" << item.value << ",";
             json << "\"equipped\":" << (item.equipped ? "true" : "false") << ",";
             if (item.condition >= 0.0f) {
                 json << "\"condition\":" << item.condition << ",";

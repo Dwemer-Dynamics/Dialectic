@@ -28,6 +28,7 @@ namespace AgentManager {
         std::string name;
         std::string baseid;
         int count;
+        int value;
         bool equipped;
         int type;
         float condition;
@@ -35,7 +36,7 @@ namespace AgentManager {
         std::vector<std::string> mods;
 
         InventoryItem()
-            : count(0), equipped(false), type(0), condition(-1.0f) {}
+            : count(0), value(0), equipped(false), type(0), condition(-1.0f) {}
     };
     
     // Fallout NV NPC data structure
