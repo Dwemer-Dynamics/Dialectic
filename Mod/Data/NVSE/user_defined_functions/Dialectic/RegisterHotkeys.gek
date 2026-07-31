@@ -6,6 +6,7 @@ int iLLM
 int iHalt
 int iDynamic
 int iOpenMicMute
+int iPipVision
 
 begin function {}
     ; A handler without a scan-code argument removes every prior registration
@@ -21,6 +22,7 @@ begin function {}
     let iHalt := DialecticGetConfigInt "Hotkeys" "StopTalking" 0
     let iDynamic := DialecticGetConfigInt "Hotkeys" "DynamicProfileMenu" 0
     let iOpenMicMute := DialecticGetConfigInt "Hotkeys" "OpenMicMute" 0
+    let iPipVision := DialecticGetConfigInt "Hotkeys" "PipVision" 0
 
     if iTalk > 0
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iTalk
@@ -54,6 +56,10 @@ begin function {}
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iOpenMicMute
         SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iOpenMicMute
     endif
+    if iPipVision > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iPipVision
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iPipVision
+    endif
 
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 owner=jip_events talk=%g voice=%g manual=%g modes=%g llm=%g halt=%g dynamic=%g open_mic_mute=%g%r" iTalk iVoice iManual iModes iLLM iHalt iDynamic iOpenMicMute
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 owner=jip_events talk=%g voice=%g manual=%g modes=%g llm=%g halt=%g dynamic=%g open_mic_mute=%g pipvision=%g%r" iTalk iVoice iManual iModes iLLM iHalt iDynamic iOpenMicMute iPipVision
 end

@@ -223,6 +223,7 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
     if (normalizedKey == "openmicmute") { return "OpenMicMute"; }
+    if (normalizedKey == "pipvision") { return "PipVision"; }
     return nullptr;
 }
 
@@ -538,6 +539,7 @@ static bool ResolveDialecticSettingId(int settingId, DialecticSettingRef& outSet
         case 62: outSetting = { "SpatialAudio", "InteriorHearingDistance" }; return true;
         case 63: outSetting = { "SpatialAudio", "ExteriorHearingDistance" }; return true;
         case 64: outSetting = { "SpatialAudio", "AutoHearingDistance" }; return true;
+        case 65: outSetting = { "Hotkeys", "PipVision" }; return true;
         default:
             outSetting = { "", "" };
             return false;

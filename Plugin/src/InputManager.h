@@ -17,6 +17,7 @@ enum class HotkeyAction {
     DynamicProfileMenu,
     ToggleModes,
     ToggleLLMModel,
+    PipVision,
     Count
 };
 
@@ -27,7 +28,9 @@ void Shutdown();
 void Update();
 
 bool IsGameForeground();
-bool IsActionTriggered(HotkeyAction action);
+bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs = 250);
+bool IsActionReleased(HotkeyAction action);
+bool IsActionHeld(HotkeyAction action);
 bool TryClaimAction(HotkeyAction action, uint32_t debounceMs = 250);
 
 // Called by the JIP LN key event bridge with Fallout DirectInput scan codes.

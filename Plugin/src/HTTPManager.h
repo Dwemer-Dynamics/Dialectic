@@ -88,6 +88,12 @@ namespace HTTPManager {
     std::string UploadAudioForSTT(const std::string& wavData,
                                   const TaskManager::CancellationToken* token = nullptr);
 
+    // Upload a manual PipVision screenshot and structured capture metadata.
+    std::string UploadPipVisionImage(const std::string& imageData,
+                                     const std::string& metadataJson,
+                                     const std::string& fileName,
+                                     const TaskManager::CancellationToken* token = nullptr);
+
     // Upload a resolved NPC voice sample to DialecticServer's voice sample extractor.
     std::string UploadVoiceSample(const std::string& audioData,
                                   const std::string& actorName,
