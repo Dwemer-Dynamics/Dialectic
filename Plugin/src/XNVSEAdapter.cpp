@@ -2039,23 +2039,43 @@ bool CaptureNativePipVisionScreenshot() {
     if (!g_scriptInterface || !g_scriptInterface->CompileScript || !g_scriptInterface->CallFunction) {
         return false;
     }
+
+    const HWND gameWindow = GetForegroundWindow();
+    DWORD foregroundProcessId = 0;
+    if (!gameWindow || GetWindowThreadProcessId(gameWindow, &foregroundProcessId) == 0 ||
+        foregroundProcessId != GetCurrentProcessId()) {
+        Logger::LogWarning("[PIPVISION] Fallout window is not foreground during capture");
+        return false;
+    }
+
+    RECT clientRect{};
+    POINT clientTopLeft{};
+    POINT clientBottomRight{};
+    if (!GetClientRect(gameWindow, &clientRect)) {
+        Logger::LogWarning("[PIPVISION] failed to read Fallout client rectangle error=%lu", GetLastError());
+        return false;
+    }
+    clientBottomRight.x = clientRect.right;
+    clientBottomRight.y = clientRect.bottom;
+    if (!ClientToScreen(gameWindow, &clientTopLeft) || !ClientToScreen(gameWindow, &clientBottomRight) ||
+        clientBottomRight.x <= clientTopLeft.x || clientBottomRight.y <= clientTopLeft.y) {
+        Logger::LogWarning("[PIPVISION] failed to resolve Fallout client screen bounds error=%lu", GetLastError());
+        return false;
+    }
+
     if (!g_pipVisionCaptureFunction) {
         static constexpr const char* kCaptureSource = R"(
-float fScreenWidth
-float fScreenHeight
-
-begin function {}
+int iXStart
+int iXEnd
+int iYStart
+int iYEnd
+begin function {iXStart, iXEnd, iYStart, iYEnd}
     SetFunctionValue 0
     if GetPluginVersion "SUP NVSE Plugin" < 855
         return
     endif
-    let fScreenWidth := GetScreenTrait 2
-    let fScreenHeight := GetScreenTrait 3
-    if eval fScreenWidth <= 0 || fScreenHeight <= 0
-        return
-    endif
     DeleteScreenshot "Dialectic" "pipvision_capture.jpg"
-    CaptureScreenshotAlt "Dialectic" "pipvision_capture" 0 fScreenWidth 0 fScreenHeight 0 1 90
+    CaptureScreenshotAlt "Dialectic" "pipvision_capture" iXStart iXEnd iYStart iYEnd 0 1 90
     SetFunctionValue 1
 end
 )";
@@ -2069,7 +2089,11 @@ end
     alignas(NVSEArrayVarInterface::Element)
         unsigned char resultStorage[sizeof(NVSEArrayVarInterface::Element)]{};
     auto* result = reinterpret_cast<NVSEArrayVarInterface::Element*>(resultStorage);
-    if (!g_scriptInterface->CallFunction(g_pipVisionCaptureFunction, nullptr, nullptr, result, 0)) {
+    Logger::LogInfo("[PIPVISION] Fallout client capture bounds left=%ld top=%ld right=%ld bottom=%ld",
+        clientTopLeft.x, clientTopLeft.y, clientBottomRight.x, clientBottomRight.y);
+    if (!g_scriptInterface->CallFunction(g_pipVisionCaptureFunction, nullptr, nullptr, result, 4,
+            static_cast<UInt32>(clientTopLeft.x), static_cast<UInt32>(clientBottomRight.x),
+            static_cast<UInt32>(clientTopLeft.y), static_cast<UInt32>(clientBottomRight.y))) {
         Logger::LogWarning("[PIPVISION] SUP screenshot function call failed");
         return false;
     }
