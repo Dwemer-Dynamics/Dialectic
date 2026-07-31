@@ -2102,7 +2102,7 @@ begin function {iXStart, iXEnd, iYStart, iYEnd}
         return
     endif
     DeleteScreenshot "Dialectic" "pipvision_capture.jpg"
-    CaptureScreenshotAlt "Dialectic" "pipvision_capture" iXStart iXEnd iYStart iYEnd 0 1 90
+    CaptureScreenshotAlt "Dialectic" "pipvision_capture" iXStart iXEnd iYStart iYEnd 0 0 90
     SetFunctionValue 1
 end
 )";
