@@ -108,7 +108,6 @@ static std::unordered_map<uint32_t, ConversationCooldownEntry> g_conversationCoo
 static std::unordered_map<std::string, ConversationCooldownEntry> g_conversationCooldownByName;
 static constexpr const char* kNarratorName = "The Narrator";
 static constexpr float kNarratorLookUpPitchDegrees = -85.0f;
-static constexpr const char* kGameStateBridgePath = "Data\\NVSE\\Plugins\\dialectic_game_state.tmp";
 static bool g_loadedSaveInitSent = false;
 static long long g_lastSeenGamets = 0;
 static bool g_loadedSaveInitBlocked = false;
@@ -2226,105 +2225,38 @@ static bool HasDialoguePlaybackWorkForMenuPause() {
         || status.currentPlaybackLineActive;
 }
 
-static void RefreshGameStateBridge() {
+static void RefreshGameState() {
     static bool s_hadState = false;
     static bool s_lastInMenu = false;
     static bool s_lastPaused = false;
     static bool s_lastInDialogue = false;
     static bool s_lastInCombat = false;
-    static bool s_lastUsedNative = false;
-    static std::chrono::steady_clock::time_point s_lastComparisonSample;
-    static std::chrono::steady_clock::time_point s_lastFallbackPoll;
 
     RuntimeSnapshot::GameState nativeState;
-    const bool nativeFresh = RuntimeSnapshot::TryGetFreshGameState(
-        nativeState, std::chrono::milliseconds(500));
-    const auto now = std::chrono::steady_clock::now();
-    const bool comparisonDue = s_lastComparisonSample.time_since_epoch().count() == 0 ||
-        now - s_lastComparisonSample >= std::chrono::seconds(1);
-    const bool fallbackDue = s_lastFallbackPoll.time_since_epoch().count() == 0 ||
-        now - s_lastFallbackPoll >= std::chrono::milliseconds(100);
-    const bool shouldReadBridge = nativeFresh ? comparisonDue : fallbackDue;
-    if (!nativeFresh && fallbackDue) {
-        s_lastFallbackPoll = now;
+    if (!RuntimeSnapshot::TryGetFreshGameState(nativeState, std::chrono::milliseconds(500))) {
+        return;
     }
 
-    bool bridgeFresh = false;
-    bool bridgeInMenu = false;
-    bool bridgePaused = false;
-    bool bridgeDialogue = false;
-    bool bridgeCombat = false;
-    uint64_t bridgeAgeMs = 0;
-    if (shouldReadBridge &&
-        GetFileModifiedAgeMs(kGameStateBridgePath, bridgeAgeMs) && bridgeAgeMs <= 750) {
-        const std::string data = ReadFileIfExists(kGameStateBridgePath);
-        if (!data.empty()) {
-            const auto values = ParseBridgeKeyValueData(data);
-            const bool tradeMenuOpen = ParseBridgeFlag(values, "trade_menu_mode", false);
-            const bool pipboyOpen = ParseBridgeFlag(values, "pipboy_open", false);
-            const bool pauseMenuOpen = ParseBridgeFlag(values, "pause_menu_open", false);
-            bridgeDialogue = ParseBridgeFlag(values, "dialogue_menu_open", false);
-            bridgePaused = tradeMenuOpen || pipboyOpen || pauseMenuOpen;
-            bridgeInMenu = bridgePaused || bridgeDialogue;
-            bridgeCombat = ParseBridgeFlag(values, "combat", ParseBridgeFlag(values, "in_combat", false));
-            const auto playerSneaking = values.find("player_sneaking");
-            if (playerSneaking != values.end()) {
-                ActorPositionResolverFNV::RememberPlayerSneaking(
-                    ParseBridgeFlag(values, "player_sneaking", false));
-            }
-            bridgeFresh = true;
-        }
-    }
-
-    const bool nativeBlockingMenu = nativeFresh && (
+    const bool inMenu =
         nativeState.paused ||
         nativeState.pipboyOpen ||
         nativeState.pauseMenuOpen ||
         nativeState.dialogueMenuOpen ||
         nativeState.barterMenuOpen ||
         nativeState.containerMenuOpen ||
-        nativeState.loadingMenuOpen);
-    const bool inMenu = nativeFresh ? nativeBlockingMenu : bridgeInMenu;
-    const bool paused = nativeFresh ? nativeState.paused : bridgePaused;
-    const bool inDialogue = nativeFresh ? nativeState.dialogueMenuOpen : bridgeDialogue;
-    const bool inCombat = nativeFresh ? nativeState.inCombat : bridgeCombat;
-    if (!nativeFresh && !bridgeFresh) {
-        return;
-    }
-
-    if (nativeFresh && bridgeFresh) {
-        if (comparisonDue) {
-            const bool equivalent = nativeBlockingMenu == bridgeInMenu &&
-                nativeState.paused == bridgePaused &&
-                nativeState.dialogueMenuOpen == bridgeDialogue &&
-                nativeState.inCombat == bridgeCombat;
-            std::ostringstream detail;
-            detail << "native=" << (nativeBlockingMenu ? 1 : 0)
-                   << "," << (nativeState.paused ? 1 : 0)
-                   << "," << (nativeState.dialogueMenuOpen ? 1 : 0)
-                   << "," << (nativeState.inCombat ? 1 : 0)
-                   << " bridge=" << (bridgeInMenu ? 1 : 0)
-                   << "," << (bridgePaused ? 1 : 0)
-                   << "," << (bridgeDialogue ? 1 : 0)
-                   << "," << (bridgeCombat ? 1 : 0)
-                   << " age_ms=" << bridgeAgeMs;
-            NativeComparisonTelemetry::Record("game_state",
-                equivalent ? NativeComparisonTelemetry::Result::Match
-                           : NativeComparisonTelemetry::Result::Mismatch,
-                detail.str());
-            s_lastComparisonSample = now;
-        }
-    }
+        nativeState.loadingMenuOpen;
+    const bool paused = nativeState.paused;
+    const bool inDialogue = nativeState.dialogueMenuOpen;
+    const bool inCombat = nativeState.inCombat;
 
     if (!s_hadState || s_lastInMenu != inMenu || s_lastPaused != paused ||
         s_lastInDialogue != inDialogue ||
-        s_lastInCombat != inCombat || s_lastUsedNative != nativeFresh) {
-        Log("GameLoop: Runtime state source=%s inGame=%d inMenu=%d paused=%d dialogue=%d combat=%d loading=%d",
-            nativeFresh ? "native" : "bridge",
-            nativeFresh ? (nativeState.inGame ? 1 : 0) : 1,
+        s_lastInCombat != inCombat) {
+        Log("GameLoop: Native runtime state inGame=%d inMenu=%d paused=%d dialogue=%d combat=%d loading=%d",
+            nativeState.inGame ? 1 : 0,
             inMenu ? 1 : 0, paused ? 1 : 0, inDialogue ? 1 : 0,
             inCombat ? 1 : 0,
-            nativeFresh ? (nativeState.loadingMenuOpen ? 1 : 0) : 0);
+            nativeState.loadingMenuOpen ? 1 : 0);
         if (s_hadState && !s_lastInCombat && inCombat && Config::cancelDialogueOnCombat) {
             CancelDialogueForCombatEntry();
         }
@@ -2336,15 +2268,14 @@ static void RefreshGameStateBridge() {
         s_lastPaused = paused;
         s_lastInDialogue = inDialogue;
         s_lastInCombat = inCombat;
-        s_lastUsedNative = nativeFresh;
     }
 
     g_gameState.isInMenu = inMenu;
     g_gameState.isPaused = paused;
     g_gameState.isInDialogue = inDialogue;
     g_gameState.isInCombat = inCombat;
-    g_gameState.isInGame = nativeFresh ? nativeState.inGame : true;
-    g_gameState.isLoading = nativeFresh ? nativeState.loadingMenuOpen : false;
+    g_gameState.isInGame = nativeState.inGame;
+    g_gameState.isLoading = nativeState.loadingMenuOpen;
 }
 
 enum class FreshTargetResult {
@@ -3241,46 +3172,6 @@ static bool IsAttributionActorEligible(const ActorPositionResolverFNV::PositionR
     return !ActorEligibilityFNV::IsClearlyDisallowedCreature(metadata);
 }
 
-static CapturedDialogueSpeakerAttribution ReadRecentDialogueTopicSpeakerAttribution() {
-    constexpr const char* kDialogueSpeakerPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp";
-    uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kDialogueSpeakerPath, ageMs)) {
-        return {};
-    }
-
-    if (ageMs > 2500) {
-        DeleteFileIfExists(kDialogueSpeakerPath);
-        return {};
-    }
-
-    std::string data = ReadFileIfExists(kDialogueSpeakerPath);
-    if (data.empty()) {
-        return {};
-    }
-
-    const auto fields = ParseBridgeKeyValueData(data);
-    const auto findField = [&fields](const char* key) -> std::string {
-        const auto it = fields.find(key);
-        return it == fields.end() ? "" : it->second;
-    };
-
-    if (findField("end") != "1") {
-        return {};
-    }
-
-    DeleteFileIfExists(kDialogueSpeakerPath);
-
-    CapturedDialogueSpeakerAttribution attribution;
-    attribution.name = TrimInput(findField("speaker"));
-    attribution.formId = ParseFormIdString(findField("speaker_refid"));
-    attribution.source = "dialog_topic_handler";
-    if (!IsUsableCapturedSpeakerName(attribution.name) || attribution.formId == 0) {
-        return {};
-    }
-
-    return attribution;
-}
-
 static CapturedDialogueSpeakerAttribution GetCurrentTargetSpeakerAttribution() {
     const auto& target = TargetManager::GetCurrentTarget();
     if (target.formId == 0 ||
@@ -3381,14 +3272,7 @@ static CapturedDialogueSpeakerAttribution ResolveCapturedDialogueSpeakerAttribut
         return { speaker, speakerFormId, speakerFormId != 0 ? "dialogue_bridge" : "dialogue_bridge_name_only" };
     }
 
-    CapturedDialogueSpeakerAttribution attribution = ReadRecentDialogueTopicSpeakerAttribution();
-    if (attribution.formId != 0) {
-        if (IsDialogueMenuNpcCaptureSource(source)) {
-            RememberDialogueMenuSpeakerAttribution(attribution);
-        }
-        return attribution;
-    }
-
+    CapturedDialogueSpeakerAttribution attribution;
     if (IsDialogueMenuNpcCaptureSource(source)) {
         attribution = GetRecentDialogueMenuSpeakerAttribution();
         if (attribution.formId != 0) {
@@ -3906,9 +3790,6 @@ void Initialize() {
     g_lastUpdatePerfSummaryTime = {};
     g_updatePerfAggregates.clear();
     g_updatePerfTickCount = 0;
-    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_player_choice.tmp");
-    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp");
-    DeleteFileIfExists("Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp");
     DeleteFileIfExists(kRuntimeConfigReloadPath);
     
     ApplyModeIndex(Config::currentModeIndex, false);
@@ -3949,7 +3830,7 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("InputManager::Update", []() { InputManager::Update(); });
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
-    ProfileUpdateSubsystem("RefreshGameStateBridge", []() { RefreshGameStateBridge(); });
+    ProfileUpdateSubsystem("RefreshGameState", []() { RefreshGameState(); });
     if (ShouldPoll(g_lastRuntimeConfigFallbackPoll, std::chrono::seconds(1))) {
         ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
     }

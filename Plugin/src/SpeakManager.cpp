@@ -111,7 +111,6 @@ namespace SpeakManager {
     static bool g_currentPlaybackRechatLaunched = false;
     static bool g_currentPlaybackIsHeadVoice = false;
     static bool g_faceTargetBridgeActive = false;
-    static bool g_faceTargetScriptFallbackActive = false;
 static uint32_t g_faceTargetSpeakerFormId = 0;
 static uint32_t g_faceTargetTargetFormId = 0;
     static std::string g_lastDialogueGuardValue;
@@ -205,8 +204,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static constexpr int kDialogueActorLatestScanMs = 8000;
 
     static const char* kSubtitleBridgePath = "Data\\NVSE\\Plugins\\dialectic_subtitle.txt";
-    static const char* kLipSyncRefPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_ref.txt";
-    static const char* kLipSyncCommandPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_command.txt";
     static const char* kLipSyncStatusPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_status.txt";
     static const char* kDialogueGuardRefPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt";
     static const char* kDialogueGuardModPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_mod.txt";
@@ -214,9 +211,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static const char* kDialogueGuardStatusPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_status.txt";
     static const char* kQueueStatusPath = "Data\\NVSE\\Plugins\\dialectic_queue_status.tmp";
     static const char* kRechatStatusPath = "Data\\NVSE\\Plugins\\dialectic_rechat_status.tmp";
-    static const char* kFaceTargetSpeakerRefPath = "Data\\NVSE\\Plugins\\dialectic_facing_speaker_ref.txt";
-    static const char* kFaceTargetTargetRefPath = "Data\\NVSE\\Plugins\\dialectic_facing_target_ref.txt";
-    static const char* kFaceTargetYawPath = "Data\\NVSE\\Plugins\\dialectic_facing_yaw.txt";
 
     struct PassiveSubtitleSegment {
         double startSeconds = 0.0;
@@ -738,18 +732,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return 0x00000014;
     }
 
-    static void WriteFaceTargetRefFile(const char* path, uint32_t formId) {
-        std::ofstream file(path, std::ios::trunc);
-        if (!file.is_open()) {
-            Log("SpeakManager: Failed to write face-target bridge file: %s", path);
-            return;
-        }
-
-        if (formId != 0) {
-            file << RawHexFormId(formId) << "\n";
-        }
-    }
-
     static bool CalculateFaceTargetYaw(uint32_t speakerFormId,
                                        uint32_t targetFormId,
                                        float& yawDegrees,
@@ -793,34 +775,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return true;
     }
 
-    static bool WriteFaceTargetYawFile(uint32_t speakerFormId, uint32_t targetFormId, std::string* reason = nullptr) {
-        std::ofstream file(kFaceTargetYawPath, std::ios::trunc);
-        if (!file.is_open()) {
-            Log("SpeakManager: Failed to write face-target yaw bridge file: %s", kFaceTargetYawPath);
-            if (reason) {
-                *reason = "yaw_file_open_failed";
-            }
-            return false;
-        }
-
-        float yawDegrees = 0.0f;
-        std::string localReason;
-        if (CalculateFaceTargetYaw(speakerFormId, targetFormId, yawDegrees, &localReason)) {
-            file << std::fixed << std::setprecision(3) << yawDegrees << "\n";
-            if (reason) {
-                std::ostringstream stream;
-                stream << "yaw=" << std::fixed << std::setprecision(3) << yawDegrees
-                    << " " << localReason;
-                *reason = stream.str();
-            }
-            return true;
-        }
-        if (reason) {
-            *reason = localReason.empty() ? "yaw_unresolved" : localReason;
-        }
-        return false;
-    }
-
     static void ApplyFaceTargetAtDialogueStart();
 
     static void ClearAppliedFaceTarget(uint32_t speakerFormId) {
@@ -828,10 +782,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (speakerFormId != 0) {
                 XNVSEAdapter::ClearNativeFacing(speakerFormId);
             }
-            WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, 0);
-            WriteFaceTargetRefFile(kFaceTargetTargetRefPath, 0);
-            std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-            g_faceTargetScriptFallbackActive = false;
         };
         if (GameThreadDispatcher::IsGameThread()) {
             clear();
@@ -917,23 +867,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             const uint32_t speakerFormId = g_faceTargetSpeakerFormId;
             const uint32_t targetFormId = g_faceTargetTargetFormId;
             auto apply = [speakerFormId, targetFormId, yawDegrees]() {
-                if (XNVSEAdapter::ApplyNativeFacing(speakerFormId, targetFormId, yawDegrees)) {
-                    if (g_faceTargetScriptFallbackActive) {
-                        WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, 0);
-                        WriteFaceTargetRefFile(kFaceTargetTargetRefPath, 0);
-                        std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-                        g_faceTargetScriptFallbackActive = false;
-                    }
-                    return;
+                if (!XNVSEAdapter::ApplyNativeFacing(speakerFormId, targetFormId, yawDegrees)) {
+                    Log("SpeakManager: Native one-shot face target failed speaker=0x%08X target=0x%08X",
+                        speakerFormId, targetFormId);
                 }
-
-                WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, speakerFormId);
-                WriteFaceTargetRefFile(kFaceTargetTargetRefPath, targetFormId);
-                std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-                if (yawFile.is_open()) {
-                    yawFile << std::fixed << std::setprecision(3) << yawDegrees << "\n";
-                }
-                g_faceTargetScriptFallbackActive = true;
             };
             if (GameThreadDispatcher::IsGameThread()) {
                 apply();
@@ -1688,51 +1625,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         out << status << "\r\n";
     }
 
-    static void WriteLipSyncCommand(uint32_t formId, const std::string& command) {
-        if (formId == 0 || command.empty()) {
-            return;
-        }
-        g_lipSyncCommandsRequested.fetch_add(1, std::memory_order_relaxed);
-
-        const std::string refId = ConsoleFormId(formId);
-        int phoneme = -1;
-        int intensity = 0;
-        const bool reset = EqualsIgnoreCase(command, "MFG Reset");
-        const bool parsed = reset ||
-            std::sscanf(command.c_str(), "MFG Phoneme %d %d", &phoneme, &intensity) == 2;
-        auto apply = [formId, command, refId, phoneme, intensity, reset, parsed]() {
-            if (parsed && XNVSEAdapter::ApplyNativeMfg(formId, phoneme, intensity, reset)) {
-                g_nativeMfgApplied.fetch_add(1, std::memory_order_relaxed);
-                std::ofstream refClear(kLipSyncRefPath, std::ios::binary | std::ios::trunc);
-                std::ofstream commandClear(kLipSyncCommandPath, std::ios::binary | std::ios::trunc);
-                WriteLipSyncStatus(std::string("status=native_applied ref=") + refId + " command=" + command);
-            } else {
-                g_scriptMfgFallbacks.fetch_add(1, std::memory_order_relaxed);
-                std::ofstream refOut(kLipSyncRefPath, std::ios::binary | std::ios::trunc);
-                std::ofstream out(kLipSyncCommandPath, std::ios::binary | std::ios::trunc);
-                if (!refOut.is_open() || !out.is_open()) {
-                    WriteLipSyncStatus("status=error reason=fallback_file_open_failed");
-                    return;
-                }
-                refOut << refId << "\r\n";
-                out << command << "\r\n";
-                WriteLipSyncStatus(std::string("status=script_fallback ref=") + refId + " command=" + command);
-            }
-
-            ++g_lipSyncCommandCount;
-            if (g_lipSyncCommandCount <= 5 || g_lipSyncCommandCount % 20 == 0) {
-                Log("SpeakManager: Lip sync fallback command #%llu ref=0x%08X command=%s",
-                    static_cast<unsigned long long>(g_lipSyncCommandCount), formId, command.c_str());
-            }
-        };
-        if (GameThreadDispatcher::IsGameThread()) {
-            apply();
-        } else {
-            GameThreadDispatcher::Enqueue("lipsync", "lipsync:" + std::to_string(formId),
-                RuntimeGeneration::Current(), std::move(apply));
-        }
-    }
-
     static int PhonemeForTextAt(const std::string& text, size_t index, size_t& consumed) {
         consumed = 1;
         if (index >= text.size()) {
@@ -2211,10 +2103,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         ++pending.attempts;
         if (pending.attempts >= kMaxLipSyncResetAttempts) {
-            Log("SpeakManager: Lip sync reset exhausted reason=%s ref=0x%08X attempts=%d; using script bridge",
+            Log("SpeakManager: Lip sync reset exhausted reason=%s ref=0x%08X attempts=%d",
                 pending.reason.c_str(), pending.actorFormId, pending.attempts);
-            WriteLipSyncCommand(pending.actorFormId, "MFG Reset");
-            WriteLipSyncStatus(std::string("status=reset_bridge_fallback reason=") +
+            WriteLipSyncStatus(std::string("status=reset_failed reason=") +
                                pending.reason + " ref=" + ConsoleFormId(pending.actorFormId));
             return;
         }
