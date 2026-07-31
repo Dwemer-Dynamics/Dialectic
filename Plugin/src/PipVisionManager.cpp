@@ -27,9 +27,22 @@ namespace {
 constexpr std::uintmax_t kMaximumCaptureBytes = 8U * 1024U * 1024U;
 constexpr auto kCaptureReadyTimeout = std::chrono::seconds(6);
 constexpr auto kCapturePollInterval = std::chrono::milliseconds(50);
+constexpr int kHudSettleFrames = 2;
 constexpr const char* kCaptureRelativePath = "Data\\textures\\SUPScreenshots\\Dialectic\\pipvision_capture.jpg";
 
 std::atomic_bool g_captureInFlight{false};
+bool g_hudHidden = false;
+
+struct PendingCapture {
+    bool active{false};
+    int framesRemaining{0};
+    std::uint64_t generation{0};
+    std::filesystem::path path;
+    std::string captureId;
+    std::string metadata;
+};
+
+PendingCapture g_pendingCapture;
 
 std::string FormatFormId(std::uint32_t formId) {
     if (formId == 0) return {};
@@ -153,41 +166,31 @@ bool WaitForStableCapture(const std::filesystem::path& path,
     return false;
 }
 
-} // namespace
-
-bool RequestCapture() {
-    bool expected = false;
-    if (!g_captureInFlight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        IngameNotifier::Notify("PipVision is already processing a capture", IngameNotifier::Level::Warning);
-        return false;
+void RestoreHud() {
+    if (!g_hudHidden) return;
+    if (!XNVSEAdapter::ToggleNativePipVisionMenus()) {
+        Logger::LogError("[PIPVISION] failed to restore Fallout HUD");
+        return;
     }
+    g_hudHidden = false;
+    Logger::LogInfo("[PIPVISION] Fallout HUD restored");
+}
 
-    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
-    if (!gameState.valid || !gameState.inGame || gameState.paused || gameState.loadingMenuOpen) {
-        g_captureInFlight.store(false, std::memory_order_release);
-        IngameNotifier::Notify("PipVision is unavailable while the game is paused or loading", IngameNotifier::Level::Warning);
-        return false;
+void AbortPendingCapture(const char* reason, bool notify) {
+    RestoreHud();
+    g_pendingCapture = {};
+    g_captureInFlight.store(false, std::memory_order_release);
+    Logger::LogWarning("[PIPVISION] pending capture aborted reason=%s", reason ? reason : "unknown");
+    if (notify) {
+        IngameNotifier::Notify("PipVision capture was cancelled", IngameNotifier::Level::Warning);
     }
+}
 
-    const std::filesystem::path capturePath = CapturePath();
-    std::error_code removeError;
-    std::filesystem::remove(capturePath, removeError);
-
-    if (!XNVSEAdapter::CaptureNativePipVisionScreenshot()) {
-        g_captureInFlight.store(false, std::memory_order_release);
-        IngameNotifier::Notify("PipVision requires SUP NVSE 8.55 or newer", IngameNotifier::Level::Error);
-        return false;
-    }
-
-    const long long captureTimestamp = Misc::GetCurrentTimeMillis();
-    const std::string captureId = "pv_" + std::to_string(RuntimeGeneration::Current()) + "_" +
-        std::to_string(captureTimestamp);
-    const std::string metadata = BuildCaptureMetadata(gameState, WorldContextFNV::GetCurrent(), captureId);
-
+bool StartUploadTask(const PendingCapture& capture) {
     TaskManager::Options options;
     options.type = "pipvision";
     options.key = "capture";
-    options.generation = RuntimeGeneration::Current();
+    options.generation = capture.generation;
     options.lane = TaskManager::Lane::Interactive;
     options.priority = true;
     options.deadlineFromEnqueue = true;
@@ -197,7 +200,8 @@ bool RequestCapture() {
 
     const TaskManager::TaskHandle task = TaskManager::Submit(
         std::move(options),
-        [capturePath, captureId, metadata](const TaskManager::CancellationToken& token) {
+        [capturePath = capture.path, captureId = capture.captureId, metadata = capture.metadata](
+            const TaskManager::CancellationToken& token) {
             std::string imageData;
             if (!WaitForStableCapture(capturePath, token, imageData)) {
                 if (!token.IsCancellationRequested()) {
@@ -226,26 +230,96 @@ bool RequestCapture() {
                 IngameNotifier::Notify("PipVision capture failed on the server", IngameNotifier::Level::Error);
             }
         },
-        [capturePath](bool, const char*) {
+        [capturePath = capture.path](bool, const char*) {
             std::error_code error;
             std::filesystem::remove(capturePath, error);
             g_captureInFlight.store(false, std::memory_order_release);
         });
 
-    if (!task) {
-        g_captureInFlight.store(false, std::memory_order_release);
-        IngameNotifier::Notify("PipVision capture queue is unavailable", IngameNotifier::Level::Error);
+    return static_cast<bool>(task);
+}
+
+} // namespace
+
+bool RequestCapture() {
+    bool expected = false;
+    if (!g_captureInFlight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        IngameNotifier::Notify("PipVision is already processing a capture", IngameNotifier::Level::Warning);
         return false;
     }
 
-    Logger::LogInfo("[PIPVISION] capture requested capture_id=%s crosshair=0x%08X location=%s worldspace=%s",
-        captureId.c_str(), gameState.crosshairFormId, gameState.cellName.c_str(), gameState.worldspaceName.c_str());
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    if (!gameState.valid || !gameState.inGame || gameState.paused || gameState.loadingMenuOpen) {
+        g_captureInFlight.store(false, std::memory_order_release);
+        IngameNotifier::Notify("PipVision is unavailable while the game is paused or loading", IngameNotifier::Level::Warning);
+        return false;
+    }
+
+    const std::filesystem::path capturePath = CapturePath();
+    std::error_code removeError;
+    std::filesystem::remove(capturePath, removeError);
+
+    const long long captureTimestamp = Misc::GetCurrentTimeMillis();
+    const std::string captureId = "pv_" + std::to_string(RuntimeGeneration::Current()) + "_" +
+        std::to_string(captureTimestamp);
+    const std::string metadata = BuildCaptureMetadata(gameState, WorldContextFNV::GetCurrent(), captureId);
+
+    if (!XNVSEAdapter::ToggleNativePipVisionMenus()) {
+        g_captureInFlight.store(false, std::memory_order_release);
+        IngameNotifier::Notify("PipVision could not hide the Fallout HUD", IngameNotifier::Level::Error);
+        return false;
+    }
+    g_hudHidden = true;
+
+    g_pendingCapture.active = true;
+    g_pendingCapture.framesRemaining = kHudSettleFrames;
+    g_pendingCapture.generation = RuntimeGeneration::Current();
+    g_pendingCapture.path = capturePath;
+    g_pendingCapture.captureId = captureId;
+    g_pendingCapture.metadata = metadata;
+
+    Logger::LogInfo("[PIPVISION] capture requested capture_id=%s crosshair=0x%08X location=%s worldspace=%s hud_settle_frames=%d",
+        captureId.c_str(), gameState.crosshairFormId, gameState.cellName.c_str(),
+        gameState.worldspaceName.c_str(), kHudSettleFrames);
     IngameNotifier::Notify("PipVision capture started", IngameNotifier::Level::Info);
     return true;
 }
 
+void Update() {
+    if (!g_pendingCapture.active) return;
+
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    if (g_pendingCapture.generation != RuntimeGeneration::Current() || !gameState.valid ||
+        !gameState.inGame || gameState.paused || gameState.loadingMenuOpen) {
+        AbortPendingCapture("game_state_changed", false);
+        return;
+    }
+
+    if (--g_pendingCapture.framesRemaining > 0) return;
+
+    PendingCapture capture = std::move(g_pendingCapture);
+    g_pendingCapture = {};
+    const bool captured = XNVSEAdapter::CaptureNativePipVisionScreenshot();
+    RestoreHud();
+
+    if (!captured) {
+        g_captureInFlight.store(false, std::memory_order_release);
+        IngameNotifier::Notify("PipVision requires SUP NVSE 8.55 or newer", IngameNotifier::Level::Error);
+        return;
+    }
+
+    if (!StartUploadTask(capture)) {
+        std::error_code error;
+        std::filesystem::remove(capture.path, error);
+        g_captureInFlight.store(false, std::memory_order_release);
+        IngameNotifier::Notify("PipVision capture queue is unavailable", IngameNotifier::Level::Error);
+    }
+}
+
 void Shutdown() {
     TaskManager::CancelByType("pipvision");
+    RestoreHud();
+    g_pendingCapture = {};
     g_captureInFlight.store(false, std::memory_order_release);
 }
 

@@ -3875,6 +3875,7 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("PlayerInventoryManagerFNV::Update", []() { PlayerInventoryManagerFNV::Update(); });
     ProfileUpdateSubsystem("PlayerSurvivalManagerFNV::Update", []() { PlayerSurvivalManagerFNV::Update(); });
     ProfileUpdateSubsystem("FalloutStatsManagerFNV::Update", []() { FalloutStatsManagerFNV::Update(); });
+    ProfileUpdateSubsystem("PipVisionManager::Update", []() { PipVisionManager::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });

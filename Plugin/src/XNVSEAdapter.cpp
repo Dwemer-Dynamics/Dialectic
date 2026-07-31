@@ -49,6 +49,7 @@ Script* g_stopLookFunction = nullptr;
 Script* g_modeMenuFunction = nullptr;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
+Script* g_pipVisionToggleMenusFunction = nullptr;
 Script* g_pipVisionCaptureFunction = nullptr;
 Script* g_mfgPhonemeFunction = nullptr;
 Script* g_mfgResetFunction = nullptr;
@@ -1006,6 +1007,7 @@ void Shutdown() {
     g_modeMenuFunction = nullptr;
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
+    g_pipVisionToggleMenusFunction = nullptr;
     g_pipVisionCaptureFunction = nullptr;
     g_mfgPhonemeFunction = nullptr;
     g_mfgResetFunction = nullptr;
@@ -2033,6 +2035,31 @@ end
     const bool opened = g_scriptInterface->CallFunctionAlt(*function, nullptr, 0);
     Logger::LogInfo("[NATIVE_UI] %s menu request dispatched success=%d", name, opened ? 1 : 0);
     return opened;
+}
+
+bool ToggleNativePipVisionMenus() {
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
+        !g_scriptInterface->CallFunctionAlt) {
+        return false;
+    }
+
+    if (!g_pipVisionToggleMenusFunction) {
+        static constexpr const char* kToggleMenusSource = R"(
+begin function {}
+    Con_ToggleMenus
+end
+)";
+        g_pipVisionToggleMenusFunction = g_scriptInterface->CompileScript(kToggleMenusSource);
+        if (!g_pipVisionToggleMenusFunction) {
+            Logger::LogError("[PIPVISION] failed to compile HUD toggle function");
+            return false;
+        }
+    }
+
+    const bool toggled = g_scriptInterface->CallFunctionAlt(
+        g_pipVisionToggleMenusFunction, nullptr, 0);
+    Logger::LogInfo("[PIPVISION] HUD toggle dispatched success=%d", toggled ? 1 : 0);
+    return toggled;
 }
 
 bool CaptureNativePipVisionScreenshot() {
