@@ -12,21 +12,13 @@
 #include "TaskManager.h"
 #include "WorldContextFNV.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cctype>
-#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <string>
-#include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace QuestJournalFNV {
@@ -45,21 +37,16 @@ struct QuestEntry {
     std::vector<QuestObjective> objectives;
 };
 
-static constexpr const char* kQuestStatePath = "Data\\NVSE\\Plugins\\dialectic_quests.tmp";
-static constexpr const char* kDirectActiveQuestPath = "Data\\NVSE\\Plugins\\dialectic_active_quest_direct.tmp";
-static constexpr auto kBridgeReadInterval = std::chrono::milliseconds(750);
 static constexpr auto kChangeCheckInterval = std::chrono::milliseconds(1000);
 static constexpr auto kHeartbeatInterval = std::chrono::seconds(30);
 
-static std::chrono::steady_clock::time_point g_lastBridgeReadTime;
 static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::chrono::steady_clock::time_point g_lastCheckTime;
 static std::vector<QuestEntry> g_quests;
 static std::string g_lastSentSignature;
 static std::mutex g_mutex;
-static std::string g_lastBridgeStatus;
-static std::chrono::steady_clock::time_point g_lastBridgeStatusLogTime;
-static std::atomic<bool> g_hasScriptDirectQuestState{false};
+static std::string g_lastStatus;
+static std::chrono::steady_clock::time_point g_lastStatusLogTime;
 
 std::string Trim(const std::string& value) {
     const char* whitespace = " \t\r\n";
@@ -84,75 +71,18 @@ std::string Trim(const std::string& value) {
     return trimmed;
 }
 
-std::string DecodeEscapedLineBreaks(std::string value) {
-    size_t pos = 0;
-    while ((pos = value.find("\\r", pos)) != std::string::npos) {
-        value.replace(pos, 2, "\r");
-        ++pos;
-    }
-
-    pos = 0;
-    while ((pos = value.find("\\n", pos)) != std::string::npos) {
-        value.replace(pos, 2, "\n");
-        ++pos;
-    }
-
-    return value;
-}
-
-std::vector<std::string> Split(const std::string& value, char delimiter) {
-    std::vector<std::string> parts;
-    std::string part;
-    std::istringstream stream(value);
-    while (std::getline(stream, part, delimiter)) {
-        parts.push_back(part);
-    }
-    return parts;
-}
-
-int ParseInt(const std::string& value, int fallback = 0) {
-    try {
-        return std::stoi(Trim(value));
-    } catch (...) {
-        return fallback;
-    }
-}
-
-bool GetFileModifiedAgeMs(const char* path, uint64_t& ageMs) {
-    WIN32_FILE_ATTRIBUTE_DATA attributes = {};
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &attributes)) {
-        return false;
-    }
-
-    FILETIME currentFileTime = {};
-    GetSystemTimeAsFileTime(&currentFileTime);
-
-    ULARGE_INTEGER current = {};
-    current.LowPart = currentFileTime.dwLowDateTime;
-    current.HighPart = currentFileTime.dwHighDateTime;
-
-    ULARGE_INTEGER modified = {};
-    modified.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
-    modified.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
-
-    ageMs = current.QuadPart <= modified.QuadPart
-        ? 0
-        : static_cast<uint64_t>((current.QuadPart - modified.QuadPart) / 10000);
-    return true;
-}
-
-void LogBridgeStatus(const std::string& status, bool force = false) {
+void LogQuestStatus(const std::string& status, bool force = false) {
     const auto now = std::chrono::steady_clock::now();
-    const bool changed = status != g_lastBridgeStatus;
-    const bool due = g_lastBridgeStatusLogTime.time_since_epoch().count() == 0 ||
-        now - g_lastBridgeStatusLogTime >= kHeartbeatInterval;
+    const bool changed = status != g_lastStatus;
+    const bool due = g_lastStatusLogTime.time_since_epoch().count() == 0 ||
+        now - g_lastStatusLogTime >= kHeartbeatInterval;
     if (!force && !changed && !due) {
         return;
     }
 
-    g_lastBridgeStatus = status;
-    g_lastBridgeStatusLogTime = now;
-    Logger::LogInfo("QuestJournalFNV: bridge status %s", status.c_str());
+    g_lastStatus = status;
+    g_lastStatusLogTime = now;
+    Logger::LogInfo("QuestJournalFNV: native status %s", status.c_str());
 }
 
 std::string FallbackQuestName(const QuestEntry& quest) {
@@ -168,6 +98,8 @@ std::string FallbackQuestName(const QuestEntry& quest) {
 bool RefreshFromNative() {
     const RuntimeSnapshot::QuestState native = RuntimeSnapshot::GetQuest();
     if (native.capturedAt.time_since_epoch().count() == 0) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_quests.clear();
         return false;
     }
 
@@ -194,7 +126,6 @@ bool RefreshFromNative() {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_quests = quests;
-        g_hasScriptDirectQuestState = false;
     }
     std::ostringstream status;
     status << "native quests=" << quests.size();
@@ -202,234 +133,21 @@ bool RefreshFromNative() {
         status << " active=" << FallbackQuestName(quests.front())
             << " objectives=" << quests.front().objectives.size();
     }
-    LogBridgeStatus(status.str());
+    LogQuestStatus(status.str());
     return true;
 }
 
-bool RefreshFromBridge() {
-    const auto now = std::chrono::steady_clock::now();
-    if (g_lastBridgeReadTime.time_since_epoch().count() != 0 &&
-        now - g_lastBridgeReadTime < kBridgeReadInterval) {
-        return false;
+bool ContainsIgnoreCase(const std::string& value, const std::string& needle) {
+    if (needle.empty()) {
+        return true;
     }
-    g_lastBridgeReadTime = now;
-
-    uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kQuestStatePath, ageMs)) {
-        if (!g_hasScriptDirectQuestState.load()) {
-            LogBridgeStatus("missing Data\\NVSE\\Plugins\\dialectic_quests.tmp");
-        }
-        return false;
-    }
-    if (ageMs > 10000) {
-        if (!g_hasScriptDirectQuestState.load()) {
-            LogBridgeStatus("stale Data\\NVSE\\Plugins\\dialectic_quests.tmp");
-        }
-        return false;
-    }
-
-    std::ifstream input(kQuestStatePath, std::ios::binary);
-    if (!input.is_open()) {
-        LogBridgeStatus("open_failed");
-        return false;
-    }
-
-    std::vector<QuestEntry> quests;
-    std::unordered_map<std::string, size_t> questIndexById;
-
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-
-    std::string line;
-    std::istringstream lines(DecodeEscapedLineBreaks(buffer.str()));
-    while (std::getline(lines, line)) {
-        line = Trim(line);
-        if (line.empty() || line.rfind("source=", 0) == 0) {
-            continue;
-        }
-
-        if (line.rfind("quest=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(6), '^');
-            if (parts.size() < 2) {
-                continue;
-            }
-
-            QuestEntry quest;
-            quest.formId = Trim(parts[0]);
-            quest.name = Trim(parts[1]);
-            if (parts.size() >= 3) {
-                quest.editorId = Trim(parts[2]);
-            }
-            if (parts.size() >= 4) {
-                quest.selected = ParseInt(parts[3]) != 0;
-            }
-            if (quest.formId.empty()) {
-                continue;
-            }
-
-            auto existing = questIndexById.find(quest.formId);
-            if (existing == questIndexById.end()) {
-                questIndexById[quest.formId] = quests.size();
-                quests.push_back(quest);
-            } else {
-                if (!quest.name.empty()) {
-                    quests[existing->second].name = quest.name;
-                }
-                if (!quest.editorId.empty()) {
-                    quests[existing->second].editorId = quest.editorId;
-                }
-                quests[existing->second].selected = quests[existing->second].selected || quest.selected;
-            }
-        } else if (line.rfind("objective=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(10), '^');
-            if (parts.size() < 3) {
-                continue;
-            }
-
-            const std::string questId = Trim(parts[0]);
-            if (questId.empty()) {
-                continue;
-            }
-
-            auto existing = questIndexById.find(questId);
-            if (existing == questIndexById.end()) {
-                QuestEntry quest;
-                quest.formId = questId;
-                questIndexById[questId] = quests.size();
-                quests.push_back(quest);
-                existing = questIndexById.find(questId);
-            }
-
-            QuestObjective objective;
-            objective.objectiveId = ParseInt(parts[1]);
-            objective.text = Trim(parts[2]);
-            if (!objective.text.empty()) {
-                quests[existing->second].objectives.push_back(objective);
-            }
-        }
-    }
-
-    quests.erase(std::remove_if(quests.begin(), quests.end(), [](const QuestEntry& quest) {
-        return quest.formId.empty() && quest.name.empty();
-    }), quests.end());
-
-    if (quests.size() > 24) {
-        quests.resize(24);
-    }
-    for (auto& quest : quests) {
-        if (quest.objectives.size() > 12) {
-            quest.objectives.resize(12);
-        }
-    }
-    std::stable_sort(quests.begin(), quests.end(), [](const QuestEntry& left, const QuestEntry& right) {
-        return left.selected && !right.selected;
-    });
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_quests = quests;
-    g_hasScriptDirectQuestState = false;
-    std::ostringstream status;
-    status << "fresh quests=" << quests.size();
-    if (!quests.empty()) {
-        status << " selected=" << (quests.front().selected ? "1" : "0")
-            << " first=" << FallbackQuestName(quests.front());
-    }
-    LogBridgeStatus(status.str());
-    return true;
-}
-
-bool RefreshFromDirectActiveQuestBridge() {
-    uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kDirectActiveQuestPath, ageMs) || ageMs > 10000) {
-        return false;
-    }
-
-    std::ifstream input(kDirectActiveQuestPath, std::ios::binary);
-    if (!input.is_open()) {
-        return false;
-    }
-
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-
-    std::vector<QuestEntry> quests;
-    std::unordered_map<std::string, size_t> questIndexById;
-    std::string line;
-    std::istringstream lines(DecodeEscapedLineBreaks(buffer.str()));
-    while (std::getline(lines, line)) {
-        line = Trim(line);
-        if (line.empty() || line.rfind("source=", 0) == 0) {
-            continue;
-        }
-
-        if (line.rfind("active=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(7), '^');
-            if (parts.empty()) {
-                continue;
-            }
-
-            QuestEntry quest;
-            quest.formId = Trim(parts[0]);
-            if (parts.size() >= 2) {
-                quest.name = Trim(parts[1]);
-            }
-            if (parts.size() >= 3) {
-                quest.editorId = Trim(parts[2]);
-            }
-            quest.selected = true;
-
-            if (!quest.formId.empty() && quest.formId != "0" && quest.formId != "00000000") {
-                if (quest.name.empty() || quest.name == "none") {
-                    quest.name = !quest.editorId.empty() && quest.editorId != "none" ? quest.editorId : quest.formId;
-                }
-                questIndexById[quest.formId] = quests.size();
-                quests.push_back(quest);
-            }
-        } else if (line.rfind("objective=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(10), '^');
-            if (parts.size() < 3) {
-                continue;
-            }
-
-            const std::string questId = Trim(parts[0]);
-            if (questId.empty()) {
-                continue;
-            }
-
-            auto existing = questIndexById.find(questId);
-            if (existing == questIndexById.end()) {
-                QuestEntry quest;
-                quest.formId = questId;
-                quest.selected = true;
-                questIndexById[questId] = quests.size();
-                quests.push_back(quest);
-                existing = questIndexById.find(questId);
-            }
-
-            QuestObjective objective;
-            objective.objectiveId = ParseInt(parts[1]);
-            objective.text = Trim(parts[2]);
-            if (!objective.text.empty()) {
-                quests[existing->second].objectives.push_back(objective);
-            }
-        }
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        g_quests = quests;
-        g_hasScriptDirectQuestState = true;
-    }
-
-    std::ostringstream status;
-    status << "direct_file quests=" << quests.size();
-    if (!quests.empty()) {
-        status << " active=" << FallbackQuestName(quests.front())
-            << " form=" << quests.front().formId
-            << " editor=" << quests.front().editorId;
-    }
-    LogBridgeStatus(status.str());
-    return true;
+    std::string normalizedValue = value;
+    std::string normalizedNeedle = needle;
+    std::transform(normalizedValue.begin(), normalizedValue.end(), normalizedValue.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    std::transform(normalizedNeedle.begin(), normalizedNeedle.end(), normalizedNeedle.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return normalizedValue.find(normalizedNeedle) != std::string::npos;
 }
 
 std::string BuildSignature(const std::vector<QuestEntry>& quests) {
@@ -543,9 +261,7 @@ void SendQuests(std::vector<QuestEntry> quests) {
 } // namespace
 
 void SendNow(bool force) {
-    if (!RefreshFromNative() && !RefreshFromDirectActiveQuestBridge()) {
-        RefreshFromBridge();
-    }
+    RefreshFromNative();
 
     std::vector<QuestEntry> quests;
     {
@@ -584,38 +300,69 @@ void SendNow(bool force) {
 }
 
 void UpdateActiveQuestFromScript(const char* formId, const char* name, const char* editorId) {
-    QuestEntry quest;
-    quest.formId = Trim(formId ? formId : "");
+    RuntimeSnapshot::QuestState quest;
+    std::string normalizedFormId = Trim(formId ? formId : "");
+    if (normalizedFormId.rfind("0x", 0) == 0 || normalizedFormId.rfind("0X", 0) == 0) {
+        normalizedFormId.erase(0, 2);
+    }
+    try {
+        quest.formId = static_cast<uint32_t>(std::stoul(normalizedFormId, nullptr, 16));
+    } catch (...) {
+        quest.formId = 0;
+    }
     quest.name = Trim(name ? name : "");
     quest.editorId = Trim(editorId ? editorId : "");
-    quest.selected = true;
+    quest.valid = quest.formId != 0;
+    quest.generation = RuntimeGeneration::Current();
+    quest.capturedAt = std::chrono::steady_clock::now();
+    RuntimeSnapshot::UpdateQuest(std::move(quest));
+    LogQuestStatus("script command updated native snapshot", true);
+    SendNow(true);
+}
+
+std::string BuildCurrentQuestResult(const std::string& filterValue) {
+    RefreshFromNative();
 
     std::vector<QuestEntry> quests;
-    if (!quest.formId.empty() && quest.formId != "0" && quest.formId != "00000000") {
-        if (quest.name.empty()) {
-            quest.name = !quest.editorId.empty() ? quest.editorId : quest.formId;
-        }
-        quests.push_back(quest);
-    }
-
-    const std::string signature = BuildSignature(quests);
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_quests = quests;
-        g_hasScriptDirectQuestState = true;
-        g_lastSentSignature = signature;
-        g_lastSendTime = std::chrono::steady_clock::now();
+        quests = g_quests;
     }
 
-    std::ostringstream status;
-    status << "script_direct quests=" << quests.size();
-    if (!quests.empty()) {
-        status << " active=" << FallbackQuestName(quests.front())
-            << " form=" << quests.front().formId
-            << " editor=" << quests.front().editorId;
+    const std::string filter = Trim(filterValue);
+    std::vector<std::string> lines;
+    for (const auto& quest : quests) {
+        const std::string questName = FallbackQuestName(quest);
+        const bool questMatches = filter.empty() ||
+            ContainsIgnoreCase(quest.formId, filter) ||
+            ContainsIgnoreCase(questName, filter) ||
+            ContainsIgnoreCase(quest.editorId, filter);
+        if (questMatches) {
+            lines.push_back(questName + " (" + quest.formId + ")");
+        }
+
+        for (const auto& objective : quest.objectives) {
+            if (filter.empty() || questMatches || ContainsIgnoreCase(objective.text, filter)) {
+                lines.push_back(questName + ": " + objective.text);
+            }
+        }
     }
-    LogBridgeStatus(status.str(), true);
-    SendQuests(quests);
+
+    if (lines.empty()) {
+        return filter.empty()
+            ? "No active quest entries were found in the native quest snapshot."
+            : "No quest entries matched " + filter + ".";
+    }
+
+    std::ostringstream result;
+    result << "Quest journal: ";
+    for (size_t i = 0; i < lines.size() && i < 16; ++i) {
+        if (i > 0) {
+            result << "; ";
+        }
+        result << lines[i];
+    }
+    return result.str();
 }
 
 void Update() {
