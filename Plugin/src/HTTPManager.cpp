@@ -27,7 +27,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.6.1"
+#define DIALECTIC_VERSION "0.6.5"
 #endif
 
 #pragma comment(lib, "ws2_32.lib")
