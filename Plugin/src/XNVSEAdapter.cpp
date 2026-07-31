@@ -1996,7 +1996,7 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
             name = "mode";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Modes^Select active mode:|Standard|Whisper|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode"
+    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Modes^Select active mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode"
 end
 )";
             break;

@@ -491,6 +491,12 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
 
 static float GetPlayerSpeechDistanceMultiplier();
 static bool IsStealthPlayerInputActive();
+static bool EqualsIgnoreCase(const std::string& left, const std::string& right);
+
+static bool IsPrivateConversationMode() {
+    return EqualsIgnoreCase(Config::currentMode, "WHISPER") ||
+        EqualsIgnoreCase(Config::currentMode, "CLOSE");
+}
 
 static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     std::vector<std::string> names;
@@ -732,7 +738,7 @@ static std::string BuildPrivateNarratorAudienceSnapshotJson() {
     return json.str();
 }
 
-static std::string BuildTargetOnlyAudienceSnapshotJson() {
+static std::string BuildTargetOnlyAudienceSnapshotJson(bool privateConversation = false) {
     const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
     std::ostringstream people;
     people << "|" << playerName << "|";
@@ -742,6 +748,9 @@ static std::string BuildTargetOnlyAudienceSnapshotJson() {
 
     std::ostringstream json;
     json << "{\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",\"target_only\":true";
+    if (privateConversation) {
+        json << ",\"private\":true,\"privacy_scope\":\"target_only\"";
+    }
     if (g_conversationPartnerFormId != 0) {
         json << ",\"target_form_id\":\"0x"
              << std::hex << std::setw(8) << std::setfill('0') << g_conversationPartnerFormId << std::dec
@@ -768,6 +777,45 @@ static float GetPlayerSpeechDistanceMultiplier() {
     }
 
     return std::clamp(multiplier, 0.05f, 4.0f);
+}
+
+static float GetConversationTargetRadius() {
+    constexpr float kDefaultTargetRadius = 500.0f;
+    constexpr float kCloseRadius = 200.0f;
+    if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+        return ActorPositionResolverFNV::IsPlayerSneaking()
+            ? kCloseRadius * 0.5f
+            : kCloseRadius;
+    }
+    return kDefaultTargetRadius * GetPlayerSpeechDistanceMultiplier();
+}
+
+// Private speech modes require the selected listener to remain within their request-local radius.
+static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::string& name, bool notify) {
+    if (!IsPrivateConversationMode() || formId == 0) {
+        return true;
+    }
+
+    const auto player = ActorPositionResolverFNV::ResolvePlayer();
+    const auto target = ActorPositionResolverFNV::ResolveActor(formId);
+    if (!player.resolved || !target.resolved) {
+        Logger::LogDebug("GameLoop: Private mode range unavailable for %s (0x%08X); preserving explicit target",
+            name.c_str(), formId);
+        return true;
+    }
+
+    const auto spatial = SpatialAwarenessFNV::Evaluate(player, target);
+    const float radius = GetConversationTargetRadius();
+    if (std::isfinite(spatial.airDistance) && spatial.airDistance <= radius) {
+        return true;
+    }
+
+    Logger::LogInfo("GameLoop: %s mode rejected %s (0x%08X), distance=%.1f radius=%.1f",
+        Config::currentMode.c_str(), name.c_str(), formId, spatial.airDistance, radius);
+    if (notify) {
+        Console::Print("[Dialectic] Move closer to %s", name.empty() ? "the target" : name.c_str());
+    }
+    return false;
 }
 
 static bool IsStealthPlayerInputActive() {
@@ -991,12 +1039,13 @@ static const char* ModeNameFromIndex(int modeIndex) {
     switch (modeIndex) {
         case 0: return "STANDARD";
         case 1: return "WHISPER";
-        case 2: return "SHOUT";
-        case 3: return "NARRATOR";
-        case 4: return "DIRECTOR";
-        case 5: return "INJECTION_LOG";
-        case 6: return "INJECTION_CHAT";
-        case 7: return "CHEATMODE";
+        case 2: return "CLOSE";
+        case 3: return "SHOUT";
+        case 4: return "NARRATOR";
+        case 5: return "DIRECTOR";
+        case 6: return "INJECTION_LOG";
+        case 7: return "INJECTION_CHAT";
+        case 8: return "CHEATMODE";
         default: return "STANDARD";
     }
 }
@@ -1005,19 +1054,20 @@ static const char* ModeLabelFromIndex(int modeIndex) {
     switch (modeIndex) {
         case 0: return "Standard";
         case 1: return "Whisper";
-        case 2: return "Shout";
-        case 3: return "Narrator";
-        case 4: return "Director";
-        case 5: return "Inject Event";
-        case 6: return "Inject & Chat";
-        case 7: return "Cheat Mode";
+        case 2: return "Close";
+        case 3: return "Shout";
+        case 4: return "Narrator";
+        case 5: return "Director";
+        case 6: return "Inject Event";
+        case 7: return "Inject & Chat";
+        case 8: return "Cheat Mode";
         default: return "Standard";
     }
 }
 
 static int ModeIndexFromName(const std::string& rawMode) {
     const std::string mode = ToUpperCopy(TrimInput(rawMode));
-    for (int i = 0; i <= 7; ++i) {
+    for (int i = 0; i <= 8; ++i) {
         if (mode == ModeNameFromIndex(i)) {
             return i;
         }
@@ -1038,43 +1088,13 @@ static const char* ProfileModelLabelFromSlot(int slot) {
 static void MaybeSyncRuntimeStateFromServer(bool force = false);
 
 static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
-    modeIndex = std::clamp(modeIndex, 0, 7);
+    modeIndex = std::clamp(modeIndex, 0, 8);
     const char* modeName = ModeNameFromIndex(modeIndex);
     const char* modeLabel = ModeLabelFromIndex(modeIndex);
 
-    static bool capturedDefaultDistances = false;
-    static float defaultActivationInterior = 1200.0f;
-    static float defaultActivationExterior = 2400.0f;
-    static float defaultSpatialInterior = 750.0f;
-    static float defaultSpatialExterior = 1500.0f;
-    if (!capturedDefaultDistances) {
-        defaultActivationInterior = Config::distanceActivatingNpcInterior;
-        defaultActivationExterior = Config::distanceActivatingNpcExterior;
-        defaultSpatialInterior = Config::spatialInteriorHearingDistance;
-        defaultSpatialExterior = Config::spatialExteriorHearingDistance;
-        capturedDefaultDistances = true;
-    }
-
     Config::currentModeIndex = modeIndex;
     Config::currentMode = modeName;
-    Config::narratorModeEnabled = modeIndex == 3;
-
-    if (modeIndex == 1) {
-        Config::distanceActivatingNpcInterior = 200.0f;
-        Config::distanceActivatingNpcExterior = 200.0f;
-        Config::spatialInteriorHearingDistance = 200.0f;
-        Config::spatialExteriorHearingDistance = 200.0f;
-    } else if (modeIndex == 2) {
-        Config::distanceActivatingNpcInterior = std::max(defaultActivationInterior, 2400.0f);
-        Config::distanceActivatingNpcExterior = std::max(defaultActivationExterior, 4800.0f);
-        Config::spatialInteriorHearingDistance = std::max(defaultSpatialInterior, 2400.0f);
-        Config::spatialExteriorHearingDistance = std::max(defaultSpatialExterior, 4800.0f);
-    } else {
-        Config::distanceActivatingNpcInterior = defaultActivationInterior;
-        Config::distanceActivatingNpcExterior = defaultActivationExterior;
-        Config::spatialInteriorHearingDistance = defaultSpatialInterior;
-        Config::spatialExteriorHearingDistance = defaultSpatialExterior;
-    }
+    Config::narratorModeEnabled = modeIndex == 4;
 
     if (sendServerUpdate) {
         Console::Print("[Dialectic] Mode: %s", modeLabel);
@@ -1923,7 +1943,7 @@ static void CaptureRuntimeStatusFromServer(const std::string& response) {
 
     {
         std::lock_guard<std::mutex> lock(g_runtimeStatusMutex);
-        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 7);
+        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 8);
         g_pendingRuntimeModelSlot = modelSlot;
         g_runtimeStatusPending = true;
     }
@@ -2545,13 +2565,14 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
 
     NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
     Logger::LogInfo("GameLoop: No crosshair target, finding closest NPC...");
-    npc = NPCDetector::GetClosestNPC(500.0f);
+    const float targetRadius = GetConversationTargetRadius();
+    npc = NPCDetector::GetClosestNPC(targetRadius);
 
     if (!npc.isValid) {
         Logger::LogInfo("GameLoop: No NPCDetector target, finding closest spatial actor...");
         const auto player = ActorPositionResolverFNV::ResolvePlayer();
         const auto positions = ActorPositionResolverFNV::GetRecentActorPositions();
-        float bestDistanceSq = 500.0f * 500.0f;
+        float bestDistanceSq = targetRadius * targetRadius;
         ActorPositionResolverFNV::PositionResult bestPosition;
 
         if (player.resolved) {
@@ -2653,6 +2674,11 @@ static bool PrepareTargetFromNpcInfo(const NPCDetector::NPCInfo& npc, const char
             source ? source : "unknown", npc.name.c_str());
         return false;
     }
+    if (npc.distance > GetConversationTargetRadius()) {
+        Logger::LogInfo("GameLoop: Skipping %s chatbox target %s outside mode radius distance=%.1f radius=%.1f",
+            source ? source : "unknown", npc.name.c_str(), npc.distance, GetConversationTargetRadius());
+        return false;
+    }
     if (IsConversationTargetOnCooldown(npc.formId, npc.name, true)) {
         return false;
     }
@@ -2725,11 +2751,12 @@ static void PrepareTextInputTargetHint() {
         return;
     }
 
-    if (PrepareTargetFromNpcInfo(NPCDetector::GetClosestNPC(500.0f), "nearest npc")) {
+    const float targetRadius = GetConversationTargetRadius();
+    if (PrepareTargetFromNpcInfo(NPCDetector::GetClosestNPC(targetRadius), "nearest npc")) {
         return;
     }
 
-    if (PrepareNearestSpatialTextInputTarget(500.0f)) {
+    if (PrepareNearestSpatialTextInputTarget(targetRadius)) {
         return;
     }
 
@@ -4174,6 +4201,10 @@ bool StartConversation() {
         return false;
     }
 
+    if (!IsConversationTargetWithinModeRadius(target.formId, target.name, true)) {
+        return false;
+    }
+
     if (IsConversationTargetOnCooldown(target.formId, target.name, true)) {
         return false;
     }
@@ -4267,6 +4298,10 @@ void SendPlayerMessage(const std::string& message) {
         g_conversationPartnerFormId = 0;
         return;
     }
+    if (!g_conversationIsNarrator &&
+        !IsConversationTargetWithinModeRadius(g_conversationPartnerFormId, g_conversationPartner, true)) {
+        return;
+    }
     
     ResetBoredEventTimer("player message");
 
@@ -4284,6 +4319,7 @@ void SendPlayerMessage(const std::string& message) {
     const bool cheatMode =
         !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "CHEATMODE");
     const bool injectionMode = injectionLogMode || injectionChatMode;
+    const bool privateConversationMode = !g_conversationIsNarrator && IsPrivateConversationMode();
     const bool skipPlayerTtsMode = injectionMode || directorMode || cheatMode;
 
     SpeakManager::CancelDialogueTurn("player_input", true, true);
@@ -4332,7 +4368,9 @@ void SendPlayerMessage(const std::string& message) {
         : (stealthPlayerInput ? "inputtext_s" : "inputtext");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
-        : (injectionMode ? BuildTargetOnlyAudienceSnapshotJson() : BuildAudienceSnapshotJson());
+        : ((injectionMode || privateConversationMode)
+            ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
+            : BuildAudienceSnapshotJson());
     Log("GameLoop: Audience snapshot for player input type=%s stealth=%d distanceMultiplier=%.3f: %s",
         playerInputEventType,
         stealthPlayerInput ? 1 : 0,
@@ -4355,8 +4393,10 @@ void SendPlayerMessage(const std::string& message) {
             << "\"mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\","
             << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(g_conversationPartner) << "\",\"refid\":\"" << npcId.str() << "\"},"
             << "\"player_actor\":{\"name\":\"" << HTTPManager::EscapeJson(playerName) << "\"},";
-    if (g_conversationIsNarrator) {
-        payload << "\"private\":true,\"listener\":\"The Narrator\",";
+    if (g_conversationIsNarrator || privateConversationMode) {
+        payload << "\"private\":true,\"listener\":\""
+                << HTTPManager::EscapeJson(g_conversationIsNarrator ? "The Narrator" : g_conversationPartner)
+                << "\",";
     }
     payload << "\"audience_snapshot\":" << audienceSnapshot << ","
             << "\"game\":\"fnv\""

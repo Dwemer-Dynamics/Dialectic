@@ -852,6 +852,7 @@ namespace Config {
         static const char* kModeNames[] = {
             "STANDARD",
             "WHISPER",
+            "CLOSE",
             "SHOUT",
             "NARRATOR",
             "DIRECTOR",

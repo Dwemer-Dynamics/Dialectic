@@ -489,7 +489,7 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
     } else if (s == "narrator") {
         if (k == "mode") { Config::narratorModeEnabled = enabled; changed = true; }
     } else if (s == "modes") {
-        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 7); changed = true; }
+        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 8); changed = true; }
     }
 
     if (!changed) {
