@@ -9,6 +9,7 @@
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
+#include "QuestJournalFNV.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
@@ -51,7 +52,6 @@ constexpr const char* kPickupMoveMarkerPath = "Data\\NVSE\\Plugins\\dialectic_pi
 constexpr const char* kNearbyItemsPath = "Data\\NVSE\\Plugins\\dialectic_nearby_items.tmp";
 constexpr const char* kNearbyPoiPath = "Data\\NVSE\\Plugins\\dialectic_nearby_pois.tmp";
 constexpr const char* kNearbyFurniturePath = "Data\\NVSE\\Plugins\\dialectic_nearby_furniture.tmp";
-constexpr const char* kQuestStatePath = "Data\\NVSE\\Plugins\\dialectic_quests.tmp";
 constexpr const char* kHaltActionsPath = "Data\\NVSE\\Plugins\\dialectic_halt_actions.tmp";
 constexpr int kInventoryOpenCooldownMs = 2500;
 constexpr auto kScriptActionTimeout = std::chrono::seconds(45);
@@ -2219,68 +2219,8 @@ std::string BuildSurroundingsResult() {
 }
 
 std::string BuildQuestResult(const ActionRequest& request) {
-    std::ifstream input(kQuestStatePath, std::ios::binary);
-    if (!input.is_open()) {
-        return "No quest journal bridge data has been captured yet.";
-    }
-
-    std::vector<std::string> quests;
-    std::unordered_map<std::string, std::string> questNamesById;
-    std::string line;
     const std::string filter = !request.item.empty() ? request.item : request.target;
-    while (std::getline(input, line)) {
-        line = Trim(line);
-        if (line.empty() || line.rfind("source=", 0) == 0) {
-            continue;
-        }
-
-        if (line.rfind("quest=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(6), '^');
-            if (parts.size() >= 2) {
-                questNamesById[parts[0]] = parts[1];
-                if (filter.empty() || ContainsIgnoreCase(parts[0], filter) || ContainsIgnoreCase(parts[1], filter)) {
-                    quests.push_back(parts[1] + " (" + parts[0] + ")");
-                }
-            }
-        } else if (line.rfind("objective=", 0) == 0) {
-            const std::vector<std::string> parts = Split(line.substr(10), '^');
-            if (parts.size() >= 3) {
-                const std::string questName = questNamesById.contains(parts[0])
-                    ? questNamesById[parts[0]]
-                    : parts[0];
-                const std::string objectiveText = parts[2];
-                if (filter.empty() ||
-                    ContainsIgnoreCase(parts[0], filter) ||
-                    ContainsIgnoreCase(questName, filter) ||
-                    ContainsIgnoreCase(objectiveText, filter)) {
-                    quests.push_back(questName + ": " + objectiveText);
-                }
-            }
-        } else if (filter.empty() || ContainsIgnoreCase(line, filter)) {
-            quests.push_back(line);
-        }
-
-        if (quests.size() >= 16) {
-            break;
-        }
-    }
-
-    if (quests.empty()) {
-        if (filter.empty()) {
-            return "No active quest entries were found in the current quest bridge data.";
-        }
-        return "No quest entries matched " + filter + ".";
-    }
-
-    std::ostringstream result;
-    result << "Quest journal: ";
-    for (size_t i = 0; i < quests.size(); ++i) {
-        if (i > 0) {
-            result << "; ";
-        }
-        result << quests[i];
-    }
-    return result.str();
+    return QuestJournalFNV::BuildCurrentQuestResult(filter);
 }
 
 std::string BuildPluginResult(const ActionRequest& request, const TaskManager::CancellationToken& token) {
