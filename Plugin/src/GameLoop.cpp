@@ -3916,7 +3916,7 @@ void Update(float deltaTime) {
         RequestTextInputMenuOpen();
     }
 
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::PipVision)) {
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::PipVision, 60)) {
         Logger::LogInfo("GameLoop: PipVision hotkey pressed");
         PipVisionManager::BeginHotkeyPress();
     }

@@ -154,10 +154,10 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
     return true;
 }
 
-bool IsActionTriggered(HotkeyAction action) {
+bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs) {
     const uint32_t bit = ActionBit(action);
     const uint32_t previous = g_pendingActions.fetch_and(~bit, std::memory_order_acq_rel);
-    return (previous & bit) != 0 && TryClaimAction(action);
+    return (previous & bit) != 0 && TryClaimAction(action, debounceMs);
 }
 
 bool IsActionReleased(HotkeyAction action) {

@@ -33,6 +33,7 @@ constexpr std::uintmax_t kMaximumCaptureBytes = 8U * 1024U * 1024U;
 constexpr auto kCaptureReadyTimeout = std::chrono::seconds(6);
 constexpr auto kCapturePollInterval = std::chrono::milliseconds(50);
 constexpr auto kHoldThreshold = std::chrono::milliseconds(700);
+constexpr auto kDoubleTapWindow = std::chrono::milliseconds(350);
 constexpr int kHudSettleFrames = 2;
 constexpr const char* kCaptureRelativePath = "Data\\textures\\SUPScreenshots\\Dialectic\\pipvision_capture.jpg";
 
@@ -40,10 +41,14 @@ std::atomic_bool g_captureInFlight{false};
 bool g_hudHidden = false;
 bool g_hotkeyPressActive = false;
 bool g_holdCaptureTriggered = false;
+bool g_singleTapPending = false;
+bool g_secondTapCandidate = false;
 std::chrono::steady_clock::time_point g_hotkeyPressedAt{};
+std::chrono::steady_clock::time_point g_firstTapReleasedAt{};
 
 enum class CaptureMode {
     StoreOnly,
+    NpcPortrait,
     NpcDescribe,
 };
 
@@ -64,6 +69,14 @@ struct PendingCapture {
 };
 
 PendingCapture g_pendingCapture;
+
+const char* CaptureModeName(CaptureMode mode) {
+    switch (mode) {
+        case CaptureMode::NpcPortrait: return "npc_portrait";
+        case CaptureMode::NpcDescribe: return "npc_describe";
+        default: return "store_only";
+    }
+}
 
 std::string FormatFormId(std::uint32_t formId) {
     if (formId == 0) return {};
@@ -128,8 +141,7 @@ std::string BuildCaptureMetadata(const RuntimeSnapshot::GameState& gameState,
     json << "\"game\":\"fnv\",";
     json << "\"perspective\":\"first_person\",";
     json << "\"visual_type\":\"" << subjectType << "\",";
-    json << "\"interaction_mode\":\""
-         << (mode == CaptureMode::NpcDescribe ? "npc_describe" : "store_only") << "\",";
+    json << "\"interaction_mode\":\"" << CaptureModeName(mode) << "\",";
     json << "\"runtime_generation\":" << RuntimeGeneration::Current() << ",";
     json << "\"localts\":" << (Misc::GetCurrentTimeMillis() / 1000) << ",";
     json << "\"gamets\":" << (world.gamets > 0 ? world.gamets : 0) << ",";
@@ -354,7 +366,12 @@ bool StartUploadTask(const PendingCapture& capture) {
             g_captureInFlight.store(false, std::memory_order_release);
             if (!result->success) return;
 
-            IngameNotifier::Notify("PipVision visual context captured", IngameNotifier::Level::Success);
+            if (capture.mode == CaptureMode::NpcPortrait) {
+                IngameNotifier::Notify(capture.responseActor.name + " portrait updated",
+                    IngameNotifier::Level::Success);
+            } else {
+                IngameNotifier::Notify("PipVision visual context captured", IngameNotifier::Level::Success);
+            }
             if (capture.mode == CaptureMode::NpcDescribe) {
                 if (result->description.empty()) {
                     Logger::LogWarning("[PIPVISION] held capture returned no description capture_id=%s",
@@ -412,7 +429,7 @@ bool RequestCapture(CaptureMode mode, const ResponseActor& responseActor = {}) {
     g_pendingCapture.responseActor = responseActor;
 
     Logger::LogInfo("[PIPVISION] capture requested capture_id=%s mode=%s response_actor=%s response_refid=0x%08X crosshair=0x%08X location=%s worldspace=%s hud_settle_frames=%d",
-        captureId.c_str(), mode == CaptureMode::NpcDescribe ? "npc_describe" : "store_only",
+        captureId.c_str(), CaptureModeName(mode),
         responseActor.name.c_str(), responseActor.formId,
         gameState.crosshairFormId, gameState.cellName.c_str(),
         gameState.worldspaceName.c_str(), kHudSettleFrames);
@@ -433,21 +450,56 @@ bool ResolveNearestResponseActor(ResponseActor& actor) {
     return true;
 }
 
+bool ResolveTargetedPortraitActor(ResponseActor& actor) {
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    RuntimeSnapshot::ActorState actorState;
+    if (gameState.crosshairFormId == 0 ||
+        !RuntimeSnapshot::TryGetActor(gameState.crosshairFormId, actorState) ||
+        actorState.name.empty() || actorState.dead || actorState.deleted || !actorState.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actorState, gameState)) {
+        return false;
+    }
+    actor.name = actorState.name;
+    actor.formId = actorState.formId;
+    return true;
+}
+
 void BeginHotkeyPress() {
     if (g_hotkeyPressActive) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (g_singleTapPending && now - g_firstTapReleasedAt > kDoubleTapWindow) {
+        g_singleTapPending = false;
+        RequestCapture(CaptureMode::StoreOnly);
+    }
     g_hotkeyPressActive = true;
     g_holdCaptureTriggered = false;
-    g_hotkeyPressedAt = std::chrono::steady_clock::now();
+    g_secondTapCandidate = g_singleTapPending && now - g_firstTapReleasedAt <= kDoubleTapWindow;
+    g_hotkeyPressedAt = now;
 }
 
 void EndHotkeyPress() {
     if (!g_hotkeyPressActive) return;
     const bool heldCaptureTriggered = g_holdCaptureTriggered;
+    const bool secondTapCandidate = g_secondTapCandidate;
     g_hotkeyPressActive = false;
     g_holdCaptureTriggered = false;
-    if (!heldCaptureTriggered) {
-        RequestCapture(CaptureMode::StoreOnly);
+    g_secondTapCandidate = false;
+    if (heldCaptureTriggered) return;
+
+    if (secondTapCandidate) {
+        g_singleTapPending = false;
+        ResponseActor portraitActor;
+        if (!ResolveTargetedPortraitActor(portraitActor)) {
+            IngameNotifier::Notify("Target an NPC before double-tapping PipVision",
+                IngameNotifier::Level::Warning);
+            return;
+        }
+        RequestCapture(CaptureMode::NpcPortrait, portraitActor);
+        return;
     }
+
+    g_singleTapPending = true;
+    g_firstTapReleasedAt = std::chrono::steady_clock::now();
 }
 
 void Update() {
@@ -456,6 +508,8 @@ void Update() {
             g_hotkeyPressActive = false;
         } else if (std::chrono::steady_clock::now() - g_hotkeyPressedAt >= kHoldThreshold) {
             g_holdCaptureTriggered = true;
+            g_singleTapPending = false;
+            g_secondTapCandidate = false;
             ResponseActor responseActor;
             if (!ResolveNearestResponseActor(responseActor)) {
                 IngameNotifier::Notify("PipVision found no nearby NPC", IngameNotifier::Level::Warning);
@@ -463,6 +517,12 @@ void Update() {
                 RequestCapture(CaptureMode::NpcDescribe, responseActor);
             }
         }
+    }
+
+    if (g_singleTapPending && !g_hotkeyPressActive &&
+        std::chrono::steady_clock::now() - g_firstTapReleasedAt > kDoubleTapWindow) {
+        g_singleTapPending = false;
+        RequestCapture(CaptureMode::StoreOnly);
     }
 
     if (!g_pendingCapture.active) return;
@@ -501,6 +561,8 @@ void Shutdown() {
     g_pendingCapture = {};
     g_hotkeyPressActive = false;
     g_holdCaptureTriggered = false;
+    g_singleTapPending = false;
+    g_secondTapCandidate = false;
     g_captureInFlight.store(false, std::memory_order_release);
 }
 
