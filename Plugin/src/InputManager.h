@@ -17,6 +17,7 @@ enum class HotkeyAction {
     DynamicProfileMenu,
     ToggleModes,
     ToggleLLMModel,
+    PipVision,
     Count
 };
 

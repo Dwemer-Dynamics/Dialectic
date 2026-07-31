@@ -29,6 +29,7 @@
 #include "PlayerInventoryManagerFNV.h"
 #include "PlayerSurvivalManagerFNV.h"
 #include "FalloutStatsManagerFNV.h"
+#include "PipVisionManager.h"
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
@@ -3837,6 +3838,7 @@ void Shutdown() {
     PlayerInventoryManagerFNV::Shutdown();
     PlayerSurvivalManagerFNV::Shutdown();
     FalloutStatsManagerFNV::Shutdown();
+    PipVisionManager::Shutdown();
     
     // Stop any active conversation
     if (g_conversationActive) {
@@ -3912,6 +3914,11 @@ void Update(float deltaTime) {
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::TalkToNPC)) {
         Logger::LogInfo("GameLoop: Chatbox hotkey pressed");
         RequestTextInputMenuOpen();
+    }
+
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::PipVision)) {
+        Logger::LogInfo("GameLoop: PipVision hotkey pressed");
+        PipVisionManager::RequestCapture();
     }
     
     const bool dynamicProfileMenuTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::DynamicProfileMenu);

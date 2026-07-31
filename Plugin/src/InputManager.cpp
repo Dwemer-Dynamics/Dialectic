@@ -46,6 +46,7 @@ const char* ActionName(HotkeyAction action) {
         case HotkeyAction::DynamicProfileMenu: return "DynamicProfileMenu";
         case HotkeyAction::ToggleModes: return "ToggleModes";
         case HotkeyAction::ToggleLLMModel: return "ToggleLLMModel";
+        case HotkeyAction::PipVision: return "PipVision";
         case HotkeyAction::Count: break;
     }
     return "Unknown";
@@ -192,11 +193,12 @@ void LoadConfig() {
     SetHotkey(HotkeyAction::DynamicProfileMenu, Config::ReadINIInt("Hotkeys", "DynamicProfileMenu", 0));
     SetHotkey(HotkeyAction::ToggleModes, Config::ReadINIInt("Hotkeys", "ToggleModes", 0));
     SetHotkey(HotkeyAction::ToggleLLMModel, Config::ReadINIInt("Hotkeys", "ToggleLLMModel", 0));
+    SetHotkey(HotkeyAction::PipVision, Config::ReadINIInt("Hotkeys", "PipVision", 0));
 
     g_pendingActions.store(0, std::memory_order_release);
     g_heldActions.store(0, std::memory_order_release);
 
-    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d",
+    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d PipVision=%d",
         GetHotkey(HotkeyAction::TalkToNPC),
         GetHotkey(HotkeyAction::ToggleVoice),
         GetHotkey(HotkeyAction::OpenMicMute),
@@ -204,7 +206,8 @@ void LoadConfig() {
         GetHotkey(HotkeyAction::ManualActivateNPC),
         GetHotkey(HotkeyAction::ToggleModes),
         GetHotkey(HotkeyAction::ToggleLLMModel),
-        GetHotkey(HotkeyAction::DynamicProfileMenu));
+        GetHotkey(HotkeyAction::DynamicProfileMenu),
+        GetHotkey(HotkeyAction::PipVision));
 }
 
 void SaveConfig() {
@@ -218,6 +221,7 @@ void SaveConfig() {
     WriteBinding("DynamicProfileMenu", HotkeyAction::DynamicProfileMenu);
     WriteBinding("ToggleModes", HotkeyAction::ToggleModes);
     WriteBinding("ToggleLLMModel", HotkeyAction::ToggleLLMModel);
+    WriteBinding("PipVision", HotkeyAction::PipVision);
 }
 
 } // namespace InputManager

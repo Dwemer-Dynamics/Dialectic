@@ -166,6 +166,25 @@
             "type": "file",
             "value": "Dialectic/MCMReload.gek"
           }
+        },
+        "10": {
+          "title": "Use PipVision",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Capture the current Fallout view and add its visual description to Dialectic context. Requires SUP NVSE 8.55 or newer. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:PipVision",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
         }
       },
       "active": 1

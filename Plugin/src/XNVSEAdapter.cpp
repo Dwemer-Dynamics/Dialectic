@@ -49,6 +49,7 @@ Script* g_stopLookFunction = nullptr;
 Script* g_modeMenuFunction = nullptr;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
+Script* g_pipVisionCaptureFunction = nullptr;
 Script* g_mfgPhonemeFunction = nullptr;
 Script* g_mfgResetFunction = nullptr;
 Script* g_haltActorFunction = nullptr;
@@ -1005,6 +1006,7 @@ void Shutdown() {
     g_modeMenuFunction = nullptr;
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
+    g_pipVisionCaptureFunction = nullptr;
     g_mfgPhonemeFunction = nullptr;
     g_mfgResetFunction = nullptr;
     g_haltActorFunction = nullptr;
@@ -2031,6 +2033,39 @@ end
     const bool opened = g_scriptInterface->CallFunctionAlt(*function, nullptr, 0);
     Logger::LogInfo("[NATIVE_UI] %s menu request dispatched success=%d", name, opened ? 1 : 0);
     return opened;
+}
+
+bool CaptureNativePipVisionScreenshot() {
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript || !g_scriptInterface->CallFunction) {
+        return false;
+    }
+    if (!g_pipVisionCaptureFunction) {
+        static constexpr const char* kCaptureSource = R"(
+begin function {}
+    SetFunctionValue 0
+    if GetPluginVersion "SUP NVSE Plugin" < 855
+        return
+    endif
+    DeleteScreenshot "Dialectic" "pipvision_capture.jpg"
+    CaptureScreenshotAlt "Dialectic" "pipvision_capture" 0 0 0 0 0 1 90 1
+    SetFunctionValue 1
+end
+)";
+        g_pipVisionCaptureFunction = g_scriptInterface->CompileScript(kCaptureSource);
+        if (!g_pipVisionCaptureFunction) {
+            Logger::LogError("[PIPVISION] failed to compile SUP screenshot function");
+            return false;
+        }
+    }
+
+    alignas(NVSEArrayVarInterface::Element)
+        unsigned char resultStorage[sizeof(NVSEArrayVarInterface::Element)]{};
+    auto* result = reinterpret_cast<NVSEArrayVarInterface::Element*>(resultStorage);
+    if (!g_scriptInterface->CallFunction(g_pipVisionCaptureFunction, nullptr, nullptr, result, 0)) {
+        Logger::LogWarning("[PIPVISION] SUP screenshot function call failed");
+        return false;
+    }
+    return result->GetNumber() > 0.0;
 }
 
 bool ApplyNativeMfg(std::uint32_t actorFormId, int phoneme, int intensity, bool reset) {

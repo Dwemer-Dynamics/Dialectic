@@ -43,6 +43,7 @@ add_library(${PROJECT_NAME} SHARED
     src/PlayerInventoryManagerFNV.cpp
     src/PlayerSurvivalManagerFNV.cpp
     src/FalloutStatsManagerFNV.cpp
+    src/PipVisionManager.cpp
     src/LoadedPluginsFNV.cpp
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp
