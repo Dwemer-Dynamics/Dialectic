@@ -2900,10 +2900,11 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WriteRechatStatus("skipped", cleanSpeaker, "request", "plugin_rechat_disabled", cleanTarget);
             return 0;
         }
-        if (EqualsIgnoreCase(Config::currentMode, "WHISPER")) {
-            Log("SpeakManager: Rechat skipped for %s because WHISPER mode is private",
-                cleanSpeaker.c_str());
-            WriteRechatStatus("skipped", cleanSpeaker, "request", "whisper_mode_private", cleanTarget);
+        if (EqualsIgnoreCase(Config::currentMode, "WHISPER") ||
+            EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+            Log("SpeakManager: Rechat skipped for %s because %s mode is private",
+                cleanSpeaker.c_str(), Config::currentMode.c_str());
+            WriteRechatStatus("skipped", cleanSpeaker, "request", "private_mode", cleanTarget);
             return 0;
         }
         if (cleanSpeaker.empty()) {
