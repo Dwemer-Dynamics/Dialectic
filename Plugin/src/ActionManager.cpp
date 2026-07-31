@@ -42,19 +42,10 @@ void UpdateNativeAttackStates();
 
 namespace {
 
-constexpr const char* kActionRequestPath = "Data\\NVSE\\Plugins\\dialectic_action_request.tmp";
-constexpr const char* kActionStatusPath = "Data\\NVSE\\Plugins\\dialectic_action_status.txt";
-constexpr const char* kAttackStatePath = "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp";
-constexpr const char* kAttackCleanupPath = "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp";
-constexpr const char* kMoveStatePath = "Data\\NVSE\\Plugins\\dialectic_move_state.tmp";
-constexpr const char* kPickupStatePath = "Data\\NVSE\\Plugins\\dialectic_pickup_state.tmp";
-constexpr const char* kPickupMoveMarkerPath = "Data\\NVSE\\Plugins\\dialectic_pickup_move_marker.tmp";
 constexpr const char* kNearbyItemsPath = "Data\\NVSE\\Plugins\\dialectic_nearby_items.tmp";
 constexpr const char* kNearbyPoiPath = "Data\\NVSE\\Plugins\\dialectic_nearby_pois.tmp";
 constexpr const char* kNearbyFurniturePath = "Data\\NVSE\\Plugins\\dialectic_nearby_furniture.tmp";
-constexpr const char* kHaltActionsPath = "Data\\NVSE\\Plugins\\dialectic_halt_actions.tmp";
 constexpr int kInventoryOpenCooldownMs = 2500;
-constexpr auto kScriptActionTimeout = std::chrono::seconds(45);
 constexpr auto kPostDialogueActionNoSpeechDelay = std::chrono::milliseconds(1200);
 constexpr auto kPostDialogueActionTimeout = std::chrono::seconds(30);
 
@@ -80,23 +71,10 @@ struct ActionRequest {
     bool narratorAuthority = false;
 };
 
-struct PendingAction {
-    ActionRequest request;
-    uint64_t requestId = 0;
-    std::chrono::steady_clock::time_point createdAt;
-};
-
 struct PostDialogueAction {
     ActionRequest request;
     std::chrono::steady_clock::time_point createdAt;
     std::string source;
-};
-
-struct ScriptStatus {
-    uint64_t requestId = 0;
-    std::string action;
-    std::string status;
-    std::string reason;
 };
 
 struct NativePackageState {
@@ -123,9 +101,6 @@ struct NativePickupState {
     std::chrono::steady_clock::time_point startedAt{};
 };
 
-std::mutex g_pendingMutex;
-std::unordered_map<uint64_t, PendingAction> g_pendingActions;
-std::string g_lastStatusLine;
 std::mutex g_actionGateMutex;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastInventoryOpenByActor;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastActionBridgeRequestByKey;
@@ -954,58 +929,6 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
     HTTPManager::SendEvent("funcret", payload.str());
 }
 
-void TrackPendingAction(uint64_t requestId, const ActionRequest& request) {
-    if (requestId == 0) {
-        return;
-    }
-
-    PendingAction pending;
-    pending.request = request;
-    pending.requestId = requestId;
-    pending.createdAt = std::chrono::steady_clock::now();
-
-    std::lock_guard<std::mutex> lock(g_pendingMutex);
-    g_pendingActions[requestId] = pending;
-}
-
-bool TakePendingAction(uint64_t requestId, PendingAction& pending) {
-    std::lock_guard<std::mutex> lock(g_pendingMutex);
-    auto it = g_pendingActions.find(requestId);
-    if (it == g_pendingActions.end()) {
-        return false;
-    }
-
-    pending = it->second;
-    g_pendingActions.erase(it);
-    return true;
-}
-
-void ExpireOldPendingActions() {
-    const auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(g_pendingMutex);
-    for (auto it = g_pendingActions.begin(); it != g_pendingActions.end();) {
-        if (now - it->second.createdAt > kScriptActionTimeout) {
-            Logger::LogWarning("ActionManager: Expiring action request id=%llu action=%s after no script status",
-                static_cast<unsigned long long>(it->first),
-                it->second.request.action.c_str());
-            it = g_pendingActions.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-std::vector<PendingAction> ClearPendingActionsForHalt() {
-    std::vector<PendingAction> cancelled;
-    std::lock_guard<std::mutex> lock(g_pendingMutex);
-    cancelled.reserve(g_pendingActions.size());
-    for (const auto& item : g_pendingActions) {
-        cancelled.push_back(item.second);
-    }
-    g_pendingActions.clear();
-    return cancelled;
-}
-
 void TrackNativePackageAction(const ActionRequest& request) {
     if (request.speakerFormId == 0) {
         return;
@@ -1316,170 +1239,11 @@ std::vector<std::pair<uint32_t, std::string>> BuildHaltTargetSnapshot() {
     return targets;
 }
 
-bool WriteHaltBridgeRequest(const std::vector<std::pair<uint32_t, std::string>>& targets, uint64_t requestId) {
-    std::ofstream out(kHaltActionsPath, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        Logger::LogWarning("ActionManager: Failed to write halt bridge request: %s", kHaltActionsPath);
-        return false;
-    }
-
-    out << requestId << "\n";
-    for (const auto& target : targets) {
-        if (target.first == 0) {
-            continue;
-        }
-        out << RawHexFormId(target.first) << "\n";
-        out << FormModIndex(target.first) << "\n";
-        out << FormLocalIndex(target.first) << "\n";
-    }
-    return true;
-}
-
-void ClearActionBridgeFiles() {
-    std::remove(kActionRequestPath);
-    {
-        std::ofstream out(kActionStatusPath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    {
-        std::ofstream out(kAttackStatePath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    {
-        std::ofstream out(kAttackCleanupPath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    {
-        std::ofstream out(kMoveStatePath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    {
-        std::ofstream out(kPickupStatePath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    {
-        std::ofstream out(kPickupMoveMarkerPath, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << "";
-        }
-    }
-    g_lastStatusLine.clear();
-}
-
 bool ShouldGeneratePluginResult(const std::string& action) {
     return action == "CheckInventory" ||
            action == "Inspect" ||
            action == "InspectSurroundings" ||
            action == "ReadQuests";
-}
-
-bool ShouldTrackScriptStatus(const std::string& action) {
-    return !ShouldGeneratePluginResult(action) && action != "Talk";
-}
-
-std::string ReadLatestNonEmptyLine(const char* path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input.is_open()) {
-        return "";
-    }
-
-    std::string latest;
-    std::string line;
-    while (std::getline(input, line)) {
-        line = Trim(line);
-        if (!line.empty()) {
-            latest = line;
-        }
-    }
-    return latest;
-}
-
-std::unordered_map<std::string, std::string> ParseKeyValueTokens(const std::string& line) {
-    std::unordered_map<std::string, std::string> tokens;
-    for (const std::string& part : Split(line, ' ')) {
-        const size_t separator = part.find('=');
-        if (separator == std::string::npos) {
-            continue;
-        }
-
-        std::string key = ToLower(Trim(part.substr(0, separator)));
-        std::string value = Trim(part.substr(separator + 1));
-        if (!key.empty()) {
-            tokens[key] = value;
-        }
-    }
-    return tokens;
-}
-
-ScriptStatus ParseScriptStatus(const std::string& line) {
-    ScriptStatus status;
-    const auto tokens = ParseKeyValueTokens(line);
-    auto idIt = tokens.find("id");
-    if (idIt != tokens.end()) {
-        try {
-            status.requestId = std::stoull(idIt->second);
-        } catch (...) {
-            status.requestId = 0;
-        }
-    }
-    auto actionIt = tokens.find("action");
-    if (actionIt != tokens.end()) {
-        status.action = actionIt->second;
-    }
-    auto statusIt = tokens.find("status");
-    if (statusIt != tokens.end()) {
-        status.status = statusIt->second;
-    }
-    auto reasonIt = tokens.find("reason");
-    if (reasonIt != tokens.end()) {
-        status.reason = reasonIt->second;
-    }
-    return status;
-}
-
-std::string BuildScriptStatusResult(const PendingAction& pending, const ScriptStatus& status) {
-    std::ostringstream result;
-    const std::string action = status.action.empty() ? pending.request.action : status.action;
-    if (EqualsIgnoreCase(status.status, "ok")) {
-        if (pending.request.action == "Barter" && status.reason == "fallback_item_trade") {
-            result << "Barter opened regular item trade because no merchant inventory was available.";
-        } else {
-            result << action << " completed.";
-        }
-    } else if (EqualsIgnoreCase(status.status, "ack")) {
-        result << action << " was acknowledged by the game bridge.";
-    } else if (EqualsIgnoreCase(status.status, "error")) {
-        result << action << " failed";
-        if (!status.reason.empty()) {
-            if (status.reason == "not_valid_merchant") {
-                result << " because " << (pending.request.speaker.empty() ? "this actor" : pending.request.speaker)
-                       << " is not a valid merchant";
-            } else {
-                result << " because " << status.reason;
-            }
-        }
-        result << ".";
-    } else {
-        result << action << " returned status " << (status.status.empty() ? "unknown" : status.status) << ".";
-    }
-
-    if (!pending.request.target.empty()) {
-        result << " Target: " << pending.request.target << ".";
-    }
-    if (!pending.request.item.empty()) {
-        result << " Item: " << pending.request.item << ".";
-    }
-    return result.str();
 }
 
 struct NearbyItem {
@@ -2742,80 +2506,6 @@ void ApplyStructuredCommandArgs(ActionRequest& request, const std::vector<std::s
     }
 }
 
-bool WriteActionRequest(const ActionRequest& request, const char* source, uint64_t* outRequestId = nullptr) {
-    std::ofstream out(kActionRequestPath, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        Logger::LogWarning("%s: Failed to write action bridge request: %s",
-            source ? source : "ActionManager",
-            kActionRequestPath);
-        return false;
-    }
-
-    const uint64_t requestId = Misc::GetCurrentTimeMillis() * 1000ULL + (++g_requestCounter);
-    if (outRequestId) {
-        *outRequestId = requestId;
-    }
-    out << requestId << "\n";
-    out << request.action << "\n";
-    out << RawHexFormId(request.speakerFormId) << "\n";
-    out << RawHexFormId(request.targetFormId) << "\n";
-    out << RawHexFormId(request.itemRefId) << "\n";
-    out << RawHexFormId(request.itemBaseId) << "\n";
-    out << request.amount << "\n";
-    out << request.target << "\n";
-    out << request.item << "\n";
-    out << request.speaker << "\n";
-    out << ActionCodeForAction(request.action) << "\n";
-    out << FormModIndex(request.speakerFormId) << "\n";
-    out << FormLocalIndex(request.speakerFormId) << "\n";
-    out << FormModIndex(request.targetFormId) << "\n";
-    out << FormLocalIndex(request.targetFormId) << "\n";
-    out << FormModIndex(request.itemRefId) << "\n";
-    out << FormLocalIndex(request.itemRefId) << "\n";
-    out << FormModIndex(request.itemBaseId) << "\n";
-    out << FormLocalIndex(request.itemBaseId) << "\n";
-    out << request.itemInventoryIndex << "\n";
-    out << request.itemInventoryCount << "\n";
-    out << request.itemInventoryType << "\n";
-    out << "end\n";
-
-    {
-        std::ofstream debugOut("Data\\NVSE\\Plugins\\dialectic_action_bridge_debug.txt",
-                               std::ios::binary | std::ios::trunc);
-        if (debugOut.is_open()) {
-            debugOut << "id=" << requestId
-                     << " action=" << request.action
-                     << " code=" << ActionCodeForAction(request.action)
-                     << " speaker=" << RawHexFormId(request.speakerFormId)
-                     << " target=" << RawHexFormId(request.targetFormId)
-                     << " speaker_name=" << request.speaker
-                     << " target_name=" << request.target
-                     << "\n";
-        }
-    }
-
-    Logger::LogInfo("%s: Queued action request id=%llu action=%s code=%d speaker=%s(0x%08X m=%u l=%u) target=%s(0x%08X m=%u l=%u) item=%s itemBase=0x%08X amount=%d invIndex=%d invCount=%d invType=%d",
-        source ? source : "ActionManager",
-        static_cast<unsigned long long>(requestId),
-        request.action.c_str(),
-        ActionCodeForAction(request.action),
-        request.speaker.c_str(),
-        request.speakerFormId,
-        FormModIndex(request.speakerFormId),
-        FormLocalIndex(request.speakerFormId),
-        request.target.c_str(),
-        request.targetFormId,
-        FormModIndex(request.targetFormId),
-        FormLocalIndex(request.targetFormId),
-        request.item.c_str(),
-        request.itemBaseId,
-        request.amount,
-        request.itemInventoryIndex,
-        request.itemInventoryCount,
-        request.itemInventoryType);
-    return true;
-}
-
 bool IsPostDialogueActionName(const std::string& actionName) {
     const std::string normalized = NormalizeActionName(actionName);
     return normalized == "OpenInventory" ||
@@ -3174,11 +2864,10 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
         return true;
     }
 
-    const std::string sourceName = source ? source : "ActionManager";
     const std::string commandKey = request.action + ":" + FormatRefId(request.speakerFormId);
     const std::uint64_t generation = request.runtimeGeneration;
     return GameThreadDispatcher::Enqueue("action", commandKey, generation,
-        [request, sourceName]() {
+        [request]() {
             const int actionCode = ActionCodeForAction(request.action);
             if (actionCode == 2 || actionCode == 3) {
                 XNVSEAdapter::NativeTradeMenuInfo menuInfo;
@@ -3288,24 +2977,10 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                 return;
             }
 
-            uint64_t requestId = 0;
-            if (!WriteActionRequest(request, sourceName.c_str(), &requestId)) {
-                SendFuncretResult(request, request.action + " failed because bridge_write_failed.");
-                return;
-            }
-            if (request.action == "OpenInventory" || request.action == "Barter") {
-                TradeManager::TradeSessionRequest tradeRequest;
-                tradeRequest.requestId = requestId;
-                tradeRequest.action = request.action;
-                tradeRequest.speakerName = request.speaker;
-                tradeRequest.speakerFormId = request.speakerFormId;
-                tradeRequest.tradeMode = request.action == "Barter" ? "barter" : "trade";
-                TradeManager::BeginPendingSession(tradeRequest);
-            }
-            if (ShouldTrackScriptStatus(request.action)) {
-                TrackPendingAction(requestId, request);
-            }
-            Console::Print("[Dialectic] Action: %s", request.action.c_str());
+            Logger::LogWarning("[NATIVE_ACTION] action=%s speaker=0x%08X could not be executed by the native runtime",
+                request.action.c_str(), request.speakerFormId);
+            SendFuncretResult(request, request.action + " failed because native_runtime_unavailable.");
+            Console::Print("[Dialectic] Action failed: %s", request.action.c_str());
         },
         [request](const char* reason) {
             Logger::LogWarning("ActionManager: Dropped action=%s speaker=0x%08X reason=%s",
@@ -3391,10 +3066,6 @@ void FlushPostDialogueActionsWithoutSpeech() {
 }
 
 } // namespace
-
-void ClearScriptBridgeRequest() {
-    std::remove(kActionRequestPath);
-}
 
 bool IsActionCommand(const std::string& actionName) {
     const std::string normalized = NormalizeActionName(actionName);
@@ -3582,32 +3253,20 @@ int HaltAIActions(const char* source) {
     ClearAllNativePackageStates();
     RequestNativeAttackCleanup("halt_ai_actions");
     CancelNativePickups("halt_ai_actions");
-    const std::vector<PendingAction> cancelled = ClearPendingActionsForHalt();
     ClearPostDialogueActions();
-    ClearActionBridgeFiles();
     TradeManager::CancelAll("halt_ai_actions");
     GameThreadDispatcher::CancelByType("action", "halt_ai_actions");
     GameThreadDispatcher::CancelByType("action_native", "halt_ai_actions");
 
-    for (const PendingAction& pending : cancelled) {
-        SendFuncretResult(pending.request, "Action halted by player.");
-    }
-
-    const uint64_t requestId = Misc::GetCurrentTimeMillis() * 1000ULL + (++g_requestCounter);
-    auto halt = [targets, requestId]() {
-        std::vector<std::pair<uint32_t, std::string>> fallback;
+    auto halt = [targets]() {
+        std::size_t failed = 0;
         for (const auto& target : targets) {
             if (target.first != 0 && !XNVSEAdapter::HaltNativeActor(target.first)) {
-                fallback.push_back(target);
+                ++failed;
             }
         }
-        if (!fallback.empty()) {
-            WriteHaltBridgeRequest(fallback, requestId);
-        } else {
-            std::ofstream clear(kHaltActionsPath, std::ios::binary | std::ios::trunc);
-        }
-        Logger::LogInfo("[NATIVE_ACTION] halt applied actors=%zu fallback=%zu",
-            targets.size(), fallback.size());
+        Logger::LogInfo("[NATIVE_ACTION] halt applied actors=%zu failed=%zu",
+            targets.size(), failed);
     };
     if (GameThreadDispatcher::IsGameThread()) {
         halt();
@@ -3615,10 +3274,9 @@ int HaltAIActions(const char* source) {
         GameThreadDispatcher::Enqueue("action_native", "halt", RuntimeGeneration::Current(), std::move(halt));
     }
 
-    Logger::LogInfo("%s: Halt AI Actions requested for %zu actor(s), cancelled %zu pending action(s)",
+    Logger::LogInfo("%s: Halt AI Actions requested for %zu actor(s)",
         source ? source : "ActionManager",
-        targets.size(),
-        cancelled.size());
+        targets.size());
     return static_cast<int>(targets.size());
 }
 
@@ -3899,12 +3557,6 @@ void UpdateNativePackageStates() {
 
 static bool HasActiveWork() {
     {
-        std::lock_guard<std::mutex> lock(g_pendingMutex);
-        if (!g_pendingActions.empty()) {
-            return true;
-        }
-    }
-    {
         std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
         if (!g_postDialogueActions.empty()) {
             return true;
@@ -3945,37 +3597,8 @@ void Update() {
     UpdateNativeAttackStates();
     UpdateNativePickupStates();
     UpdateNativePackageStates();
-    ExpireOldPendingActions();
     FlushPostDialogueActionsWithoutSpeech();
     ExpirePostDialogueActions();
-
-    const std::string line = ReadLatestNonEmptyLine(kActionStatusPath);
-    if (line.empty() || line == g_lastStatusLine) {
-        return;
-    }
-    g_lastStatusLine = line;
-
-    const ScriptStatus status = ParseScriptStatus(line);
-    if (status.requestId == 0) {
-        return;
-    }
-
-    PendingAction pending;
-    if (!TakePendingAction(status.requestId, pending)) {
-        return;
-    }
-
-    if (pending.request.action == "EndConversation" &&
-        (EqualsIgnoreCase(status.status, "ok") || EqualsIgnoreCase(status.status, "ack"))) {
-        GameLoop::ApplyEndConversationCooldown(pending.request.speakerFormId, pending.request.speaker);
-    }
-
-    if (pending.request.action == "PickupItem" && EqualsIgnoreCase(status.status, "ok")) {
-        AgentManager::RefreshActorMetadata(pending.request.speakerFormId, pending.request.speaker);
-    }
-
-    const std::string result = BuildScriptStatusResult(pending, status);
-    SendFuncretResult(pending.request, result);
 }
 
 } // namespace ActionManager

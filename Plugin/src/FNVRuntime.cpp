@@ -314,12 +314,6 @@ void RecordFrameCadence(std::chrono::steady_clock::time_point callbackStartedAt,
             static_cast<double>(g_cadenceMaxPluginWorkUs) / 1000.0,
             static_cast<unsigned long long>(g_cadenceDetailsSuppressed),
             bridges.c_str());
-        if (g_bridgeTicks[1].windowTicks > 300) {
-            Logger::LogWarning(
-                "[BRIDGE_STORM] name=action ticks=%llu window_ms=%lld expected_max=300; duplicate ActionCommandTick chains are active",
-                static_cast<unsigned long long>(g_bridgeTicks[1].windowTicks),
-                windowMs);
-        }
         if (g_bridgeTicks[17].windowTicks > 8) {
             Logger::LogWarning(
                 "[BRIDGE_STORM] name=actor_snapshot_collect ticks=%llu window_ms=%lld expected_max=8; actor snapshots are being collected without one-shot request acknowledgement",

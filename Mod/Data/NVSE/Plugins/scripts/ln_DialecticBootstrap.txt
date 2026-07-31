@@ -18,15 +18,7 @@ if GetPluginVersion "JohnnyGuitarNVSE" < 517
 endif
 
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_bootstrap_active.tmp" 0 "active=1\n"
-DialecticClearActionRequest
 DialecticClearActorSnapshotRequest
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_halt_actions_status.txt" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_pickup_state.tmp" 0 "%e"
 
 call (CompileScript "Dialectic/RegisterHotkeys.gek")
 call (CompileScript "Dialectic/RegisterAidUseEvents.txt")
@@ -52,19 +44,16 @@ if IsComponentLoaded "HUDMainMenu\Subtitles\DialecticPassiveSubtitle"
 endif
 InjectUIXML "HUDMainMenu\Subtitles" "data\menus\prefabs\Dialectic\PassiveSubtitle.xml"
 
-; Native-authoritative presentation, game-state, dialogue-guard, and tool-menu
-; paths run inside dialectic.dll. Do not start their old permanent file pollers.
-; The remaining adapters cover script-only game data and rare native fallbacks.
+; Native-authoritative presentation, actions, trade state, game-state,
+; dialogue-guard, and tool-menu paths run inside dialectic.dll.
+; The remaining adapters cover script-only game data and event sources.
 ; Run the voice recovery adapter once so a save made during guarded speech cannot
 ; leave an actor muted after reload.
 CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardRecoverVoiceTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/SpatialScanTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
-CallAfterSeconds 0.25 (CompileScript "Dialectic/ActionCommandTick.txt") 0
-CallAfterSeconds 0.50 (CompileScript "Dialectic/TradeSessionTick.txt") 1
 CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
-CallAfterSeconds 0.25 (CompileScript "Dialectic/HaltActionsTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/WorldContextTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/ActivityStatusTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
