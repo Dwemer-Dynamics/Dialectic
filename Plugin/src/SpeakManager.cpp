@@ -2952,6 +2952,11 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_pendingRechatNextCheck = {};
     }
 
+    void StartRechatChainForAutonomousEvent() {
+        ResetRechatChainState();
+        Log("SpeakManager: Opened a fresh rechat chain from autonomous event");
+    }
+
     bool IsRechatChainClosed() {
         std::lock_guard<std::mutex> lock(g_rechatMutex);
         return g_rechatChainClosed;
