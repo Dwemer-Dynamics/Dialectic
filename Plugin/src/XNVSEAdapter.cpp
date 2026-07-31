@@ -2041,13 +2041,21 @@ bool CaptureNativePipVisionScreenshot() {
     }
     if (!g_pipVisionCaptureFunction) {
         static constexpr const char* kCaptureSource = R"(
+float fScreenWidth
+float fScreenHeight
+
 begin function {}
     SetFunctionValue 0
     if GetPluginVersion "SUP NVSE Plugin" < 855
         return
     endif
+    let fScreenWidth := GetScreenTrait 2
+    let fScreenHeight := GetScreenTrait 3
+    if eval fScreenWidth <= 0 || fScreenHeight <= 0
+        return
+    endif
     DeleteScreenshot "Dialectic" "pipvision_capture.jpg"
-    CaptureScreenshotAlt "Dialectic" "pipvision_capture" 0 0 0 0 0 1 90 1
+    CaptureScreenshotAlt "Dialectic" "pipvision_capture" 0 fScreenWidth 0 fScreenHeight 0 1 90
     SetFunctionValue 1
 end
 )";
