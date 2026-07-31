@@ -1927,8 +1927,8 @@ namespace HTTPManager {
             if (queryPos != std::string::npos) serverPath.resize(queryPos);
             const size_t slashPos = serverPath.find_last_of("/\\");
             serverPath = slashPos == std::string::npos
-                ? "visual_context.php"
-                : serverPath.substr(0, slashPos + 1) + "visual_context.php";
+                ? "itt.php"
+                : serverPath.substr(0, slashPos + 1) + "itt.php";
             if (serverPath.empty() || serverPath.front() != '/') serverPath.insert(serverPath.begin(), '/');
 
             const std::string safeFileName = fileName.empty() ? "pipvision_capture.jpg" : fileName;
