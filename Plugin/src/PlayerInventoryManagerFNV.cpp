@@ -29,6 +29,7 @@ struct InventoryItem {
     std::string name;
     std::uint32_t baseFormId{0};
     int count{0};
+    int value{0};
     bool equipped{false};
     int type{0};
     float condition{-1.0f};
@@ -62,6 +63,7 @@ std::vector<InventoryItem> NormalizeInventory(
         item.name = nativeItem.name;
         item.baseFormId = nativeItem.baseFormId;
         item.count = nativeItem.count;
+        item.value = nativeItem.value;
         item.equipped = nativeItem.equipped;
         item.type = nativeItem.type;
         item.condition = nativeItem.condition;
@@ -80,7 +82,8 @@ std::string BuildInventoryHash(const std::vector<InventoryItem>& items) {
     hash << std::fixed << std::setprecision(4);
     for (const auto& item : items) {
         hash << item.baseFormId << '^' << item.name << '^' << item.count << '^'
-             << (item.equipped ? 1 : 0) << '^' << item.type << '^' << item.condition << '|';
+             << item.value << '^' << (item.equipped ? 1 : 0) << '^'
+             << item.type << '^' << item.condition << '|';
     }
     return hash.str();
 }
@@ -92,6 +95,7 @@ std::string BuildInventoryJson(const std::vector<InventoryItem>& items,
     json << "{";
     json << "\"schema\":\"dialectic.inventory.v1\",";
     json << "\"type\":\"inventory\",";
+    json << "\"game\":\"fnv\",";
     json << "\"actor_name\":\"" << HTTPManager::EscapeJson(playerName) << "\",";
     json << "\"actor_type\":\"player\",";
     json << "\"refid\":\"" << FormIdHex(playerFormId) << "\",";
@@ -106,6 +110,7 @@ std::string BuildInventoryJson(const std::vector<InventoryItem>& items,
         json << "\"name\":\"" << HTTPManager::EscapeJson(item.name) << "\",";
         json << "\"baseid\":\"" << FormIdHex(item.baseFormId) << "\",";
         json << "\"count\":" << item.count << ',';
+        json << "\"value\":" << item.value << ',';
         json << "\"equipped\":" << (item.equipped ? "true" : "false") << ',';
         if (item.condition >= 0.0f) {
             json << "\"condition\":" << item.condition << ',';
