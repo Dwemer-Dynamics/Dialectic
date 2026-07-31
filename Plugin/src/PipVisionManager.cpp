@@ -1,12 +1,16 @@
 #include "PipVisionManager.h"
 
+#include "Config.h"
 #include "HTTPManager.h"
 #include "IngameNotifier.h"
+#include "InputManager.h"
 #include "Logger.h"
 #include "Misc.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
+#include "SpeakManager.h"
 #include "TaskManager.h"
+#include "TargetManager.h"
 #include "WorldContextFNV.h"
 #include "XNVSEAdapter.h"
 
@@ -16,6 +20,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -27,11 +32,25 @@ namespace {
 constexpr std::uintmax_t kMaximumCaptureBytes = 8U * 1024U * 1024U;
 constexpr auto kCaptureReadyTimeout = std::chrono::seconds(6);
 constexpr auto kCapturePollInterval = std::chrono::milliseconds(50);
+constexpr auto kHoldThreshold = std::chrono::milliseconds(700);
 constexpr int kHudSettleFrames = 2;
 constexpr const char* kCaptureRelativePath = "Data\\textures\\SUPScreenshots\\Dialectic\\pipvision_capture.jpg";
 
 std::atomic_bool g_captureInFlight{false};
 bool g_hudHidden = false;
+bool g_hotkeyPressActive = false;
+bool g_holdCaptureTriggered = false;
+std::chrono::steady_clock::time_point g_hotkeyPressedAt{};
+
+enum class CaptureMode {
+    StoreOnly,
+    NpcDescribe,
+};
+
+struct ResponseActor {
+    std::string name;
+    std::uint32_t formId{0};
+};
 
 struct PendingCapture {
     bool active{false};
@@ -40,6 +59,8 @@ struct PendingCapture {
     std::filesystem::path path;
     std::string captureId;
     std::string metadata;
+    CaptureMode mode{CaptureMode::StoreOnly};
+    ResponseActor responseActor;
 };
 
 PendingCapture g_pendingCapture;
@@ -59,7 +80,9 @@ std::filesystem::path CapturePath() {
 
 std::string BuildCaptureMetadata(const RuntimeSnapshot::GameState& gameState,
                                  const WorldContextFNV::Context& world,
-                                 const std::string& captureId) {
+                                 const std::string& captureId,
+                                 CaptureMode mode,
+                                 const ResponseActor& responseActor) {
     std::string subjectType = "scene";
     std::string subjectName;
     std::uint32_t subjectRefId = 0;
@@ -105,6 +128,8 @@ std::string BuildCaptureMetadata(const RuntimeSnapshot::GameState& gameState,
     json << "\"game\":\"fnv\",";
     json << "\"perspective\":\"first_person\",";
     json << "\"visual_type\":\"" << subjectType << "\",";
+    json << "\"interaction_mode\":\""
+         << (mode == CaptureMode::NpcDescribe ? "npc_describe" : "store_only") << "\",";
     json << "\"runtime_generation\":" << RuntimeGeneration::Current() << ",";
     json << "\"localts\":" << (Misc::GetCurrentTimeMillis() / 1000) << ",";
     json << "\"gamets\":" << (world.gamets > 0 ? world.gamets : 0) << ",";
@@ -123,6 +148,9 @@ std::string BuildCaptureMetadata(const RuntimeSnapshot::GameState& gameState,
     json << "\"name\":\"" << HTTPManager::EscapeJson(subjectName) << "\",";
     json << "\"refid\":\"" << FormatFormId(subjectRefId) << "\",";
     json << "\"baseid\":\"" << FormatFormId(subjectBaseId) << "\"},";
+    json << "\"response_actor\":{";
+    json << "\"name\":\"" << HTTPManager::EscapeJson(responseActor.name) << "\",";
+    json << "\"refid\":\"" << FormatFormId(responseActor.formId) << "\"},";
     json << "\"nearby_actors\":[";
     for (std::size_t index = 0; index < nearbyNames.size(); ++index) {
         if (index > 0) json << ',';
@@ -130,6 +158,89 @@ std::string BuildCaptureMetadata(const RuntimeSnapshot::GameState& gameState,
     }
     json << "]}";
     return json.str();
+}
+
+std::string ExtractJsonString(const std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    const std::size_t keyPosition = json.find(needle);
+    if (keyPosition == std::string::npos) return {};
+    const std::size_t colonPosition = json.find(':', keyPosition + needle.size());
+    if (colonPosition == std::string::npos) return {};
+    const std::size_t quotePosition = json.find('"', colonPosition + 1);
+    if (quotePosition == std::string::npos) return {};
+
+    std::string value;
+    bool escaped = false;
+    for (std::size_t index = quotePosition + 1; index < json.size(); ++index) {
+        const char character = json[index];
+        if (escaped) {
+            switch (character) {
+                case 'n': value.push_back('\n'); break;
+                case 'r': value.push_back('\r'); break;
+                case 't': value.push_back('\t'); break;
+                default: value.push_back(character); break;
+            }
+            escaped = false;
+        } else if (character == '\\') {
+            escaped = true;
+        } else if (character == '"') {
+            return value;
+        } else {
+            value.push_back(character);
+        }
+    }
+    return {};
+}
+
+bool IsResponseActorStillPresent(const ResponseActor& actor) {
+    RuntimeSnapshot::ActorState actorState;
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    return actor.formId != 0 &&
+        RuntimeSnapshot::TryGetActor(actor.formId, actorState) &&
+        !actorState.dead && !actorState.deleted && actorState.loaded3D &&
+        RuntimeSnapshot::IsActorInScene(actorState, gameState);
+}
+
+void SendNpcVisionRequest(const PendingCapture& capture, const std::string& description) {
+    if (!IsResponseActorStillPresent(capture.responseActor)) {
+        Logger::LogWarning("[PIPVISION] held capture response actor left the scene actor=%s refid=0x%08X",
+            capture.responseActor.name.c_str(), capture.responseActor.formId);
+        IngameNotifier::Notify("PipVision's nearby speaker is no longer present", IngameNotifier::Level::Warning);
+        return;
+    }
+
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    const std::string playerName = !gameState.playerName.empty()
+        ? gameState.playerName
+        : (Config::playerName.empty() ? "Player" : Config::playerName);
+    const std::string actorRefId = FormatFormId(capture.responseActor.formId);
+
+    std::ostringstream audience;
+    audience << "{\"people\":\"|" << HTTPManager::EscapeJson(capture.responseActor.name)
+             << "|" << HTTPManager::EscapeJson(playerName)
+             << "|\",\"target_only\":true,\"target_form_id\":\""
+             << actorRefId << "\"}";
+
+    std::ostringstream payload;
+    payload << "{";
+    payload << "\"schema\":\"dialectic.vision.v1\",";
+    payload << "\"capture_id\":\"" << HTTPManager::EscapeJson(capture.captureId) << "\",";
+    payload << "\"npc\":\"" << HTTPManager::EscapeJson(capture.responseActor.name) << "\",";
+    payload << "\"npc_id\":\"" << actorRefId << "\",";
+    payload << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\",";
+    payload << "\"text\":\"" << HTTPManager::EscapeJson(description) << "\",";
+    payload << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(capture.responseActor.name)
+            << "\",\"refid\":\"" << actorRefId << "\"},";
+    payload << "\"player_actor\":{\"name\":\"" << HTTPManager::EscapeJson(playerName) << "\"},";
+    payload << "\"audience_snapshot\":" << audience.str() << ",";
+    payload << "\"game\":\"fnv\"}";
+
+    HTTPManager::CancelPendingResponses();
+    SpeakManager::CancelDialogueTurn("pipvision_vision", true, true);
+    SpeakManager::GuardActorForPendingDialogue(capture.responseActor.formId, capture.responseActor.name);
+    HTTPManager::SendEvent("vision", payload.str(), audience.str());
+    Logger::LogInfo("[PIPVISION] queued held capture vision response actor=%s refid=0x%08X capture_id=%s",
+        capture.responseActor.name.c_str(), capture.responseActor.formId, capture.captureId.c_str());
 }
 
 bool WaitForStableCapture(const std::filesystem::path& path,
@@ -187,6 +298,12 @@ void AbortPendingCapture(const char* reason, bool notify) {
 }
 
 bool StartUploadTask(const PendingCapture& capture) {
+    struct UploadResult {
+        bool success{false};
+        std::string description;
+    };
+    const auto result = std::make_shared<UploadResult>();
+
     TaskManager::Options options;
     options.type = "pipvision";
     options.key = "capture";
@@ -200,7 +317,7 @@ bool StartUploadTask(const PendingCapture& capture) {
 
     const TaskManager::TaskHandle task = TaskManager::Submit(
         std::move(options),
-        [capturePath = capture.path, captureId = capture.captureId, metadata = capture.metadata](
+        [capturePath = capture.path, captureId = capture.captureId, metadata = capture.metadata, result](
             const TaskManager::CancellationToken& token) {
             std::string imageData;
             if (!WaitForStableCapture(capturePath, token, imageData)) {
@@ -221,19 +338,32 @@ bool StartUploadTask(const PendingCapture& capture) {
             const bool success = response.find("\"ok\":true") != std::string::npos ||
                 response.find("\"ok\": true") != std::string::npos;
             if (success) {
+                result->success = true;
+                result->description = ExtractJsonString(response, "description");
                 Logger::LogInfo("[PIPVISION] capture completed capture_id=%s response_bytes=%zu",
                     captureId.c_str(), response.size());
-                IngameNotifier::Notify("PipVision visual context captured", IngameNotifier::Level::Success);
             } else {
                 Logger::LogWarning("[PIPVISION] upload failed capture_id=%s response=%s",
                     captureId.c_str(), response.substr(0, 500).c_str());
                 IngameNotifier::Notify("PipVision capture failed on the server", IngameNotifier::Level::Error);
             }
         },
-        [capturePath = capture.path](bool, const char*) {
+        [capture, result](bool, const char*) {
             std::error_code error;
-            std::filesystem::remove(capturePath, error);
+            std::filesystem::remove(capture.path, error);
             g_captureInFlight.store(false, std::memory_order_release);
+            if (!result->success) return;
+
+            IngameNotifier::Notify("PipVision visual context captured", IngameNotifier::Level::Success);
+            if (capture.mode == CaptureMode::NpcDescribe) {
+                if (result->description.empty()) {
+                    Logger::LogWarning("[PIPVISION] held capture returned no description capture_id=%s",
+                        capture.captureId.c_str());
+                    IngameNotifier::Notify("PipVision received no scene description", IngameNotifier::Level::Error);
+                    return;
+                }
+                SendNpcVisionRequest(capture, result->description);
+            }
         });
 
     return static_cast<bool>(task);
@@ -241,7 +371,7 @@ bool StartUploadTask(const PendingCapture& capture) {
 
 } // namespace
 
-bool RequestCapture() {
+bool RequestCapture(CaptureMode mode, const ResponseActor& responseActor = {}) {
     bool expected = false;
     if (!g_captureInFlight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         IngameNotifier::Notify("PipVision is already processing a capture", IngameNotifier::Level::Warning);
@@ -262,7 +392,8 @@ bool RequestCapture() {
     const long long captureTimestamp = Misc::GetCurrentTimeMillis();
     const std::string captureId = "pv_" + std::to_string(RuntimeGeneration::Current()) + "_" +
         std::to_string(captureTimestamp);
-    const std::string metadata = BuildCaptureMetadata(gameState, WorldContextFNV::GetCurrent(), captureId);
+    const std::string metadata = BuildCaptureMetadata(
+        gameState, WorldContextFNV::GetCurrent(), captureId, mode, responseActor);
 
     if (!XNVSEAdapter::ToggleNativePipVisionMenus()) {
         g_captureInFlight.store(false, std::memory_order_release);
@@ -277,15 +408,63 @@ bool RequestCapture() {
     g_pendingCapture.path = capturePath;
     g_pendingCapture.captureId = captureId;
     g_pendingCapture.metadata = metadata;
+    g_pendingCapture.mode = mode;
+    g_pendingCapture.responseActor = responseActor;
 
-    Logger::LogInfo("[PIPVISION] capture requested capture_id=%s crosshair=0x%08X location=%s worldspace=%s hud_settle_frames=%d",
-        captureId.c_str(), gameState.crosshairFormId, gameState.cellName.c_str(),
+    Logger::LogInfo("[PIPVISION] capture requested capture_id=%s mode=%s response_actor=%s response_refid=0x%08X crosshair=0x%08X location=%s worldspace=%s hud_settle_frames=%d",
+        captureId.c_str(), mode == CaptureMode::NpcDescribe ? "npc_describe" : "store_only",
+        responseActor.name.c_str(), responseActor.formId,
+        gameState.crosshairFormId, gameState.cellName.c_str(),
         gameState.worldspaceName.c_str(), kHudSettleFrames);
-    IngameNotifier::Notify("PipVision capture started", IngameNotifier::Level::Info);
     return true;
 }
 
+bool ResolveNearestResponseActor(ResponseActor& actor) {
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    const float maxDistance = gameState.worldspaceFormId == 0
+        ? Config::distanceActivatingNpcInterior
+        : Config::distanceActivatingNpcExterior;
+    if (!TargetManager::FindNearestNPC(maxDistance)) return false;
+
+    const TargetManager::TargetInfo& target = TargetManager::GetCurrentTarget();
+    if (!TargetManager::HasValidNPCTarget() || target.name.empty()) return false;
+    actor.name = target.name;
+    actor.formId = target.formId;
+    return true;
+}
+
+void BeginHotkeyPress() {
+    if (g_hotkeyPressActive) return;
+    g_hotkeyPressActive = true;
+    g_holdCaptureTriggered = false;
+    g_hotkeyPressedAt = std::chrono::steady_clock::now();
+}
+
+void EndHotkeyPress() {
+    if (!g_hotkeyPressActive) return;
+    const bool heldCaptureTriggered = g_holdCaptureTriggered;
+    g_hotkeyPressActive = false;
+    g_holdCaptureTriggered = false;
+    if (!heldCaptureTriggered) {
+        RequestCapture(CaptureMode::StoreOnly);
+    }
+}
+
 void Update() {
+    if (g_hotkeyPressActive && !g_holdCaptureTriggered) {
+        if (!InputManager::IsActionHeld(InputManager::HotkeyAction::PipVision)) {
+            g_hotkeyPressActive = false;
+        } else if (std::chrono::steady_clock::now() - g_hotkeyPressedAt >= kHoldThreshold) {
+            g_holdCaptureTriggered = true;
+            ResponseActor responseActor;
+            if (!ResolveNearestResponseActor(responseActor)) {
+                IngameNotifier::Notify("PipVision found no nearby NPC", IngameNotifier::Level::Warning);
+            } else {
+                RequestCapture(CaptureMode::NpcDescribe, responseActor);
+            }
+        }
+    }
+
     if (!g_pendingCapture.active) return;
 
     const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
@@ -320,6 +499,8 @@ void Shutdown() {
     TaskManager::CancelByType("pipvision");
     RestoreHud();
     g_pendingCapture = {};
+    g_hotkeyPressActive = false;
+    g_holdCaptureTriggered = false;
     g_captureInFlight.store(false, std::memory_order_release);
 }
 

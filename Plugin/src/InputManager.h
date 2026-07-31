@@ -29,6 +29,8 @@ void Update();
 
 bool IsGameForeground();
 bool IsActionTriggered(HotkeyAction action);
+bool IsActionReleased(HotkeyAction action);
+bool IsActionHeld(HotkeyAction action);
 bool TryClaimAction(HotkeyAction action, uint32_t debounceMs = 250);
 
 // Called by the JIP LN key event bridge with Fallout DirectInput scan codes.

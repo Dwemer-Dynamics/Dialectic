@@ -2,8 +2,8 @@
 
 namespace PipVisionManager {
 
-// Starts one manual PipVision capture when no capture is already in flight.
-bool RequestCapture();
+void BeginHotkeyPress();
+void EndHotkeyPress();
 void Update();
 void Shutdown();
 
