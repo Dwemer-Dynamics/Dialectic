@@ -139,6 +139,7 @@ struct NativeInventoryItem {
     std::uint32_t baseFormId{0};
     std::uint8_t type{0};
     int count{0};
+    int value{0};
     bool equipped{false};
     float condition{-1.0f};
 };
