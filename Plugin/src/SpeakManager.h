@@ -80,6 +80,7 @@ void QueueRechatRetry(const std::string& speaker,
 void CompleteRechatAttempt(const std::string& speaker, bool success);
 bool IsRechatInFlightFor(const std::string& speaker);
 void ResetRechatChainState();
+void StartRechatChainForAutonomousEvent();
 bool IsRechatChainClosed();
 std::string GetLastRechatter();
 void SetLastRechatter(const std::string& speaker);

@@ -1845,6 +1845,7 @@ static void UpdateBoredEventTimer() {
     const std::string payload = BuildBoredEventPayload(selectedFormId, selectedName, freshCandidates);
     AgentManager::MarkBoredEventFired(selectedFormId);
     Logger::LogInfo("GameLoop: Sending bored event for %s (0x%08X)", selectedName.c_str(), selectedFormId);
+    SpeakManager::StartRechatChainForAutonomousEvent();
     HTTPManager::SendEvent("bored", payload);
 }
 
