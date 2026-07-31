@@ -5,6 +5,7 @@ int iOption
 array_var aJSON
 
 Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
-    DialecticReloadConfig
-    call (CompileScript "Dialectic/RegisterHotkeys.gek")
+    ; MCM Extender caches INI writes while the menu is open. The
+    ; MCMExtUpdate handler applies settings after that cache is saved.
+    return
 End
