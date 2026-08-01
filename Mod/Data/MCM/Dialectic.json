@@ -171,7 +171,7 @@
           "title": "Use PipVision",
           "type": 3,
           "enable": 1,
-          "mouse": "Capture the current Fallout view and add its visual description to Dialectic context. Requires SUP NVSE 8.55 or newer. Unbound by default.",
+          "mouse": "Press once: capture the scene. Press twice: set the targeted NPC portrait. Hold: have the nearest NPC describe the scene. Requires SUP NVSE 8.55 or newer.",
           "vars": [
             {
               "configINI": "Hotkeys:PipVision",
