@@ -301,6 +301,11 @@ std::string BuildJson(const std::vector<NearbyActor>& actors) {
         json << "\"voice_formid\":\"" << HTTPManager::EscapeJson(position.voiceFormId) << "\",";
         json << "\"voice_name\":\"" << HTTPManager::EscapeJson(position.voiceName) << "\",";
         json << "\"cell_formid\":\"" << HTTPManager::EscapeJson(FormatFormId(position.cellFormId)) << "\",";
+        json << "\"worldspace_formid\":\"" << HTTPManager::EscapeJson(FormatFormId(position.worldspaceFormId)) << "\",";
+        json << "\"x\":" << position.position.x << ",";
+        json << "\"y\":" << position.position.y << ",";
+        json << "\"z\":" << position.position.z << ",";
+        json << "\"yaw\":" << position.yaw << ",";
         json << "\"distance\":" << actor.spatial.airDistance << ",";
         json << "\"volume\":" << actor.spatial.volume << ",";
         json << "\"status\":\"" << HTTPManager::EscapeJson(actor.status) << "\",";
