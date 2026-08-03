@@ -50,6 +50,7 @@
 #include "WorldDataSyncFNV.h"
 #include "VoiceSampleBatchUploadFNV.h"
 #include "ImportDataSyncFNV.h"
+#include "ServerPluginSync.h"
 #include "QuestJournalFNV.h"
 #include "PlayerInventoryManagerFNV.h"
 #include "FalloutStatsManagerFNV.h"
@@ -1645,6 +1646,8 @@ void InitializeSubsystems() {
                 Logger::LogWarning("Dialectic CSV import data detection could not be queued");
             }
         }
+
+        ScheduleServerPluginSync();
 
         Logger::LogSection("ALL SUBSYSTEMS INITIALIZED");
     }
