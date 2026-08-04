@@ -852,6 +852,7 @@ namespace Config {
         static const char* kModeNames[] = {
             "STANDARD",
             "WHISPER",
+            "CLOSE",
             "SHOUT",
             "NARRATOR",
             "DIRECTOR",
@@ -911,6 +912,7 @@ namespace Config {
         const int hotkeyToggleModes = ReadINIInt("Hotkeys", "ToggleModes", 0);
         const int hotkeyToggleLLMModel = ReadINIInt("Hotkeys", "ToggleLLMModel", 0);
         const int hotkeyOpenMicMute = ReadINIInt("Hotkeys", "OpenMicMute", 0);
+        const int hotkeyPipVision = ReadINIInt("Hotkeys", "PipVision", 0);
 
         std::ofstream iniFile(iniPath);
         
@@ -945,7 +947,8 @@ namespace Config {
         iniFile << "DynamicProfileMenu=" << hotkeyDynamicProfileMenu << "\n";
         iniFile << "ToggleModes=" << hotkeyToggleModes << "\n";
         iniFile << "ToggleLLMModel=" << hotkeyToggleLLMModel << "\n";
-        iniFile << "OpenMicMute=" << hotkeyOpenMicMute << "\n\n";
+        iniFile << "OpenMicMute=" << hotkeyOpenMicMute << "\n";
+        iniFile << "PipVision=" << hotkeyPipVision << "\n\n";
         
         iniFile << "[Audio]\n";
         iniFile << "; Player-heard AI voice playback settings.\n";

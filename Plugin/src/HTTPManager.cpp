@@ -27,7 +27,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.6.5"
+#define DIALECTIC_VERSION "0.7.0"
 #endif
 
 #pragma comment(lib, "ws2_32.lib")
@@ -1908,6 +1908,146 @@ namespace HTTPManager {
         } catch (...) {
             Log("HTTPManager: Exception in UploadCSVFile");
             return "";
+        }
+    }
+
+    std::string UploadPipVisionImage(const std::string& imageData,
+                                     const std::string& metadataJson,
+                                     const std::string& fileName,
+                                     const TaskManager::CancellationToken* token) {
+        if (!g_initialized || imageData.empty() || metadataJson.empty()) {
+            Log("HTTPManager: PipVision upload rejected initialized=%d image_bytes=%zu metadata_bytes=%zu",
+                g_initialized.load() ? 1 : 0, imageData.size(), metadataJson.size());
+            return {};
+        }
+
+        try {
+            std::string serverPath = Config::serverPath;
+            const size_t queryPos = serverPath.find('?');
+            if (queryPos != std::string::npos) serverPath.resize(queryPos);
+            const size_t slashPos = serverPath.find_last_of("/\\");
+            serverPath = slashPos == std::string::npos
+                ? "itt.php"
+                : serverPath.substr(0, slashPos + 1) + "itt.php";
+            if (serverPath.empty() || serverPath.front() != '/') serverPath.insert(serverPath.begin(), '/');
+
+            const std::string safeFileName = fileName.empty() ? "pipvision_capture.jpg" : fileName;
+            const std::string boundary = "----DialecticPipVisionBoundary7MA4YWxk";
+            const std::string metadataPart =
+                "--" + boundary + "\r\n"
+                "Content-Disposition: form-data; name=\"metadata\"\r\n"
+                "Content-Type: application/json; charset=utf-8\r\n\r\n" +
+                metadataJson + "\r\n";
+            const std::string fileHeader =
+                "--" + boundary + "\r\n"
+                "Content-Disposition: form-data; name=\"file\"; filename=\"" + safeFileName + "\"\r\n"
+                "Content-Type: image/jpeg\r\n\r\n";
+            const std::string closing = "\r\n--" + boundary + "--\r\n";
+
+            std::vector<char> body;
+            body.reserve(metadataPart.size() + fileHeader.size() + imageData.size() + closing.size());
+            body.insert(body.end(), metadataPart.begin(), metadataPart.end());
+            body.insert(body.end(), fileHeader.begin(), fileHeader.end());
+            body.insert(body.end(), imageData.begin(), imageData.end());
+            body.insert(body.end(), closing.begin(), closing.end());
+            if (body.size() > static_cast<std::size_t>(MAXDWORD)) {
+                Log("HTTPManager: PipVision multipart body is too large");
+                return {};
+            }
+
+            const std::wstring wideServer(Config::serverHost.begin(), Config::serverHost.end());
+            const std::wstring widePath(serverPath.begin(), serverPath.end());
+            const std::string headers = "Content-Type: multipart/form-data; boundary=" + boundary +
+                "\r\nAccept: application/json";
+            const std::wstring wideHeaders(headers.begin(), headers.end());
+
+            HINTERNET session = WinHttpOpen(L"Dialectic PipVision/" DIALECTIC_VERSION,
+                WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                WINHTTP_NO_PROXY_NAME,
+                WINHTTP_NO_PROXY_BYPASS,
+                0);
+            if (!session) return {};
+
+            HINTERNET connection = WinHttpConnect(session, wideServer.c_str(), Config::serverPort, 0);
+            if (!connection) {
+                WinHttpCloseHandle(session);
+                return {};
+            }
+
+            HINTERNET request = WinHttpOpenRequest(connection, L"POST", widePath.c_str(), nullptr,
+                WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+            if (!request) {
+                WinHttpCloseHandle(connection);
+                WinHttpCloseHandle(session);
+                return {};
+            }
+
+            auto interruptibleRequest = std::make_shared<std::atomic<HINTERNET>>(request);
+            if (token) {
+                token->SetInterrupt([interruptibleRequest]() {
+                    HINTERNET handle = interruptibleRequest->exchange(nullptr);
+                    if (handle) WinHttpCloseHandle(handle);
+                });
+            }
+            const auto closeRequest = [&]() {
+                if (token) token->ClearInterrupt();
+                HINTERNET handle = interruptibleRequest->exchange(nullptr);
+                if (handle) WinHttpCloseHandle(handle);
+            };
+            const auto cleanup = [&]() {
+                closeRequest();
+                WinHttpCloseHandle(connection);
+                WinHttpCloseHandle(session);
+            };
+
+            constexpr int kTimeoutMs = 70000;
+            WinHttpSetTimeouts(request, 15000, 15000, kTimeoutMs, kTimeoutMs);
+            if (!WinHttpAddRequestHeaders(request, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD) ||
+                !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                    body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) ||
+                !WinHttpReceiveResponse(request, nullptr)) {
+                Log("HTTPManager: PipVision request failed winhttp_error=%lu", GetLastError());
+                cleanup();
+                return {};
+            }
+
+            DWORD statusCode = 0;
+            DWORD statusSize = sizeof(statusCode);
+            WinHttpQueryHeaders(request,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX,
+                &statusCode,
+                &statusSize,
+                WINHTTP_NO_HEADER_INDEX);
+
+            std::string response;
+            constexpr std::size_t kMaximumResponseBytes = 1024U * 1024U;
+            char buffer[4096];
+            while (!token || !token->IsCancellationRequested()) {
+                DWORD available = 0;
+                if (!WinHttpQueryDataAvailable(request, &available) || available == 0) break;
+                const DWORD toRead = static_cast<DWORD>(std::min<std::size_t>(available, sizeof(buffer)));
+                DWORD bytesRead = 0;
+                if (!WinHttpReadData(request, buffer, toRead, &bytesRead) || bytesRead == 0) break;
+                if (response.size() + bytesRead > kMaximumResponseBytes) {
+                    Log("HTTPManager: PipVision response exceeded 1 MB");
+                    response.clear();
+                    break;
+                }
+                response.append(buffer, bytesRead);
+            }
+            cleanup();
+
+            response = Trim(response);
+            Log("HTTPManager: PipVision endpoint returned HTTP %lu response_bytes=%zu",
+                statusCode, response.size());
+            if (statusCode < 200 || statusCode >= 300) {
+                Log("HTTPManager: PipVision error response: %s", response.substr(0, 500).c_str());
+            }
+            return response;
+        } catch (...) {
+            Log("HTTPManager: Exception in UploadPipVisionImage");
+            return {};
         }
     }
 

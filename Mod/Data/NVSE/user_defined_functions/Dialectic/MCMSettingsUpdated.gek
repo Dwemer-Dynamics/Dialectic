@@ -1,0 +1,5 @@
+Begin Function {}
+    ; Apply persisted MCM values and rebuild JIP key handlers after menu close.
+    DialecticReloadConfig
+    call (CompileScript "Dialectic/RegisterHotkeys.gek")
+End

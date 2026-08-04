@@ -50,6 +50,7 @@
 #include "WorldDataSyncFNV.h"
 #include "VoiceSampleBatchUploadFNV.h"
 #include "ImportDataSyncFNV.h"
+#include "ServerPluginSync.h"
 #include "QuestJournalFNV.h"
 #include "PlayerInventoryManagerFNV.h"
 #include "FalloutStatsManagerFNV.h"
@@ -59,7 +60,7 @@
 #include "Console.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.6.5"
+#define DIALECTIC_VERSION "0.7.0"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
@@ -93,13 +94,6 @@ static void DeleteBridgeFileEverywhere(const char* fileName) {
 static void ClearStartupBridgeState() {
     static constexpr const char* files[] = {
         "dialectic_bootstrap_active.tmp",
-        "dialectic_action_request.tmp",
-        "dialectic_action_status.txt",
-        "dialectic_attack_state.tmp",
-        "dialectic_attack_cleanup.tmp",
-        "dialectic_follow_state.tmp",
-        "dialectic_move_state.tmp",
-        "dialectic_pickup_state.tmp",
         "dialectic_open_text_input.tmp",
         "dialectic_open_mode_menu.tmp",
         "dialectic_open_llm_model_menu.tmp",
@@ -110,12 +104,8 @@ static void ClearStartupBridgeState() {
         "dialectic_mode_menu_status.tmp",
         "dialectic_llm_model_menu_status.tmp",
         "dialectic_dynamic_profile_menu_status.tmp",
-        "dialectic_halt_actions.tmp",
-        "dialectic_halt_actions_status.txt",
         "dialectic_subtitle.txt",
         "dialectic_subtitle_status.txt",
-        "dialectic_lipsync_command.txt",
-        "dialectic_lipsync_ref.txt",
         "dialectic_lipsync_status.txt"
     };
 
@@ -234,6 +224,7 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
     if (normalizedKey == "openmicmute") { return "OpenMicMute"; }
+    if (normalizedKey == "pipvision") { return "PipVision"; }
     return nullptr;
 }
 
@@ -489,7 +480,7 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
     } else if (s == "narrator") {
         if (k == "mode") { Config::narratorModeEnabled = enabled; changed = true; }
     } else if (s == "modes") {
-        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 7); changed = true; }
+        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 8); changed = true; }
     }
 
     if (!changed) {
@@ -549,6 +540,7 @@ static bool ResolveDialecticSettingId(int settingId, DialecticSettingRef& outSet
         case 62: outSetting = { "SpatialAudio", "InteriorHearingDistance" }; return true;
         case 63: outSetting = { "SpatialAudio", "ExteriorHearingDistance" }; return true;
         case 64: outSetting = { "SpatialAudio", "AutoHearingDistance" }; return true;
+        case 65: outSetting = { "Hotkeys", "PipVision" }; return true;
         default:
             outSetting = { "", "" };
             return false;
@@ -829,9 +821,6 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
               PASS_COMMAND_ARGS,
               &speakerRef,
               &topicOrInfo)) {
-        WriteTextFile(
-            "Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp",
-            "source=topic_prompt_command\nstate=extract_args_failed\n");
         Logger::LogWarning("Dialectic dialogue prompt command failed to extract arguments");
         return true;
     }
@@ -840,18 +829,7 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
     const void* targetRef = speakerRef ? speakerRef : thisObj;
     XNVSEAdapter::CaptureNativeDialoguePrompt(targetRef, topicOrInfo, capture);
 
-    std::ostringstream debug;
-    debug << "source=topic_prompt_command\n";
-    debug << "topic_refid=" << FormatHex(capture.topicFormId) << "\n";
-    debug << "parent_topic_refid=" << FormatHex(capture.parentTopicFormId) << "\n";
-    debug << "form_type=0x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-          << static_cast<int>(capture.formType) << "\n";
-    debug << "prompt_source=" << capture.source << "\n";
-    debug << "prompt=" << capture.prompt << "\n";
-
     if (capture.prompt.empty()) {
-        debug << "state=empty_prompt\n";
-        WriteTextFile("Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp", debug.str());
         Logger::LogInfo("Dialogue prompt capture found no prompt for topic/info 0x%08X type=0x%02X",
             capture.topicFormId, capture.formType);
         return true;
@@ -876,12 +854,6 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
         capture.topicFormId,
         capture.source,
         capture.parentTopicFormId);
-
-    debug << "state=" << (emitted ? "emit_prompt" : "write_failed") << "\n";
-    debug << "speaker=Player\n";
-    debug << "target=" << targetName << "\n";
-    debug << "target_refid=" << FormatHex(targetFormId) << "\n";
-    WriteTextFile("Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp", debug.str());
 
     if (emitted) {
         Logger::LogInfo("Captured dialogue menu player prompt via topic info 0x%08X: %s",
@@ -1236,12 +1208,6 @@ static bool Cmd_DialecticDiagnosticBridgeTick_Execute(COMMAND_ARGS) {
     return true;
 }
 
-static bool Cmd_DialecticClearActionRequest_Execute(COMMAND_ARGS) {
-    ActionManager::ClearScriptBridgeRequest();
-    *result = 1;
-    return true;
-}
-
 static bool Cmd_DialecticClearActorSnapshotRequest_Execute(COMMAND_ARGS) {
     AgentManager::ClearActorSnapshotRequest();
     *result = 1;
@@ -1440,11 +1406,6 @@ static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
     kParams_Integer, Cmd_DialecticDiagnosticBridgeTick_Execute, nullptr, nullptr, 0
 };
 
-static CommandInfo kCommandInfo_DialecticClearActionRequest = {
-    "DialecticClearActionRequest", "", 0, "Acknowledges and removes the active Dialectic action bridge request.", 0, 0,
-    nullptr, Cmd_DialecticClearActionRequest_Execute, nullptr, nullptr, 0
-};
-
 static CommandInfo kCommandInfo_DialecticClearActorSnapshotRequest = {
     "DialecticClearActorSnapshotRequest", "", 0, "Acknowledges and removes Dialectic actor snapshot bridge requests.", 0, 0,
     nullptr, Cmd_DialecticClearActorSnapshotRequest_Execute, nullptr, nullptr, 0
@@ -1534,7 +1495,6 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
         &kCommandInfo_DialecticManageAIAgents,
         &kCommandInfo_DialecticDiagnosticBridgeTick,
-        &kCommandInfo_DialecticClearActionRequest,
         &kCommandInfo_DialecticClearActorSnapshotRequest,
         &kCommandInfo_DialecticMarkPlayerInventoryDirty,
         &kCommandInfo_DialecticHandleHotkey,
@@ -1686,6 +1646,8 @@ void InitializeSubsystems() {
                 Logger::LogWarning("Dialectic CSV import data detection could not be queued");
             }
         }
+
+        ScheduleServerPluginSync();
 
         Logger::LogSection("ALL SUBSYSTEMS INITIALIZED");
     }

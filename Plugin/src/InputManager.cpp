@@ -24,6 +24,7 @@ static_assert(kActionCount <= 32, "Hotkey pending-state mask must fit in uint32_
 std::array<std::atomic<int>, kActionCount> g_hotkeyBindings{};
 std::array<ULONGLONG, kActionCount> g_lastActionClaims{};
 std::atomic<uint32_t> g_pendingActions{0};
+std::atomic<uint32_t> g_releasedActions{0};
 std::atomic<uint32_t> g_heldActions{0};
 
 constexpr std::size_t ActionIndex(HotkeyAction action) {
@@ -46,6 +47,7 @@ const char* ActionName(HotkeyAction action) {
         case HotkeyAction::DynamicProfileMenu: return "DynamicProfileMenu";
         case HotkeyAction::ToggleModes: return "ToggleModes";
         case HotkeyAction::ToggleLLMModel: return "ToggleLLMModel";
+        case HotkeyAction::PipVision: return "PipVision";
         case HotkeyAction::Count: break;
     }
     return "Unknown";
@@ -93,6 +95,7 @@ void Initialize() {
     for (auto& binding : g_hotkeyBindings) binding.store(0, std::memory_order_relaxed);
     g_lastActionClaims.fill(0);
     g_pendingActions.store(0, std::memory_order_relaxed);
+    g_releasedActions.store(0, std::memory_order_relaxed);
     g_heldActions.store(0, std::memory_order_relaxed);
     LoadConfig();
 }
@@ -101,6 +104,7 @@ void Shutdown() {
     Log("InputManager: Shutting down");
     for (auto& binding : g_hotkeyBindings) binding.store(0, std::memory_order_relaxed);
     g_pendingActions.store(0, std::memory_order_relaxed);
+    g_releasedActions.store(0, std::memory_order_relaxed);
     g_heldActions.store(0, std::memory_order_relaxed);
 }
 
@@ -117,6 +121,7 @@ void Update() {
     if (IsRuntimeInputAllowed()) return;
 
     g_pendingActions.store(0, std::memory_order_release);
+    g_releasedActions.store(0, std::memory_order_release);
     g_heldActions.store(0, std::memory_order_release);
 }
 
@@ -126,6 +131,7 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
 
     if (!pressed) {
         g_heldActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
+        g_releasedActions.fetch_or(matchedActions, std::memory_order_acq_rel);
         return true;
     }
 
@@ -136,6 +142,7 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
     }
 
     g_heldActions.fetch_or(matchedActions, std::memory_order_acq_rel);
+    g_releasedActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
     g_pendingActions.fetch_or(matchedActions, std::memory_order_acq_rel);
 
     for (std::size_t i = 0; i < kActionCount; ++i) {
@@ -147,10 +154,21 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
     return true;
 }
 
-bool IsActionTriggered(HotkeyAction action) {
+bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs) {
     const uint32_t bit = ActionBit(action);
     const uint32_t previous = g_pendingActions.fetch_and(~bit, std::memory_order_acq_rel);
-    return (previous & bit) != 0 && TryClaimAction(action);
+    return (previous & bit) != 0 && TryClaimAction(action, debounceMs);
+}
+
+bool IsActionReleased(HotkeyAction action) {
+    const uint32_t bit = ActionBit(action);
+    const uint32_t previous = g_releasedActions.fetch_and(~bit, std::memory_order_acq_rel);
+    return (previous & bit) != 0;
+}
+
+bool IsActionHeld(HotkeyAction action) {
+    if (!IsGameForeground()) return false;
+    return (g_heldActions.load(std::memory_order_acquire) & ActionBit(action)) != 0;
 }
 
 bool TryClaimAction(HotkeyAction action, uint32_t debounceMs) {
@@ -192,11 +210,13 @@ void LoadConfig() {
     SetHotkey(HotkeyAction::DynamicProfileMenu, Config::ReadINIInt("Hotkeys", "DynamicProfileMenu", 0));
     SetHotkey(HotkeyAction::ToggleModes, Config::ReadINIInt("Hotkeys", "ToggleModes", 0));
     SetHotkey(HotkeyAction::ToggleLLMModel, Config::ReadINIInt("Hotkeys", "ToggleLLMModel", 0));
+    SetHotkey(HotkeyAction::PipVision, Config::ReadINIInt("Hotkeys", "PipVision", 0));
 
     g_pendingActions.store(0, std::memory_order_release);
+    g_releasedActions.store(0, std::memory_order_release);
     g_heldActions.store(0, std::memory_order_release);
 
-    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d",
+    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d PipVision=%d",
         GetHotkey(HotkeyAction::TalkToNPC),
         GetHotkey(HotkeyAction::ToggleVoice),
         GetHotkey(HotkeyAction::OpenMicMute),
@@ -204,7 +224,8 @@ void LoadConfig() {
         GetHotkey(HotkeyAction::ManualActivateNPC),
         GetHotkey(HotkeyAction::ToggleModes),
         GetHotkey(HotkeyAction::ToggleLLMModel),
-        GetHotkey(HotkeyAction::DynamicProfileMenu));
+        GetHotkey(HotkeyAction::DynamicProfileMenu),
+        GetHotkey(HotkeyAction::PipVision));
 }
 
 void SaveConfig() {
@@ -218,6 +239,7 @@ void SaveConfig() {
     WriteBinding("DynamicProfileMenu", HotkeyAction::DynamicProfileMenu);
     WriteBinding("ToggleModes", HotkeyAction::ToggleModes);
     WriteBinding("ToggleLLMModel", HotkeyAction::ToggleLLMModel);
+    WriteBinding("PipVision", HotkeyAction::PipVision);
 }
 
 } // namespace InputManager
