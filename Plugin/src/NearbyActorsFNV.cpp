@@ -33,6 +33,7 @@ struct NearbyActor {
     SpatialAwarenessFNV::Result spatial;
     bool manuallyActivated = false;
     bool autoManaged = false;
+    bool sceneEligible = false;
     bool eligible = false;
     bool autoEligible = false;
     std::string eligibilityReason;
@@ -153,6 +154,9 @@ std::vector<NearbyActor> BuildNearbyActors() {
         actor.spatial = SpatialAwarenessFNV::Evaluate(player, position);
         actor.manuallyActivated = AgentManager::IsManuallyActivated(position.formId);
         actor.autoManaged = AgentManager::IsAutoManaged(position.formId);
+        actor.sceneEligible = ActorEligibilityFNV::IsTargetableActorIdentity(
+            EligibilityMetadataFromPosition(position),
+            &actor.eligibilityReason);
         actor.eligible = ActorEligibilityFNV::IsRechatAllowed(
             EligibilityMetadataFromPosition(position),
             actor.manuallyActivated,
@@ -161,15 +165,17 @@ std::vector<NearbyActor> BuildNearbyActors() {
             EligibilityMetadataFromPosition(position), nullptr);
 
         if (position.disabledKnown && position.isDisabled) {
+            actor.sceneEligible = false;
             actor.eligible = false;
             actor.eligibilityReason = "actor is disabled";
         }
         if (position.deadKnown && position.isDead) {
+            actor.sceneEligible = false;
             actor.eligible = false;
             actor.eligibilityReason = "actor is dead";
         }
 
-        if (!actor.eligible) {
+        if (!actor.sceneEligible) {
             ++skippedIneligible;
             continue;
         }
@@ -310,6 +316,8 @@ std::string BuildJson(const std::vector<NearbyActor>& actors) {
         json << "\"volume\":" << actor.spatial.volume << ",";
         json << "\"status\":\"" << HTTPManager::EscapeJson(actor.status) << "\",";
         AppendBool(json, "can_hear_player", actor.spatial.canCommunicate);
+        json << ",";
+        AppendBool(json, "scene_eligible", actor.sceneEligible);
         json << ",";
         AppendBool(json, "eligible", actor.eligible);
         json << ",";
