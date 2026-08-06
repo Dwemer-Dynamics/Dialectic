@@ -59,6 +59,7 @@
 #include <climits>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -3035,6 +3036,38 @@ static void ProcessRpgEventBridge() {
             people = narrowPeople;
         }
 
+        std::string eventText = event.eventText;
+        if (event.eventType == "combatbark") {
+            std::string combatTargetName;
+            RuntimeSnapshot::ActorState speakerState;
+            RuntimeSnapshot::ActorState combatTargetState;
+            if (RuntimeSnapshot::TryGetActor(speakerFormId, speakerState) &&
+                speakerState.combatTargetFormId != 0 &&
+                RuntimeSnapshot::TryGetActor(speakerState.combatTargetFormId, combatTargetState) &&
+                !combatTargetState.dead &&
+                !combatTargetState.name.empty()) {
+                combatTargetName = combatTargetState.name;
+            }
+
+            if (combatTargetName.empty()) {
+                const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+                float nearestDistance = std::numeric_limits<float>::max();
+                for (const RuntimeSnapshot::ActorState& actor : RuntimeSnapshot::GetActors()) {
+                    if (!actor.inCombat || !actor.hostileToPlayer || actor.dead || actor.name.empty() ||
+                        !RuntimeSnapshot::IsActorInScene(actor, gameState) ||
+                        actor.distanceToPlayer >= nearestDistance) {
+                        continue;
+                    }
+                    nearestDistance = actor.distanceToPlayer;
+                    combatTargetName = actor.name;
+                }
+            }
+
+            if (!combatTargetName.empty()) {
+                eventText = "Combat is underway against " + combatTargetName + " near " + playerName;
+            }
+        }
+
         std::ostringstream payload;
         payload << "{"
                 << "\"schema\":\"dialectic.rpg_event.v1\","
@@ -3044,7 +3077,7 @@ static void ProcessRpgEventBridge() {
                 << "\"speaker\":\"" << HTTPManager::EscapeJson(speakerName) << "\","
                 << "\"speaker_formid\":\"" << HTTPManager::EscapeJson(FormatFormIdJsonValue(speakerFormId)) << "\","
                 << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\","
-                << "\"text\":\"" << HTTPManager::EscapeJson(event.eventText) << "\","
+                << "\"text\":\"" << HTTPManager::EscapeJson(eventText) << "\","
                 << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
                 << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
                 << "\"audience_snapshot\":" << audienceJson;
@@ -3077,7 +3110,7 @@ static void ProcessRpgEventBridge() {
         Logger::LogInfo("GameLoop: Forwarding RPG comment event %s for %s: %s",
             event.eventType.c_str(),
             speakerName.c_str(),
-            event.eventText.c_str());
+            eventText.c_str());
         HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
     }
 }
