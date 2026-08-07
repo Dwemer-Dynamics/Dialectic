@@ -59,12 +59,13 @@
 #include <climits>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.0"
+#define DIALECTIC_VERSION "0.7.1"
 #endif
 
 // Forward declarations
@@ -2822,6 +2823,160 @@ static bool SelectRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
     return false;
 }
 
+static bool IsCombatRpgSpeakerCandidate(
+    uint32_t formId,
+    const RuntimeSnapshot::GameState& gameState,
+    RuntimeSnapshot::ActorState& outActor) {
+    return formId != 0 &&
+        AgentManager::IsAIAgent(formId) &&
+        RuntimeSnapshot::TryGetActor(formId, outActor) &&
+        outActor.loaded3D &&
+        !outActor.dead &&
+        outActor.inCombat &&
+        !outActor.name.empty() &&
+        RuntimeSnapshot::IsActorInScene(outActor, gameState);
+}
+
+static bool SelectCombatRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
+    outFormId = 0;
+    outName.clear();
+
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    RuntimeSnapshot::ActorState actor;
+    uint32_t conversationFormId = g_conversationPartnerFormId;
+    if (conversationFormId == 0 && !g_conversationPartner.empty()) {
+        conversationFormId = AgentManager::FindAgentFormIdByName(g_conversationPartner);
+    }
+    if (g_conversationActive && !g_conversationIsNarrator &&
+        IsCombatRpgSpeakerCandidate(conversationFormId, gameState, actor)) {
+        outFormId = actor.formId;
+        outName = actor.name;
+        return true;
+    }
+
+    const auto& target = TargetManager::GetCurrentTarget();
+    if (target.isActor && target.isAIAgent &&
+        IsCombatRpgSpeakerCandidate(target.formId, gameState, actor)) {
+        outFormId = actor.formId;
+        outName = actor.name;
+        return true;
+    }
+
+    const float maxDistance = std::max(Config::distanceActivatingNpcInterior, Config::distanceActivatingNpcExterior);
+    float nearestDistance = std::numeric_limits<float>::max();
+    for (const RuntimeSnapshot::ActorState& candidate : RuntimeSnapshot::GetActors()) {
+        if (!IsCombatRpgSpeakerCandidate(candidate.formId, gameState, actor) ||
+            (maxDistance > 0.0f && actor.distanceToPlayer > maxDistance) ||
+            actor.distanceToPlayer >= nearestDistance) {
+            continue;
+        }
+        nearestDistance = actor.distanceToPlayer;
+        outFormId = actor.formId;
+        outName = actor.name;
+    }
+
+    return outFormId != 0 && !outName.empty();
+}
+
+struct CombatPromptContext {
+    std::vector<std::string> allies;
+    std::vector<std::string> hostiles;
+};
+
+// Builds the current combat graph without applying conversational race eligibility to enemies.
+static CombatPromptContext BuildCombatPromptContext(
+    uint32_t speakerFormId,
+    const std::string& playerName) {
+    CombatPromptContext context;
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    const std::vector<RuntimeSnapshot::ActorState> actors = RuntimeSnapshot::GetActors();
+    std::unordered_map<uint32_t, const RuntimeSnapshot::ActorState*> actorsByFormId;
+    actorsByFormId.reserve(actors.size());
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (actor.formId != 0) {
+            actorsByFormId[actor.formId] = &actor;
+        }
+    }
+
+    auto isLiveCombatActor = [&](const RuntimeSnapshot::ActorState& actor) {
+        return actor.formId != 0 && actor.inCombat && actor.loaded3D && !actor.dead &&
+            !actor.name.empty() && RuntimeSnapshot::IsActorInScene(actor, gameState);
+    };
+
+    std::set<uint32_t> alliedFormIds;
+    std::set<uint32_t> hostileFormIds;
+    std::set<std::string> alliedNames;
+    std::set<std::string> hostileNames;
+    auto addName = [](std::vector<std::string>& values, std::set<std::string>& names, const std::string& name) {
+        const std::string trimmed = TrimInput(name);
+        if (!trimmed.empty() && names.insert(ToLowerCopy(trimmed)).second) {
+            values.push_back(trimmed);
+        }
+    };
+    if (gameState.inCombat) {
+        addName(context.allies, alliedNames, playerName);
+    }
+    if (gameState.playerFormId != 0) {
+        alliedFormIds.insert(gameState.playerFormId);
+    }
+    alliedFormIds.insert(speakerFormId);
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (!isLiveCombatActor(actor)) {
+            continue;
+        }
+        if (actor.playerTeammate) {
+            alliedFormIds.insert(actor.formId);
+        } else if (actor.hostileToPlayer) {
+            hostileFormIds.insert(actor.formId);
+        }
+    }
+
+    bool expanded = true;
+    while (expanded) {
+        expanded = false;
+        for (const RuntimeSnapshot::ActorState& actor : actors) {
+            if (!isLiveCombatActor(actor) || actor.combatTargetFormId == 0) {
+                continue;
+            }
+            const auto targetIt = actorsByFormId.find(actor.combatTargetFormId);
+            if (targetIt == actorsByFormId.end() || !isLiveCombatActor(*targetIt->second)) {
+                continue;
+            }
+
+            const bool actorAllied = alliedFormIds.count(actor.formId) != 0;
+            const bool actorHostile = hostileFormIds.count(actor.formId) != 0;
+            const bool targetAllied = alliedFormIds.count(actor.combatTargetFormId) != 0;
+            const bool targetHostile = hostileFormIds.count(actor.combatTargetFormId) != 0;
+            if (actorAllied && !targetAllied && !targetHostile) {
+                expanded = hostileFormIds.insert(actor.combatTargetFormId).second || expanded;
+            } else if (actorHostile && !targetAllied && !targetHostile) {
+                expanded = alliedFormIds.insert(actor.combatTargetFormId).second || expanded;
+            } else if (targetAllied && !actorAllied && !actorHostile) {
+                expanded = hostileFormIds.insert(actor.formId).second || expanded;
+            } else if (targetHostile && !actorAllied && !actorHostile) {
+                expanded = alliedFormIds.insert(actor.formId).second || expanded;
+            }
+        }
+    }
+
+    const auto speakerIt = actorsByFormId.find(speakerFormId);
+    if (speakerIt != actorsByFormId.end()) {
+        addName(context.allies, alliedNames, speakerIt->second->name);
+    }
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (!isLiveCombatActor(actor)) {
+            continue;
+        }
+        if (alliedFormIds.count(actor.formId) != 0) {
+            addName(context.allies, alliedNames, actor.name);
+        } else if (hostileFormIds.count(actor.formId) != 0) {
+            addName(context.hostiles, hostileNames, actor.name);
+        }
+    }
+
+    return context;
+}
+
 struct RpgBridgeEvent {
     std::string eventType;
     std::string eventText;
@@ -3017,7 +3172,10 @@ static void ProcessRpgEventBridge() {
 
         uint32_t speakerFormId = 0;
         std::string speakerName;
-        if (!SelectRpgCommentSpeaker(speakerFormId, speakerName)) {
+        const bool speakerSelected = event.eventType == "combatbark"
+            ? SelectCombatRpgCommentSpeaker(speakerFormId, speakerName)
+            : SelectRpgCommentSpeaker(speakerFormId, speakerName);
+        if (!speakerSelected) {
             Logger::LogInfo("GameLoop: RPG event %s skipped; no active Dialectic NPC speaker", event.eventType.c_str());
             continue;
         }
@@ -3035,6 +3193,10 @@ static void ProcessRpgEventBridge() {
             people = narrowPeople;
         }
 
+        const CombatPromptContext combatContext = event.eventType == "combatbark"
+            ? BuildCombatPromptContext(speakerFormId, playerName)
+            : CombatPromptContext{};
+
         std::ostringstream payload;
         payload << "{"
                 << "\"schema\":\"dialectic.rpg_event.v1\","
@@ -3048,6 +3210,23 @@ static void ProcessRpgEventBridge() {
                 << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
                 << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
                 << "\"audience_snapshot\":" << audienceJson;
+        if (event.eventType == "combatbark") {
+            payload << ",\"combat\":{\"allies_currently_fighting\":[";
+            for (size_t i = 0; i < combatContext.allies.size(); ++i) {
+                if (i > 0) {
+                    payload << ",";
+                }
+                payload << "\"" << HTTPManager::EscapeJson(combatContext.allies[i]) << "\"";
+            }
+            payload << "],\"hostile_combatants\":[";
+            for (size_t i = 0; i < combatContext.hostiles.size(); ++i) {
+                if (i > 0) {
+                    payload << ",";
+                }
+                payload << "\"" << HTTPManager::EscapeJson(combatContext.hostiles[i]) << "\"";
+            }
+            payload << "]}";
+        }
         if (event.eventType == "player_consumed") {
             payload << ",\"item\":{"
                     << "\"name\":\"" << HTTPManager::EscapeJson(event.itemName.empty() ? event.eventText : event.itemName) << "\","
@@ -3074,10 +3253,18 @@ static void ProcessRpgEventBridge() {
                 << "\"game\":\"fnv\""
                 << "}";
 
-        Logger::LogInfo("GameLoop: Forwarding RPG comment event %s for %s: %s",
-            event.eventType.c_str(),
-            speakerName.c_str(),
-            event.eventText.c_str());
+        if (event.eventType == "combatbark") {
+            Logger::LogInfo("GameLoop: Forwarding combat bark for %s (allies=%zu hostiles=%zu): %s",
+                speakerName.c_str(),
+                combatContext.allies.size(),
+                combatContext.hostiles.size(),
+                event.eventText.c_str());
+        } else {
+            Logger::LogInfo("GameLoop: Forwarding RPG comment event %s for %s: %s",
+                event.eventType.c_str(),
+                speakerName.c_str(),
+                event.eventText.c_str());
+        }
         HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
     }
 }
