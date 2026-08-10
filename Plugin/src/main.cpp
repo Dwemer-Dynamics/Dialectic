@@ -220,6 +220,7 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "manualactivate" || normalizedKey == "manualactivatenpc") { return "ManualActivate"; }
     if (normalizedKey == "openmenu") { return "OpenMenu"; }
     if (normalizedKey == "quickcommand") { return "QuickCommand"; }
+    if (normalizedKey == "dialecticcontrol") { return "DialecticControl"; }
     if (normalizedKey == "dynamicprofilemenu") { return "DynamicProfileMenu"; }
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
@@ -278,16 +279,8 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
             outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC);
             return true;
         }
-        if (k == "dynamicprofilemenu") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu);
-            return true;
-        }
-        if (k == "togglemodes") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes);
-            return true;
-        }
-        if (k == "togglellmmodel") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel);
+        if (k == "dialecticcontrol") {
+            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl);
             return true;
         }
     }
@@ -353,9 +346,7 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "togglevoice") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice); return true; }
         if (k == "openmicmute") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::OpenMicMute); return true; }
         if (k == "manualactivate" || k == "manualactivatenpc") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC); return true; }
-        if (k == "dynamicprofilemenu") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu); return true; }
-        if (k == "togglemodes") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes); return true; }
-        if (k == "togglellmmodel") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel); return true; }
+        if (k == "dialecticcontrol") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl); return true; }
     }
 
     if (s == "rechat") {

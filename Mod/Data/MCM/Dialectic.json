@@ -25,11 +25,6 @@
       "enable": 1,
       "options": {
         "1": {
-          "title": "Conversation",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
           "title": "Chatbox",
           "type": 3,
           "enable": 1,
@@ -48,7 +43,7 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "3": {
+        "2": {
           "title": "Voice Chat",
           "type": 3,
           "enable": 1,
@@ -56,6 +51,25 @@
           "vars": [
             {
               "configINI": "Hotkeys:ToggleVoice",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "Dialectic Control",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for opening mode, LLM model, and dynamic profile settings. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:DialecticControl",
               "default": 0
             }
           ],
@@ -87,44 +101,6 @@
           }
         },
         "5": {
-          "title": "Toggle Modes",
-          "type": 3,
-          "enable": 1,
-          "mouse": "Keyboard key for opening the Dialectic mode selector.",
-          "vars": [
-            {
-              "configINI": "Hotkeys:ToggleModes",
-              "default": 0
-            }
-          ],
-          "keybind": {
-            "type": 0
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "6": {
-          "title": "Toggle LLM Model",
-          "type": 3,
-          "enable": 1,
-          "mouse": "Keyboard key for opening the Standard/Fast/Powerful/Experimental LLM model selector.",
-          "vars": [
-            {
-              "configINI": "Hotkeys:ToggleLLMModel",
-              "default": 0
-            }
-          ],
-          "keybind": {
-            "type": 0
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "7": {
           "title": "Halt AI Actions",
           "type": 3,
           "enable": 1,
@@ -143,31 +119,7 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "8": {
-          "title": "Dynamic Profiles",
-          "enable": 1,
-          "type": 0
-        },
-        "9": {
-          "title": "Dynamic Profile Menu",
-          "type": 3,
-          "enable": 1,
-          "mouse": "Keyboard key for choosing target, nearby, or narrator dynamic profile updates from one menu.",
-          "vars": [
-            {
-              "configINI": "Hotkeys:DynamicProfileMenu",
-              "default": 0
-            }
-          ],
-          "keybind": {
-            "type": 0
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "10": {
+        "6": {
           "title": "Use PipVision",
           "type": 3,
           "enable": 1,

@@ -1158,6 +1158,19 @@ static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
         state.containerMenuOpen || state.loadingMenuOpen;
 }
 
+void RequestDialecticControlMenuOpen() {
+    const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
+        Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
+        return;
+    }
+    Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
+}
+
 void RequestModeMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
@@ -4121,23 +4134,9 @@ void Update(float deltaTime) {
     }
     ProfileUpdateSubsystem("PipVisionManager::Update", []() { PipVisionManager::Update(); });
     
-    const bool dynamicProfileMenuTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::DynamicProfileMenu);
-    const bool toggleModesTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleModes);
-    const bool toggleLLMModelTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleLLMModel);
-
-    if (dynamicProfileMenuTriggered) {
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed");
-        RequestDynamicProfileMenuOpen();
-    }
-
-    if (toggleModesTriggered) {
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed");
-        RequestModeMenuOpen();
-    }
-
-    if (toggleLLMModelTriggered) {
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed");
-        RequestLLMModelMenuOpen();
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::DialecticControl)) {
+        Logger::LogInfo("GameLoop: DialecticControl hotkey pressed");
+        RequestDialecticControlMenuOpen();
     }
 
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::OpenMicMute)) {

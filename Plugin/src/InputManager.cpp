@@ -44,9 +44,7 @@ const char* ActionName(HotkeyAction action) {
         case HotkeyAction::ManualActivateNPC: return "ManualActivateNPC";
         case HotkeyAction::OpenMenu: return "OpenMenu";
         case HotkeyAction::QuickCommand: return "QuickCommand";
-        case HotkeyAction::DynamicProfileMenu: return "DynamicProfileMenu";
-        case HotkeyAction::ToggleModes: return "ToggleModes";
-        case HotkeyAction::ToggleLLMModel: return "ToggleLLMModel";
+        case HotkeyAction::DialecticControl: return "DialecticControl";
         case HotkeyAction::PipVision: return "PipVision";
         case HotkeyAction::Count: break;
     }
@@ -207,24 +205,20 @@ void LoadConfig() {
     SetHotkey(HotkeyAction::ManualActivateNPC, Config::ReadINIInt("Hotkeys", "ManualActivate", 0));
     SetHotkey(HotkeyAction::OpenMenu, Config::ReadINIInt("Hotkeys", "OpenMenu", 0));
     SetHotkey(HotkeyAction::QuickCommand, Config::ReadINIInt("Hotkeys", "QuickCommand", 0));
-    SetHotkey(HotkeyAction::DynamicProfileMenu, Config::ReadINIInt("Hotkeys", "DynamicProfileMenu", 0));
-    SetHotkey(HotkeyAction::ToggleModes, Config::ReadINIInt("Hotkeys", "ToggleModes", 0));
-    SetHotkey(HotkeyAction::ToggleLLMModel, Config::ReadINIInt("Hotkeys", "ToggleLLMModel", 0));
+    SetHotkey(HotkeyAction::DialecticControl, Config::ReadINIInt("Hotkeys", "DialecticControl", 0));
     SetHotkey(HotkeyAction::PipVision, Config::ReadINIInt("Hotkeys", "PipVision", 0));
 
     g_pendingActions.store(0, std::memory_order_release);
     g_releasedActions.store(0, std::memory_order_release);
     g_heldActions.store(0, std::memory_order_release);
 
-    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Modes=%d LLM=%d Dynamic=%d PipVision=%d",
+    Log("InputManager: active scan-code hotkeys Talk=%d Voice=%d OpenMicMute=%d Stop=%d Manual=%d Control=%d PipVision=%d",
         GetHotkey(HotkeyAction::TalkToNPC),
         GetHotkey(HotkeyAction::ToggleVoice),
         GetHotkey(HotkeyAction::OpenMicMute),
         GetHotkey(HotkeyAction::StopTalking),
         GetHotkey(HotkeyAction::ManualActivateNPC),
-        GetHotkey(HotkeyAction::ToggleModes),
-        GetHotkey(HotkeyAction::ToggleLLMModel),
-        GetHotkey(HotkeyAction::DynamicProfileMenu),
+        GetHotkey(HotkeyAction::DialecticControl),
         GetHotkey(HotkeyAction::PipVision));
 }
 
@@ -236,9 +230,7 @@ void SaveConfig() {
     WriteBinding("ManualActivate", HotkeyAction::ManualActivateNPC);
     WriteBinding("OpenMenu", HotkeyAction::OpenMenu);
     WriteBinding("QuickCommand", HotkeyAction::QuickCommand);
-    WriteBinding("DynamicProfileMenu", HotkeyAction::DynamicProfileMenu);
-    WriteBinding("ToggleModes", HotkeyAction::ToggleModes);
-    WriteBinding("ToggleLLMModel", HotkeyAction::ToggleLLMModel);
+    WriteBinding("DialecticControl", HotkeyAction::DialecticControl);
     WriteBinding("PipVision", HotkeyAction::PipVision);
 }
 

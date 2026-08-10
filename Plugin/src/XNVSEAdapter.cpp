@@ -46,6 +46,7 @@ Tile* g_passiveSubtitleTile = nullptr;
 Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
 Script* g_stopLookFunction = nullptr;
+Script* g_dialecticControlMenuFunction = nullptr;
 Script* g_modeMenuFunction = nullptr;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
@@ -1004,6 +1005,7 @@ void Shutdown() {
     g_eventManager = nullptr;
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
+    g_dialecticControlMenuFunction = nullptr;
     g_modeMenuFunction = nullptr;
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
@@ -1995,6 +1997,15 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
     const char* source = nullptr;
     const char* name = "unknown";
     switch (menu) {
+        case NativeToolMenu::DialecticControl:
+            function = &g_dialecticControlMenuFunction;
+            name = "dialectic_control";
+            source = R"(
+begin function {}
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^Dialectic Control^Choose a setting:|Modes|LLM Model|Dynamic Profiles"
+end
+)";
+            break;
         case NativeToolMenu::Mode:
             function = &g_modeMenuFunction;
             name = "mode";
