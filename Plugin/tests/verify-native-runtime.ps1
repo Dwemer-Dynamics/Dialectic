@@ -152,6 +152,12 @@ Require-Path (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'first-run i
 Require-Path (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'initialization prompt callback'
 Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticInitialize' 'coordinated initialization action'
 Require-Text (Join-Path $sourceRoot 'main.cpp') 'kCommandInfo_DialecticInitialize' 'coordinated initialization command registration'
+$mainSource = Get-Content -LiteralPath (Join-Path $sourceRoot 'main.cpp') -Raw
+$initializeOpcodeIndex = $mainSource.IndexOf('&kCommandInfo_DialecticInitialize')
+$previousLastOpcodeIndex = $mainSource.IndexOf('&kCommandInfo_DialecticHandleHotkeyUp')
+if ($initializeOpcodeIndex -lt 0 -or $initializeOpcodeIndex -lt $previousLastOpcodeIndex) {
+    $failures.Add('DialecticInitialize must remain appended after the legacy command ABI')
+}
 Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voices synced\.' 'voice completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'

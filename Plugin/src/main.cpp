@@ -1486,7 +1486,6 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticSetConfigFloatById,
         &kCommandInfo_DialecticSyncWorldData,
         &kCommandInfo_DialecticSendAllVoiceSamples,
-        &kCommandInfo_DialecticInitialize,
         &kCommandInfo_DialecticCaptureDialoguePrompt,
         &kCommandInfo_DialecticCaptureDialogue,
         &kCommandInfo_DialecticSendSetConf,
@@ -1505,7 +1504,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticGetCurrentRecordingDevice,
         &kCommandInfo_DialecticSetRecordingDevice,
         &kCommandInfo_DialecticUpdateFalloutStat,
-        &kCommandInfo_DialecticHandleHotkeyUp
+        &kCommandInfo_DialecticHandleHotkeyUp,
+        &kCommandInfo_DialecticInitialize
     };
 
     for (CommandInfo* command : commands) {
