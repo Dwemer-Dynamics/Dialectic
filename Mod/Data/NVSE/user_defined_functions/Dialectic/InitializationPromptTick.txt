@@ -12,5 +12,5 @@ Begin Function {}
     endif
 
     SetINIIntC "Setup:InitializationPromptVersion" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    MessageBoxExAlt (CompileScript "Dialectic/InitializationPromptSelect.gek") "^Initialize Dialectic^Send Fallout locations, factions, and voice samples to the Dialectic server? This runs in the background and may take several minutes.|Initialize Now|Not Now"
+    MessageBoxExAlt (CompileScript "Dialectic/InitializationPromptSelect.gek") "^Initialize Dialectic^Send locations, factions, and voices to the server?|Initialize Now|Not Now"
 End
