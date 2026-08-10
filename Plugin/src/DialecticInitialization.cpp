@@ -27,7 +27,7 @@ void QueueFinalNoticeIfReady() {
 
     const bool success = g_voiceSucceeded && g_worldSucceeded;
     g_notices.push_back({
-        success ? "Initialization complete." : "Initialization finished with errors.",
+        success ? "Dialectic initialized." : "Initialization failed.",
         success ? IngameNotifier::Level::Success : IngameNotifier::Level::Error
     });
     g_active = false;
@@ -52,7 +52,7 @@ void QueueNotice(std::string message, IngameNotifier::Level level) {
 void ReportVoiceFinished(bool success) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_notices.push_back({
-        success ? "Voice samples synced." : "Voice sample sync failed.",
+        success ? "Voices synced." : "Voice sync failed.",
         success ? IngameNotifier::Level::Success : IngameNotifier::Level::Error
     });
     g_voiceFinished = true;

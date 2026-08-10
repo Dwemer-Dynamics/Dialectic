@@ -152,10 +152,11 @@ Require-Path (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'first-run i
 Require-Path (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'initialization prompt callback'
 Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticInitialize' 'coordinated initialization action'
 Require-Text (Join-Path $sourceRoot 'main.cpp') 'kCommandInfo_DialecticInitialize' 'coordinated initialization command registration'
-Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voice samples synced\.' 'voice completion notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voices synced\.' 'voice completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'
-Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Initialization complete\.' 'final initialization notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Dialectic initialized\.' 'final initialization notice'
+Require-Text (Join-Path $sourceRoot 'IngameNotifier.cpp') 'level == Level::Success \? 0U' 'happy Pip-Boy icon for successful initialization notices'
 Reject-Text @(
     (Join-Path $scriptRoot 'RunDialecticInitialization.gek'),
     (Join-Path $scriptRoot 'SendVoiceSamples.gek'),
