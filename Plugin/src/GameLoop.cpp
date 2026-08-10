@@ -4154,7 +4154,7 @@ void Update(float deltaTime) {
     // Voice input handling (hold-to-talk)
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
-            Console::Print("[Dialectic] Already recording...");
+            Console::Print("[Dialectic] Recording...");
         } else {
             ClearConversationIfPartnerLeftScene("voice input");
             if (!g_conversationActive) {
@@ -4165,7 +4165,7 @@ void Update(float deltaTime) {
                     const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
                     if (startResult != ConversationStartResult::Started) {
                         if (startResult == ConversationStartResult::NoTarget) {
-                            Console::Print("[Dialectic] Target an NPC first");
+                            Console::Print("[Dialectic] Target an NPC");
                         }
                         return;
                     }
@@ -4515,7 +4515,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     if (!g_conversationActive) {
         Log("GameLoop: Voice input requested without active conversation");
         if (!openMicTriggered) {
-            Console::Print("[Dialectic] Target an NPC first");
+            Console::Print("[Dialectic] Target an NPC");
         }
         return;
     }
@@ -4528,7 +4528,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     int voiceKey = openMicTriggered ? -1 : InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice);
     if (!openMicTriggered && voiceKey <= 0) {
         Log("GameLoop: Voice input requested with no bound hotkey");
-        Console::Print("[Dialectic] Mic is not bound");
+        Console::Print("[Dialectic] Voice key not bound");
         return;
     }
 
@@ -4575,7 +4575,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
         } else {
             Log("GameLoop: STT returned empty result");
             if (!openMicTriggered) {
-                Console::Print("[Dialectic] Could not transcribe audio");
+                Console::Print("[Dialectic] No speech detected");
             }
         }
     }, openMicSilenceMs);
