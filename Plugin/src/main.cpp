@@ -60,7 +60,7 @@
 #include "Console.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.1"
+#define DIALECTIC_VERSION "0.7.2"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
