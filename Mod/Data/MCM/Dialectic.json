@@ -810,7 +810,7 @@
           "title": "Enable Open Mic",
           "type": 5,
           "enable": 1,
-          "mouse": "Starts voice activity detection during active conversations.",
+          "mouse": "Listens for speech during normal gameplay and starts voice input for the current NPC target.",
           "vars": [
             {
               "configINI": "OpenMic:Enabled",

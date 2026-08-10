@@ -3766,16 +3766,20 @@ static void HandleOpenMicVoiceDetected() {
     if (!Config::openMicEnabled || Config::openMicMuted) {
         return;
     }
-    if ((!g_conversationActive && !Config::narratorModeEnabled) || g_voiceInputActive || VoiceRecorder::IsRecording()) {
-        Logger::LogInfo("GameLoop: Ignoring open mic trigger activeConversation=%d voiceActive=%d recording=%d",
-            g_conversationActive ? 1 : 0,
+    if (g_voiceInputActive || VoiceRecorder::IsRecording()) {
+        Logger::LogInfo("GameLoop: Ignoring open mic trigger voiceActive=%d recording=%d",
             g_voiceInputActive.load() ? 1 : 0,
             VoiceRecorder::IsRecording() ? 1 : 0);
         return;
     }
 
-    if (!g_conversationActive && Config::narratorModeEnabled) {
-        StartNarratorConversation("open mic narrator mode");
+    if (!g_conversationActive) {
+        if (Config::narratorModeEnabled) {
+            StartNarratorConversation("open mic narrator mode");
+        } else if (TryStartConversationFromCurrentTarget() != ConversationStartResult::Started) {
+            Logger::LogInfo("GameLoop: Open mic detected speech without an available NPC target");
+            return;
+        }
     }
 
     StartVoiceInputInternal(true);
@@ -3790,7 +3794,12 @@ static void UpdateOpenMicMonitoringState() {
     const bool shouldMonitor =
         Config::openMicEnabled &&
         !Config::openMicMuted &&
-        (g_conversationActive || Config::narratorModeEnabled) &&
+        g_gameState.isInGame &&
+        !g_gameState.isLoading &&
+        !g_gameState.isPaused &&
+        !g_gameState.isInMenu &&
+        !g_gameState.isInDialogue &&
+        InputManager::IsGameForeground() &&
         !g_voiceInputActive &&
         !VoiceRecorder::IsRecording();
 
@@ -4526,9 +4535,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     Log("GameLoop: Starting %s voice input on device: %s",
         openMicTriggered ? "open-mic" : "push-to-talk",
         VoiceRecorder::GetCurrentRecordingDeviceName().c_str());
-    Console::Print(openMicTriggered
-        ? "[Dialectic] Open mic recording..."
-        : "[Dialectic] Recording... (release voice key to send)");
+    Console::Print("[Dialectic] Recording...");
 
     ResetBoredEventTimer(openMicTriggered ? "open mic recording start" : "voice recording start");
     // Treat mic input as player interruption: new player intent cancels
