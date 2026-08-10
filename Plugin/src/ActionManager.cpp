@@ -1119,7 +1119,7 @@ bool TryExecuteNativeInventoryAction(const ActionRequest& request, int actionCod
     }
 
     SendFuncretResult(request, request.action + " completed successfully.");
-    Console::Print("[Dialectic] Action: %s", request.action.c_str());
+    Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
     Logger::LogInfo("[NATIVE_ACTION] completed inventory action=%s speaker=0x%08X target=0x%08X item=0x%08X amount=%d without bridge transport",
         request.action.c_str(), request.speakerFormId, targetFormId, itemBaseFormId, request.amount);
     return true;
@@ -1141,7 +1141,7 @@ bool CompleteNativePickup(const ActionRequest& request) {
         return true;
     }
     SendFuncretResult(request, "PickupItem completed successfully.");
-    Console::Print("[Dialectic] Action: PickupItem");
+    Console::Print("[DIALECTIC] Action: PickupItem");
     Logger::LogInfo("[NATIVE_ACTION] pickup completed speaker=0x%08X item_ref=0x%08X item_base=0x%08X count=%d->%d without bridge transport",
         request.speakerFormId, request.itemRefId, request.itemBaseId, before, after);
     return true;
@@ -2359,7 +2359,7 @@ bool SendDirectorTalkInstruction(const ActionRequest& request, const char* sourc
             source ? source : "ActionManager",
             speaker.c_str(),
             instruction.c_str());
-        Console::Print("[Dialectic] Director talk instruction failed");
+        Console::Print("[DIALECTIC] Director talk instruction failed");
         return false;
     }
 
@@ -2392,7 +2392,7 @@ bool SendDirectorTalkInstruction(const ActionRequest& request, const char* sourc
         speaker.c_str(),
         request.target.c_str(),
         instruction.c_str());
-    Console::Print("[Dialectic] Director: %s", speaker.c_str());
+    Console::Print("[DIALECTIC] Director: %s", speaker.c_str());
     HTTPManager::SendEvent("inputtext", payload.str());
     return true;
 }
@@ -2832,7 +2832,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             request.speaker.c_str(),
             request.item.c_str());
         SendFuncretResult(request, request.action + " failed because " + itemResolutionError + ".");
-        Console::Print("[Dialectic] Action failed: %s", itemResolutionError.c_str());
+        Console::Print("[DIALECTIC] Action failed: %s", itemResolutionError.c_str());
         return false;
     }
 
@@ -2841,7 +2841,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             source ? source : "ActionManager",
             request.item.c_str());
         SendFuncretResult(request, "PickupItem failed because item_ref_unresolved.");
-        Console::Print("[Dialectic] Action failed: item ref unresolved");
+        Console::Print("[DIALECTIC] Action failed: item ref unresolved");
         return false;
     }
 
@@ -2851,7 +2851,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             request.item.c_str(),
             request.itemRefId);
         SendFuncretResult(request, "PickupItem failed because item_base_unresolved.");
-        Console::Print("[Dialectic] Action failed: item base unresolved");
+        Console::Print("[DIALECTIC] Action failed: item base unresolved");
         return false;
     }
 
@@ -2885,7 +2885,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                     TradeManager::BeginPendingSession(tradeRequest);
                     if (XNVSEAdapter::OpenNativeTradeMenu(menuInfo)) {
                         SendFuncretResult(request, request.action + " completed successfully.");
-                        Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                        Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                         Logger::LogInfo("[NATIVE_ACTION] opened %s menu speaker=0x%08X inventory_owner=0x%08X request=%llu without bridge transport",
                             tradeRequest.tradeMode.c_str(), request.speakerFormId,
                             tradeRequest.inventoryOwnerFormId,
@@ -2897,7 +2897,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             }
             if (actionCode == 1 && BeginNativeAttack(request)) {
                 SendFuncretResult(request, "Attack started successfully.");
-                Console::Print("[Dialectic] Action: Attack");
+                Console::Print("[DIALECTIC] Action: Attack");
                 Logger::LogInfo("[NATIVE_ACTION] started attack speaker=0x%08X target=0x%08X without bridge transport",
                     request.speakerFormId, request.targetFormId);
                 return;
@@ -2920,7 +2920,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             if (actionCode == 26 && XNVSEAdapter::ExecuteNativeStopFollowing(request.speakerFormId)) {
                 ClearNativePackageState(request.speakerFormId);
                 SendFuncretResult(request, "StopFollowing completed successfully.");
-                Console::Print("[Dialectic] Action: StopFollowing");
+                Console::Print("[DIALECTIC] Action: StopFollowing");
                 Logger::LogInfo("[NATIVE_ACTION] stopped following speaker=0x%08X without bridge transport",
                     request.speakerFormId);
                 return;
@@ -2936,7 +2936,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                     GameLoop::ApplyEndConversationCooldown(request.speakerFormId, request.speaker);
                 }
                 SendFuncretResult(request, request.action + " completed successfully.");
-                Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                 Logger::LogInfo("[NATIVE_ACTION] completed action=%s speaker=0x%08X without bridge transport",
                     request.action.c_str(), request.speakerFormId);
                 return;
@@ -2953,7 +2953,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                     handledByCompanionAdapter) {
                     TrackNativePackageAction(request);
                     SendFuncretResult(request, request.action + " started successfully.");
-                    Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                    Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                     Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
                         request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
                     return;
@@ -2963,7 +2963,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                     request.speakerFormId, request.targetFormId, actionCode)) {
                 TrackNativePackageAction(request);
                 SendFuncretResult(request, request.action + " started successfully.");
-                Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                 Logger::LogInfo("[NATIVE_ACTION] started package action=%s speaker=0x%08X target=0x%08X without bridge transport",
                     request.action.c_str(), request.speakerFormId, request.targetFormId);
                 return;
@@ -2971,7 +2971,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
 
             if (ShouldGeneratePluginResult(request.action)) {
                 LaunchPluginResultWorker(request);
-                Console::Print("[Dialectic] Action: %s", request.action.c_str());
+                Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                 Logger::LogInfo("[NATIVE_ACTION] launched plugin result action=%s speaker=0x%08X without bridge transport",
                     request.action.c_str(), request.speakerFormId);
                 return;
@@ -2980,7 +2980,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             Logger::LogWarning("[NATIVE_ACTION] action=%s speaker=0x%08X could not be executed by the native runtime",
                 request.action.c_str(), request.speakerFormId);
             SendFuncretResult(request, request.action + " failed because native_runtime_unavailable.");
-            Console::Print("[Dialectic] Action failed: %s", request.action.c_str());
+            Console::Print("[DIALECTIC] Action failed: %s", request.action.c_str());
         },
         [request](const char* reason) {
             Logger::LogWarning("ActionManager: Dropped action=%s speaker=0x%08X reason=%s",
@@ -3104,7 +3104,7 @@ bool HandleRoleCommandJson(const std::string& lineObject,
         if (notification.empty()) {
             notification = "Command notification received.";
         }
-        Console::Print("[Dialectic] %s", notification.c_str());
+        Console::Print("[DIALECTIC] %s", notification.c_str());
         return true;
     }
 

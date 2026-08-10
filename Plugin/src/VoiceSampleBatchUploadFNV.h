@@ -23,5 +23,6 @@ namespace VoiceSampleBatchUploadFNV {
     };
 
     BatchUploadResult SendAllVoiceSamples(BatchUploadSummary& summary,
-        const std::function<bool()>& cancelRequested = {});
+        const std::function<bool()>& cancelRequested = {},
+        const std::function<void(int, int)>& progress = {});
 }

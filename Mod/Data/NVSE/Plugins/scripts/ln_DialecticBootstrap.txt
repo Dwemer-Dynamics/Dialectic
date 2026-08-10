@@ -3,17 +3,17 @@
 ; self-rescheduling bridge is started exactly once from this file.
 
 if GetNVSEVersionFull < 6.33
-    PrintC "[Dialectic] xNVSE 6.3.3+ is required for runtime bridges."
+    PrintC "[DIALECTIC] xNVSE 6.3.3+ is required for runtime bridges."
     return
 endif
 
 if GetPluginVersion "JIP LN NVSE" < 57
-    PrintC "[Dialectic] JIP LN NVSE 57+ is required for runtime bridges."
+    PrintC "[DIALECTIC] JIP LN NVSE 57+ is required for runtime bridges."
     return
 endif
 
 if GetPluginVersion "JohnnyGuitarNVSE" < 517
-    PrintC "[Dialectic] JohnnyGuitar NVSE 5.17+ is required for dialogue capture."
+    PrintC "[DIALECTIC] JohnnyGuitar NVSE 5.17+ is required for dialogue capture."
     return
 endif
 
@@ -67,4 +67,4 @@ CallAfterSeconds 3.00 (CompileScript "Dialectic/CollectFalloutStats.gek") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
 
-PrintC "[Dialectic] Registered runtime bridges."
+PrintC "[DIALECTIC] Registered runtime bridges."

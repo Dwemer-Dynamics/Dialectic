@@ -267,7 +267,7 @@ namespace Config {
         }
 
         customFile
-            << "; Dialectic user overrides\n"
+            << "; DIALECTIC user overrides\n"
             << "; This file is created and maintained locally. Mod updates replace\n"
             << "; dialectic.ini defaults but must not replace this custom file.\n\n";
         Logger::LogInfo("Created user configuration: %s", GetCustomINIPath());
@@ -956,7 +956,7 @@ namespace Config {
             return;
         }
 
-        iniFile << "; Dialectic user configuration\n";
+    iniFile << "; DIALECTIC user configuration\n";
         iniFile << "; This file overrides dialectic.ini and is preserved across mod updates.\n\n";
         
         if (hasCustomServerOverride || hasCustomSoundcachePath) {

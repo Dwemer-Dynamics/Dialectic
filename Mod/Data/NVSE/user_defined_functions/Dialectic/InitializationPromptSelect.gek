@@ -7,6 +7,5 @@ Begin Function {iButton}
         return
     endif
 
-    MessageExAlt 4 "#4|Dialectic initialization has started. Please wait."
     DialecticInitialize
 End

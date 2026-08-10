@@ -18,5 +18,5 @@ Begin Function {}
         return
     endif
 
-    MessageBoxExAlt (CompileScript "Dialectic/InitializationPromptSelect.gek") "^Initialize Dialectic^This will initialize Dialectic for the best experience. Please wait 1 minute after clicking OK for it to initialize.|OK|Close"
+    MessageBoxExAlt (CompileScript "Dialectic/InitializationPromptSelect.gek") "^Initialize DIALECTIC^This will initialize DIALECTIC for the best experience. Please wait 1 minute after clicking OK for it to initialize.|OK|Close"
 End

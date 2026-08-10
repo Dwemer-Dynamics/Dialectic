@@ -316,14 +316,14 @@ static bool ActivateCandidate(const ActivationCandidate& candidate, ActivationSo
                 candidate.name.c_str(), candidate.formId);
             AgentManager::SendActorProfile(candidate.name, candidate.formId);
             g_lastProfileRefreshTime[candidate.formId] = std::chrono::steady_clock::now();
-            Console::Print("[Dialectic] Manually activated AI agent: %s", candidate.name.c_str());
+            Console::Print("[DIALECTIC] Manually activated AI agent: %s", candidate.name.c_str());
             return true;
         }
 
         Logger::LogDebug("ActivationManager: %s activation ignored; %s (0x%08X) is already an AI agent",
             SourceName(source), candidate.name.c_str(), candidate.formId);
         if (source == ActivationSource::Manual) {
-            Console::Print("[Dialectic] %s is already an AI agent", candidate.name.c_str());
+            Console::Print("[DIALECTIC] %s is already an AI agent", candidate.name.c_str());
         }
         return false;
     }
@@ -339,7 +339,7 @@ static bool ActivateCandidate(const ActivationCandidate& candidate, ActivationSo
     g_lastProfileRefreshTime[candidate.formId] = std::chrono::steady_clock::now();
 
     if (source == ActivationSource::Manual) {
-        Console::Print("[Dialectic] Manually activated AI agent: %s", candidate.name.c_str());
+        Console::Print("[DIALECTIC] Manually activated AI agent: %s", candidate.name.c_str());
     }
 
     return true;
@@ -416,7 +416,7 @@ bool ActivateCurrentTarget(ActivationSource source) {
     if (ShouldSkipCandidate(candidate, source, reason)) {
         Logger::LogInfo("ActivationManager: Skipping %s activation: %s", SourceName(source), reason.c_str());
         if (source == ActivationSource::Manual) {
-            Console::Print("[Dialectic] Cannot activate target: %s", reason.c_str());
+            Console::Print("[DIALECTIC] Cannot activate target: %s", reason.c_str());
         }
         return false;
     }

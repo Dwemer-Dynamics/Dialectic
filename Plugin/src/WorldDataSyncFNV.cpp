@@ -765,6 +765,7 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
         DialecticInitialization::QueueNotice("No factions found.", IngameNotifier::Level::Warning);
     } else {
         const size_t factionBatchCount = (factions.size() + kFactionBatchSize - 1) / kFactionBatchSize;
+        DialecticInitialization::ReportWorldProgress("uploading factions", 0, factionBatchCount);
         for (size_t start = 0, batchIndex = 1; start < factions.size(); start += kFactionBatchSize, ++batchIndex) {
             if (token.IsCancellationRequested()) return false;
             const std::string response = HTTPManager::SendJson(
@@ -777,6 +778,7 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
                 return false;
             }
             Logger::LogInfo("[WORLD_DATA] Uploaded faction batch %zu/%zu", batchIndex, factionBatchCount);
+            DialecticInitialization::ReportWorldProgress("uploading factions", batchIndex, factionBatchCount);
         }
         DialecticInitialization::QueueNotice("Factions synced.", IngameNotifier::Level::Success);
     }
@@ -788,6 +790,7 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
     }
 
     const size_t locationBatchCount = (locations.size() + kLocationBatchSize - 1) / kLocationBatchSize;
+    DialecticInitialization::ReportWorldProgress("uploading locations", 0, locationBatchCount);
     for (size_t start = 0, batchIndex = 1; start < locations.size(); start += kLocationBatchSize, ++batchIndex) {
         if (token.IsCancellationRequested()) return false;
         const bool replace = start == 0;
@@ -801,6 +804,7 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
             return false;
         }
         Logger::LogInfo("[WORLD_DATA] Uploaded location batch %zu/%zu", batchIndex, locationBatchCount);
+        DialecticInitialization::ReportWorldProgress("uploading locations", batchIndex, locationBatchCount);
     }
     DialecticInitialization::QueueNotice("Locations synced.", IngameNotifier::Level::Success);
 
@@ -813,6 +817,7 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
     }
 
     Logger::LogInfo("[WORLD_DATA] Collecting Fallout factions and map marker locations");
+    DialecticInitialization::ReportWorldProgress("finding factions and locations");
     auto factions = CollectFactions();
     auto nativeLocations = CollectNativeLocations(std::move(nativeMarkers));
     auto plugins = CollectLoadedPluginRows();
@@ -832,6 +837,7 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
                     return;
                 }
                 std::set<uint32_t> seenFormIds;
+                DialecticInitialization::ReportWorldProgress("finding locations");
                 auto locations = CollectLocationsFromPlugins(plugins, seenFormIds, token);
                 if (token.IsCancellationRequested()) {
                     if (g_syncRunId.load() == runId) {

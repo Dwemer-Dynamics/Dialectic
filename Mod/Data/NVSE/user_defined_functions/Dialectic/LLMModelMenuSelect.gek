@@ -15,5 +15,5 @@ Begin Function {iButton}
         DialecticSendSetConf "dialectic_profile_model@4"
     endif
 
-    PrintC "[Dialectic] LLM model selection sent."
+    PrintC "[DIALECTIC] LLM model selection sent."
 End

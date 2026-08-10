@@ -141,8 +141,8 @@ Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'EnforceCombatDialogueGate\(
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(speakerFormId\)' 'rechat speaker combat gate'
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(targetFormId\)' 'rechat target combat gate'
 
-# Dialectic initialization must share one action between the MCM and one-time prompt.
-Require-Text $mcmFile '"title": "Initialize Dialectic"' 'combined Dialectic initialization button'
+# DIALECTIC initialization must share one action between the MCM and one-time prompt.
+Require-Text $mcmFile '"title": "Initialize DIALECTIC"' 'combined DIALECTIC initialization button'
 Require-Text $mcmFile '"configINI": "Tools:InitializeDialectic"' 'combined initialization MCM binding'
 Require-Text $mcmFile '"value": "Dialectic/InitializeDialectic\.gek"' 'combined initialization MCM callback'
 Reject-Text @($mcmFile) '"title": "Send Faction and Location Info"|"title": "Send All Voice Samples"' 'separate initialization buttons'
@@ -161,16 +161,10 @@ if ($initializeOpcodeIndex -lt 0 -or $initializeOpcodeIndex -lt $previousLastOpc
 Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voices synced\.' 'voice completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'
-Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Dialectic initialized\.' 'final initialization notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'DIALECTIC initialized\.' 'final initialization notice'
 Require-Text (Join-Path $sourceRoot 'IngameNotifier.cpp') 'level == Level::Success \? 0U' 'happy Pip-Boy icon for successful initialization notices'
-Reject-Text @(
-    (Join-Path $scriptRoot 'RunDialecticInitialization.gek'),
-    (Join-Path $scriptRoot 'SendVoiceSamples.gek'),
-    (Join-Path $scriptRoot 'VoiceSampleUploadTick.txt'),
-    (Join-Path $scriptRoot 'WorldDataSyncTick.txt'),
-    (Join-Path $sourceRoot 'VoiceSampleBatchUploadFNV.cpp'),
-    (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp')
-) 'Initialization started|Uploading Fallout voice samples|Sending Fallout faction|Uploading .*factions|Uploading .*locations|Scanning loaded Fallout' 'initialization progress popup'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'std::chrono::seconds\(5\)' 'five-second initialization progress interval'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'BuildProgressMessage\(\)' 'initialization progress notice builder'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'dialectic_initialization_prompt_v1\.done' 'file-backed initialization prompt marker check'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'PlayerRef\.GetParentCell' 'loaded player cell prompt gate'
@@ -180,7 +174,7 @@ Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'Initializ
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'if MenuMode' 'menu mode initialization prompt gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'iButton != 0' 'initialization prompt Close action gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'WriteStringToFile "Data\\\\NVSE\\\\Plugins\\\\dialectic_initialization_prompt_v1\.done"' 'file-backed prompt marker after user selection'
-Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'MessageExAlt 4 "#4\|Dialectic initialization has started\. Please wait\."' 'happy initialization started notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'DIALECTIC initialization has started\. Please wait\.' 'happy initialization started notice'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') '^\s*DialecticInitialize\s*$' 'direct prompt initialization command'
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptSelect.gek')) 'RunDialecticInitialization\.gek' 'nested prompt initialization callback'
 Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'

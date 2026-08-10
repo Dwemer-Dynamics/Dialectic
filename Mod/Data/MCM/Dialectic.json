@@ -1,7 +1,7 @@
 {
   "modName": "Dialectic",
-  "displayName": "Dialectic",
-  "description": "Configure Dialectic AI dialogue, activation, sound, hotkeys, and behavior settings.",
+  "displayName": "DIALECTIC",
+  "description": "Configure DIALECTIC AI dialogue, activation, sound, hotkeys, and behavior settings.",
   "saveFile": "../NVSE/Plugins/dialectic_custom.ini",
   "minMCMVersion": 1,
   "minModVersion": 1,
@@ -63,7 +63,7 @@
           }
         },
         "3": {
-          "title": "Dialectic Control",
+          "title": "DIALECTIC Control",
           "type": 3,
           "enable": 1,
           "mouse": "Keyboard key for opening chat mode, LLM model, and dynamic profile settings. Unbound by default.",
@@ -156,7 +156,7 @@
           "title": "Enable Auto Activate",
           "type": 5,
           "enable": 1,
-          "mouse": "Automatically activates nearby eligible NPCs as Dialectic AI agents.",
+          "mouse": "Automatically activates nearby eligible NPCs as DIALECTIC AI agents.",
           "vars": [
             {
               "configINI": "AutoActivate:Enabled",
@@ -547,7 +547,7 @@
           "type": 2,
           "enable": 1,
           "suffix": "s",
-          "mouse": "Seconds of quiet time before Dialectic may ask a nearby managed NPC for an idle comment.",
+          "mouse": "Seconds of quiet time before DIALECTIC may ask a nearby managed NPC for an idle comment.",
           "vars": [
             {
               "configINI": "BoredEvents:TimerSeconds",
@@ -965,10 +965,10 @@
       "enable": 1,
       "options": {
         "1": {
-          "title": "Initialize Dialectic",
+          "title": "Initialize DIALECTIC",
           "type": 5,
           "enable": 1,
-          "mouse": "Sends Fallout voice samples, factions, and locations to the Dialectic server in the background.",
+          "mouse": "Sends Fallout voice samples, factions, and locations to the DIALECTIC server in the background.",
           "vars": [
             {
               "configINI": "Tools:InitializeDialectic",
