@@ -1176,6 +1176,7 @@ namespace Config {
         iniFile << "EndConversationCooldown=" << rechatEndConversationCooldown << "\n\n";
 
         iniFile << "[Tools]\n";
+        iniFile << "InitializeDialectic=0\n";
         iniFile << "SendWorldData=0\n";
         iniFile << "SendVoiceSamples=0\n";
         iniFile << "UpdateTargetProfile=0\n";

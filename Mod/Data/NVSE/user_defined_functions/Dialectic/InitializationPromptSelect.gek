@@ -1,0 +1,9 @@
+int iButton
+
+Begin Function {iButton}
+    if eval iButton != 0
+        return
+    endif
+
+    call (CompileScript "Dialectic/RunDialecticInitialization.gek")
+End

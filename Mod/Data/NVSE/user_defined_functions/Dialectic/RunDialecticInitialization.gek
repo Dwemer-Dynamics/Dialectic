@@ -1,0 +1,5 @@
+Begin Function {}
+    PrintC "[Dialectic] Initialization started."
+    DialecticSyncWorldData
+    DialecticSendAllVoiceSamples
+End

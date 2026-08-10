@@ -30,6 +30,8 @@ $cmakeFile = Join-Path $PluginRoot 'CMakeLists.txt'
 $repoRoot = Split-Path -Parent $PluginRoot
 $mcmFile = Join-Path $repoRoot 'Mod\Data\MCM\Dialectic.json'
 $iniFile = Join-Path $repoRoot 'Mod\Data\NVSE\Plugins\dialectic.ini'
+$scriptRoot = Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic'
+$bootstrapFile = Join-Path $repoRoot 'Mod\Data\NVSE\Plugins\scripts\ln_DialecticBootstrap.txt'
 
 Require-Path (Join-Path $PluginRoot 'vendor\xnvse-sdk\nvse\PluginAPI.h') 'pinned xNVSE SDK'
 Require-Path (Join-Path $sourceRoot 'FNVRuntime.cpp') 'native runtime'
@@ -136,6 +138,21 @@ Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'EnforceCombatDialogueGate\(
 Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'EnforceCombatDialogueGate\(g_conversationPartnerFormId, "voice_input", !openMicTriggered\)' 'voice-input combat gate'
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(speakerFormId\)' 'rechat speaker combat gate'
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(targetFormId\)' 'rechat target combat gate'
+
+# Dialectic initialization must share one action between the MCM and one-time prompt.
+Require-Text $mcmFile '"title": "Initialize Dialectic"' 'combined Dialectic initialization button'
+Require-Text $mcmFile '"configINI": "Tools:InitializeDialectic"' 'combined initialization MCM binding'
+Require-Text $mcmFile '"value": "Dialectic/InitializeDialectic\.gek"' 'combined initialization MCM callback'
+Reject-Text @($mcmFile) '"title": "Send Faction and Location Info"|"title": "Send All Voice Samples"' 'separate initialization buttons'
+Require-Path (Join-Path $scriptRoot 'InitializeDialectic.gek') 'combined initialization MCM callback'
+Require-Path (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'shared Dialectic initializer'
+Require-Path (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'first-run initialization prompt'
+Require-Path (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'initialization prompt callback'
+Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticSyncWorldData' 'world-data initialization action'
+Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticSendAllVoiceSamples' 'voice-sample initialization action'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxExAlt' 'initialization prompt message box'
+Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'
 
 # The retired AI Agents MCM must stay removed while the core agent runtime remains intact.
 Reject-Text @($mcmFile) '"listTitle": "AI Agents"|AgentManagementAction\.gek' 'retired AI Agents MCM wiring'
