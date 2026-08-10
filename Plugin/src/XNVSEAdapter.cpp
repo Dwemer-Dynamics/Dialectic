@@ -2002,7 +2002,7 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
             name = "dialectic_control";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^Dialectic Control^Choose a setting:|Modes|LLM Model|Dynamic Profiles"
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^Dialectic Control^Choose a setting:|Chat Modes|LLM Model|Dynamic Profiles|Close Menu"
 end
 )";
             break;
@@ -2011,7 +2011,7 @@ end
             name = "mode";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Modes^Select active mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode"
+    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Chat Modes^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
 end
 )";
             break;
@@ -2020,7 +2020,7 @@ end
             name = "llm_model";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/LLMModelMenuSelect.gek") "^Dialectic LLM Model^Select active LLM connector slot:|Standard LLM|Fast LLM|Powerful LLM|Experimental LLM"
+    MessageBoxExAlt (CompileScript "Dialectic/LLMModelMenuSelect.gek") "^Dialectic LLM Model^Select active LLM connector slot:|Standard LLM|Fast LLM|Powerful LLM|Experimental LLM|Close Menu"
 end
 )";
             break;
@@ -2029,7 +2029,7 @@ end
             name = "dynamic_profile";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DynamicProfileMenuSelect.gek") "^Dialectic Dynamic Profiles^Select profile update target:|Target NPC|Nearby AI NPCs|Narrator"
+    MessageBoxExAlt (CompileScript "Dialectic/DynamicProfileMenuSelect.gek") "^Dialectic Dynamic Profiles^Select profile update target:|Target NPC|Nearby AI NPCs|Narrator|Close Menu"
 end
 )";
             break;

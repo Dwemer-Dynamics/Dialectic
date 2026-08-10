@@ -1,6 +1,10 @@
 int iButton
 
 Begin Function {iButton}
+    if eval iButton < 0 || iButton > 2
+        return
+    endif
+
     if eval iButton == 0
         DialecticOpenModeMenu
     elseif eval iButton == 1
