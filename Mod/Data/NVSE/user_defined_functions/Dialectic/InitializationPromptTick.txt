@@ -8,6 +8,10 @@ Begin Function {}
         return
     endif
 
+    if eval (FileExists "Data\\NVSE\\Plugins\\dialectic_initialization_prompt_v1.done") || (FileExists "NVSE\\Plugins\\dialectic_initialization_prompt_v1.done")
+        return
+    endif
+
     let rPlayerCell := PlayerRef.GetParentCell
     if eval !(rPlayerCell) || !(IsFormValid rPlayerCell)
         CallAfterSeconds 2.0 (CompileScript "Dialectic/InitializationPromptTick.txt") 0

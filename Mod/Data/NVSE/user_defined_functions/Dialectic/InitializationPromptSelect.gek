@@ -1,12 +1,12 @@
 int iButton
 
 Begin Function {iButton}
-    SetINIIntC "Setup:InitializationPromptVersion" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_initialization_prompt_v1.done" 0 "prompted=1%r"
 
     if eval iButton != 0
         return
     endif
 
     MessageExAlt 4 "#4|Dialectic initialization has started. Please wait."
-    call (CompileScript "Dialectic/RunDialecticInitialization.gek")
+    DialecticInitialize
 End

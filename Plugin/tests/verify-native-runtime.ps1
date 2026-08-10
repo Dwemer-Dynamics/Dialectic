@@ -172,14 +172,17 @@ Reject-Text @(
     (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp')
 ) 'Initialization started|Uploading Fallout voice samples|Sending Fallout faction|Uploading .*factions|Uploading .*locations|Scanning loaded Fallout' 'initialization progress popup'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'dialectic_initialization_prompt_v1\.done' 'file-backed initialization prompt marker check'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'PlayerRef\.GetParentCell' 'loaded player cell prompt gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxExAlt' 'initialization prompt message box'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') '\|OK\|Close"' 'initialization prompt OK and Close buttons'
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'Initialize Now|Not Now' 'retired initialization prompt choices'
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'if MenuMode' 'menu mode initialization prompt gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'iButton != 0' 'initialization prompt Close action gate'
-Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'SetINIIntC "Setup:InitializationPromptVersion" 1' 'prompt marker after user selection'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'WriteStringToFile "Data\\\\NVSE\\\\Plugins\\\\dialectic_initialization_prompt_v1\.done"' 'file-backed prompt marker after user selection'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'MessageExAlt 4 "#4\|Dialectic initialization has started\. Please wait\."' 'happy initialization started notice'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') '^\s*DialecticInitialize\s*$' 'direct prompt initialization command'
+Reject-Text @((Join-Path $scriptRoot 'InitializationPromptSelect.gek')) 'RunDialecticInitialization\.gek' 'nested prompt initialization callback'
 Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'
 
 # The retired AI Agents MCM must stay removed while the core agent runtime remains intact.
