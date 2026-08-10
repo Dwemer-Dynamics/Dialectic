@@ -40,6 +40,7 @@ Require-Path (Join-Path $sourceRoot 'RuntimeSnapshot.cpp') 'runtime snapshot'
 Require-Path (Join-Path $sourceRoot 'TaskManager.cpp') 'central task manager'
 Require-Path (Join-Path $sourceRoot 'NativeComparisonTelemetry.cpp') 'native comparison telemetry'
 Require-Path (Join-Path $sourceRoot 'SpatialSnapshotManagerFNV.cpp') 'incremental spatial snapshot manager'
+Require-Path (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Dialectic initialization coordinator'
 Require-Path (Join-Path $sourceRoot 'XNVSEAdapter.cpp') 'xNVSE adapter'
 Require-Path (Join-Path $repoRoot 'docs\NATIVE_RUNTIME_MIGRATION.md') 'migration record'
 Require-Path (Join-Path $repoRoot 'docs\NATIVE_RUNTIME_VALIDATION.md') 'runtime validation matrix'
@@ -94,6 +95,7 @@ Require-Text $cmakeFile 'vendor/xnvse-sdk' 'vendored xNVSE include path'
 Require-Text $cmakeFile 'src/FNVRuntime\.cpp' 'FNVRuntime build source'
 Require-Text $cmakeFile 'src/TaskManager\.cpp' 'TaskManager build source'
 Require-Text $cmakeFile 'src/SpatialSnapshotManagerFNV\.cpp' 'spatial snapshot manager build source'
+Require-Text $cmakeFile 'src/DialecticInitialization\.cpp' 'Dialectic initialization coordinator build source'
 Require-Text (Join-Path $sourceRoot 'FNVRuntime.cpp') 'xNVSE main-game-loop pump authoritative' 'native frame-pump marker'
 Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'ResponseQueueFNV::DispatchPending' 'game-thread response dispatch'
 Require-Text (Join-Path $sourceRoot 'ResponseQueueFNV.cpp') 'RuntimeGeneration::IsCurrent\(item\.runtimeGeneration\)' 'runtime-generation response gate'
@@ -148,8 +150,20 @@ Require-Path (Join-Path $scriptRoot 'InitializeDialectic.gek') 'combined initial
 Require-Path (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'shared Dialectic initializer'
 Require-Path (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'first-run initialization prompt'
 Require-Path (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'initialization prompt callback'
-Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticSyncWorldData' 'world-data initialization action'
-Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticSendAllVoiceSamples' 'voice-sample initialization action'
+Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticInitialize' 'coordinated initialization action'
+Require-Text (Join-Path $sourceRoot 'main.cpp') 'kCommandInfo_DialecticInitialize' 'coordinated initialization command registration'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voice samples synced\.' 'voice completion notice'
+Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
+Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Initialization complete\.' 'final initialization notice'
+Reject-Text @(
+    (Join-Path $scriptRoot 'RunDialecticInitialization.gek'),
+    (Join-Path $scriptRoot 'SendVoiceSamples.gek'),
+    (Join-Path $scriptRoot 'VoiceSampleUploadTick.txt'),
+    (Join-Path $scriptRoot 'WorldDataSyncTick.txt'),
+    (Join-Path $sourceRoot 'VoiceSampleBatchUploadFNV.cpp'),
+    (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp')
+) 'Initialization started|Uploading Fallout voice samples|Sending Fallout faction|Uploading .*factions|Uploading .*locations|Scanning loaded Fallout' 'initialization progress popup'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxExAlt' 'initialization prompt message box'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') '\|OK\|Close"' 'initialization prompt OK and Close buttons'
