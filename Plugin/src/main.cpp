@@ -1173,18 +1173,8 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
     return true;
 }
 
-static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
-    int action = -1;
+static bool Cmd_DialecticDeprecatedManageAIAgents_Execute(COMMAND_ARGS) {
     *result = 0;
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
-        Logger::LogWarning("DialecticManageAIAgents failed to extract action");
-        return true;
-    }
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-    GameLoop::ManageAIAgents(action);
-    *result = 1;
     return true;
 }
 
@@ -1387,9 +1377,9 @@ static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
-static CommandInfo kCommandInfo_DialecticManageAIAgents = {
-    "DialecticManageAIAgents", "", 0, "Runs an in-game Dialectic AI Agent management operation.", 0, 1,
-    kParams_Integer, Cmd_DialecticManageAIAgents_Execute, nullptr, nullptr, 0
+static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
+    "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
@@ -1484,7 +1474,7 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenModeMenu,
         &kCommandInfo_DialecticOpenLLMModelMenu,
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
-        &kCommandInfo_DialecticManageAIAgents,
+        &kCommandInfo_DialecticDeprecatedManageAIAgents,
         &kCommandInfo_DialecticDiagnosticBridgeTick,
         &kCommandInfo_DialecticClearActorSnapshotRequest,
         &kCommandInfo_DialecticMarkPlayerInventoryDirty,

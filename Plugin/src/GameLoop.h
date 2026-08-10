@@ -66,7 +66,6 @@ void RequestDialecticControlMenuOpen();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
 void RequestDynamicProfileMenuOpen();
-void ManageAIAgents(int action);
 void SubmitCapturedDialogue(const std::string& source,
                             const std::string& speaker,
                             const std::string& speakerRefId,

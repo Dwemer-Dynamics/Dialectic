@@ -958,7 +958,7 @@
         }
       }
     },
-    "6": {
+    "5": {
       "listTitle": "Tools",
       "pageTitle": "Tools",
       "columns": 1,
@@ -1005,72 +1005,6 @@
             "type": "file",
             "value": "Dialectic/SendVoiceSamples.gek"
           }
-        }
-      }
-    },
-    "5": {
-      "listTitle": "AI Agents",
-      "pageTitle": "AI Agents",
-      "columns": 1,
-      "enable": 1,
-      "options": {
-        "1": {
-          "title": "Agent Management",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
-          "title": "Add Targeted NPC",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Manually activates the NPC under the crosshair as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddTarget" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "3": {
-          "title": "Add All Nearby NPCs",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Manually activates every eligible nearby NPC as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddNearby" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "4": {
-          "title": "Remove Targeted AI Agent",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Removes the targeted NPC from the active Dialectic AI agent registry.",
-          "vars": [{ "configINI": "Tools:AgentRemoveTarget" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "5": {
-          "title": "Remove All AI Agents",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Removes every NPC from the active Dialectic AI agent registry. Auto Activate can add eligible NPCs again.",
-          "vars": [{ "configINI": "Tools:AgentRemoveAll" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "6": {
-          "title": "Lists",
-          "enable": 1,
-          "type": 0
-        },
-        "7": {
-          "title": "List Active AI Agents",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Displays the currently active Dialectic AI agents in the in-game notification area and plugin log.",
-          "vars": [{ "configINI": "Tools:AgentListActive" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "8": {
-          "title": "Refresh Nearby NPCs",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Scans and displays nearby NPCs that can be manually added as AI agents.",
-          "vars": [{ "configINI": "Tools:AgentListNearby" }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         }
       }
     }
