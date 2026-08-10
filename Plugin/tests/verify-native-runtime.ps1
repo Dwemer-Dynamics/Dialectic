@@ -176,6 +176,7 @@ Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxE
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') '\|OK\|Close"' 'initialization prompt OK and Close buttons'
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'Initialize Now|Not Now' 'retired initialization prompt choices'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'iButton != 0' 'initialization prompt Close action gate'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'MessageExAlt 4 "#4\|Dialectic initialization has started\. Please wait\."' 'happy initialization started notice'
 Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'
 
 # The retired AI Agents MCM must stay removed while the core agent runtime remains intact.
