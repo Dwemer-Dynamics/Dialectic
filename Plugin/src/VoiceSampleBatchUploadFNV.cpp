@@ -3,7 +3,6 @@
 #include "HTTPManager.h"
 #include "VoiceSampleOverridesFNV.h"
 #include "VoiceSampleResolverFNV.h"
-#include "Console.h"
 #include "RuntimeSnapshot.h"
 
 #include <algorithm>
@@ -365,7 +364,6 @@ namespace VoiceSampleBatchUploadFNV {
 
         if (candidates.empty()) {
             Log("[VOICE_BATCH] No Fallout voice sample mappings were loaded");
-            Console::Print("[Dialectic] No voice sample mappings found");
             return summary.timedOut ? BatchUploadResult::TimedOut : BatchUploadResult::NoSamplesUploaded;
         }
 
@@ -374,8 +372,6 @@ namespace VoiceSampleBatchUploadFNV {
             summary.csvMappings,
             summary.looseMappings,
             summary.archiveMappings);
-        Console::Print("[Dialectic] Uploading Fallout voice samples...");
-
         std::vector<VoiceSampleCandidate> orderedCandidates;
         orderedCandidates.reserve(candidates.size());
         for (const auto& pair : candidates) {
@@ -438,11 +434,6 @@ namespace VoiceSampleBatchUploadFNV {
             summary.timedOut ? 1 : 0,
             summary.cancelled ? 1 : 0);
         if (summary.cancelled) return BatchUploadResult::Cancelled;
-        Console::Print("[Dialectic] Voice samples: %d uploaded, %d missing, %d failed",
-            summary.uploaded,
-            summary.missing,
-            summary.failed);
-
         if (summary.timedOut) {
             return BatchUploadResult::TimedOut;
         }

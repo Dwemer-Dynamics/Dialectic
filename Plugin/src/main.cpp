@@ -58,6 +58,7 @@
 #include "TaskManager.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
+#include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
 #define DIALECTIC_VERSION "0.7.2"
@@ -1012,8 +1013,12 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
             if (uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success || summary.uploaded > 0) {
                 AgentManager::RefreshRegisteredAgentVoices();
             }
+            const bool success = uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success &&
+                summary.missing == 0 && summary.failed == 0 && !summary.timedOut && !summary.cancelled;
+            DialecticInitialization::ReportVoiceFinished(success);
         } catch (...) {
             g_voiceSampleBatchRunning = false;
+            DialecticInitialization::ReportVoiceFinished(false);
             Logger::LogError("DialecticSendAllVoiceSamples worker failed with an exception");
             throw;
         }
@@ -1021,6 +1026,7 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
     }) == 0) {
         g_voiceSampleBatchRunning = false;
         Logger::LogWarning("DialecticSendAllVoiceSamples could not queue background task");
+        DialecticInitialization::ReportVoiceFinished(false);
         return false;
     }
 
@@ -1031,6 +1037,14 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
 
 static bool Cmd_DialecticSendAllVoiceSamples_Execute(COMMAND_ARGS) {
     Dialectic_RequestVoiceSampleBatch("NVSE command");
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticInitialize_Execute(COMMAND_ARGS) {
+    DialecticInitialization::Begin();
+    WorldDataSyncFNV::RequestSync();
+    Dialectic_RequestVoiceSampleBatch("Dialectic initialization");
     *result = 1;
     return true;
 }
@@ -1332,6 +1346,11 @@ static CommandInfo kCommandInfo_DialecticSendAllVoiceSamples = {
     nullptr, Cmd_DialecticSendAllVoiceSamples_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticInitialize = {
+    "DialecticInitialize", "", 0, "Initializes Dialectic voice samples, factions, and locations.", 0, 0,
+    nullptr, Cmd_DialecticInitialize_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticGetRecordingDeviceCount = {
     "DialecticGetRecordingDeviceCount", "", 0, "Deprecated recording-device selector ABI slot.", 0, 0,
     nullptr, Cmd_DialecticGetRecordingDeviceCount_Execute, nullptr, nullptr, 0
@@ -1467,6 +1486,7 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticSetConfigFloatById,
         &kCommandInfo_DialecticSyncWorldData,
         &kCommandInfo_DialecticSendAllVoiceSamples,
+        &kCommandInfo_DialecticInitialize,
         &kCommandInfo_DialecticCaptureDialoguePrompt,
         &kCommandInfo_DialecticCaptureDialogue,
         &kCommandInfo_DialecticSendSetConf,

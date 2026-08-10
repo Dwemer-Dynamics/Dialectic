@@ -33,6 +33,7 @@
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
+#include "DialecticInitialization.h"
 #include "TradeManager.h"
 #include "RuntimeSnapshot.h"
 #include "RuntimeGeneration.h"
@@ -4122,6 +4123,7 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("SpeakManager::ProcessQueue", []() { SpeakManager::ProcessQueue(); });
         ProfileUpdateSubsystem("LoadedPluginsFNV::Update", []() { LoadedPluginsFNV::Update(); });
         ProfileUpdateSubsystem("WorldDataSyncFNV::Update", []() { WorldDataSyncFNV::Update(); });
+        ProfileUpdateSubsystem("DialecticInitialization::Update", []() { DialecticInitialization::Update(); });
         ProfileUpdateSubsystem("SpatialSnapshotManagerFNV::Update", []() {
             SpatialSnapshotManagerFNV::Update(1);
         });

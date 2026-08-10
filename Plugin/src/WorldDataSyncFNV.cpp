@@ -1,6 +1,6 @@
 #include "WorldDataSyncFNV.h"
 
-#include "Console.h"
+#include "DialecticInitialization.h"
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "TaskManager.h"
@@ -16,7 +16,6 @@
 #include <cctype>
 #include <cstring>
 #include <cstdint>
-#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -73,25 +72,6 @@ bool g_nativeMarkerCaptureStarted = false;
 std::chrono::steady_clock::time_point g_lastAttempt;
 std::mutex g_locationMutex;
 std::vector<LocationRow> g_cachedLocations;
-std::mutex g_notificationMutex;
-std::deque<std::string> g_notifications;
-
-void QueueNotification(std::string message) {
-    std::lock_guard<std::mutex> lock(g_notificationMutex);
-    g_notifications.push_back(std::move(message));
-}
-
-void DrainNotifications() {
-    std::deque<std::string> notifications;
-    {
-        std::lock_guard<std::mutex> lock(g_notificationMutex);
-        notifications.swap(g_notifications);
-    }
-    for (const std::string& notification : notifications) {
-        Console::Print("[Dialectic] %s", notification.c_str());
-    }
-}
-
 bool ResponseAcknowledged(const std::string& response) {
     std::string compact;
     compact.reserve(response.size());
@@ -782,10 +762,9 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
 
     if (factions.empty()) {
         Logger::LogWarning("[WORLD_DATA] Faction scan found zero rows; leaving existing server factions unchanged");
+        DialecticInitialization::QueueNotice("No factions found.", IngameNotifier::Level::Warning);
     } else {
         const size_t factionBatchCount = (factions.size() + kFactionBatchSize - 1) / kFactionBatchSize;
-        QueueNotification("Uploading " + std::to_string(factions.size()) + " factions in " +
-            std::to_string(factionBatchCount) + " batch(es).");
         for (size_t start = 0, batchIndex = 1; start < factions.size(); start += kFactionBatchSize, ++batchIndex) {
             if (token.IsCancellationRequested()) return false;
             const std::string response = HTTPManager::SendJson(
@@ -794,20 +773,21 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
             if (!ResponseAcknowledged(response)) {
                 Logger::LogWarning("[WORLD_DATA] Faction batch %zu/%zu was not acknowledged: %s",
                     batchIndex, factionBatchCount, response.c_str());
+                DialecticInitialization::QueueNotice("Faction sync failed.", IngameNotifier::Level::Error);
                 return false;
             }
             Logger::LogInfo("[WORLD_DATA] Uploaded faction batch %zu/%zu", batchIndex, factionBatchCount);
         }
+        DialecticInitialization::QueueNotice("Factions synced.", IngameNotifier::Level::Success);
     }
 
     if (locations.empty()) {
         Logger::LogWarning("[WORLD_DATA] Location scan found zero rows; leaving existing server locations unchanged");
+        DialecticInitialization::QueueNotice("No locations found.", IngameNotifier::Level::Warning);
         return true;
     }
 
     const size_t locationBatchCount = (locations.size() + kLocationBatchSize - 1) / kLocationBatchSize;
-    QueueNotification("Uploading " + std::to_string(locations.size()) + " locations in " +
-        std::to_string(locationBatchCount) + " batch(es).");
     for (size_t start = 0, batchIndex = 1; start < locations.size(); start += kLocationBatchSize, ++batchIndex) {
         if (token.IsCancellationRequested()) return false;
         const bool replace = start == 0;
@@ -817,10 +797,12 @@ bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<Lo
         if (!ResponseAcknowledged(response)) {
             Logger::LogWarning("[WORLD_DATA] Location batch %zu/%zu was not acknowledged: %s",
                 batchIndex, locationBatchCount, response.c_str());
+            DialecticInitialization::QueueNotice("Location sync failed.", IngameNotifier::Level::Error);
             return false;
         }
         Logger::LogInfo("[WORLD_DATA] Uploaded location batch %zu/%zu", batchIndex, locationBatchCount);
     }
+    DialecticInitialization::QueueNotice("Locations synced.", IngameNotifier::Level::Success);
 
     return true;
 }
@@ -830,7 +812,6 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
         return;
     }
 
-    QueueNotification("Scanning loaded Fallout plugins for faction and location data.");
     Logger::LogInfo("[WORLD_DATA] Collecting Fallout factions and map marker locations");
     auto factions = CollectFactions();
     auto nativeLocations = CollectNativeLocations(std::move(nativeMarkers));
@@ -845,7 +826,8 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
                     if (g_syncRunId.load() == runId) {
                         g_syncRequested = false;
                         g_syncInProgress = false;
-                        QueueNotification("Faction and location sync was cancelled.");
+                        DialecticInitialization::QueueNotice("World sync cancelled.", IngameNotifier::Level::Warning);
+                        DialecticInitialization::ReportWorldFinished(false);
                     }
                     return;
                 }
@@ -855,7 +837,8 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
                     if (g_syncRunId.load() == runId) {
                         g_syncRequested = false;
                         g_syncInProgress = false;
-                        QueueNotification("Faction and location sync was cancelled.");
+                        DialecticInitialization::QueueNotice("World sync cancelled.", IngameNotifier::Level::Warning);
+                        DialecticInitialization::ReportWorldFinished(false);
                     }
                     return;
                 }
@@ -881,22 +864,21 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
                 if (success) {
                     g_completed = true;
                     g_syncRequested = false;
-                    QueueNotification("Faction and location sync complete: " + std::to_string(factionCount) +
-                        " factions and " + std::to_string(locationCount) + " locations.");
                     Logger::LogInfo("[WORLD_DATA] Synced %zu factions and %zu locations",
                         factionCount, locationCount);
                 } else {
                     g_completed = false;
                     g_syncRequested = false;
-                    QueueNotification("Faction and location sync failed. Check dialectic.log for details.");
                     Logger::LogWarning("[WORLD_DATA] Sync failed");
                 }
+                DialecticInitialization::ReportWorldFinished(success);
                 g_syncInProgress = false;
             })) {
         Logger::LogWarning("[WORLD_DATA] Could not queue upload task");
         g_syncRequested = false;
         g_syncInProgress = false;
-        QueueNotification("Faction and location sync could not start. Check dialectic.log for details.");
+        DialecticInitialization::QueueNotice("World sync could not start.", IngameNotifier::Level::Error);
+        DialecticInitialization::ReportWorldFinished(false);
     }
 }
 
@@ -905,7 +887,7 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64
 void RequestSync() {
     if (g_syncRequested.load() || g_syncInProgress.load()) {
         Logger::LogInfo("[WORLD_DATA] Ignored duplicate sync request while a sync is active");
-        QueueNotification("Faction and location sync is already running.");
+        DialecticInitialization::QueueNotice("World sync is already running.", IngameNotifier::Level::Warning);
         return;
     }
 
@@ -913,7 +895,6 @@ void RequestSync() {
     g_syncRequested = true;
     g_nativeMarkerCaptureStarted = false;
     g_syncRunId.fetch_add(1);
-    QueueNotification("Faction and location sync started in the background.");
     Logger::LogInfo("[WORLD_DATA] Sync requested");
 }
 
@@ -965,8 +946,6 @@ bool ResolveLocationByName(const char* name, unsigned int& formId, char* display
 }
 
 void Update() {
-    DrainNotifications();
-
     if (!g_syncRequested.load() || g_syncInProgress.load()) {
         return;
     }

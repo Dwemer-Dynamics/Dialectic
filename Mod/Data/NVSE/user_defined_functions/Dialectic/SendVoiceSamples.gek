@@ -10,6 +10,5 @@ Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
     endif
 
     SetINIIntC "Tools:SendVoiceSamples" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    PrintC "[Dialectic] Uploading Fallout voice samples"
     DialecticSendAllVoiceSamples
 End
