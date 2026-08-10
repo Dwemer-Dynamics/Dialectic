@@ -1,10 +1,8 @@
 int iTalk
 int iVoice
 int iManual
-int iModes
-int iLLM
+int iControl
 int iHalt
-int iDynamic
 int iOpenMicMute
 int iPipVision
 
@@ -17,10 +15,8 @@ begin function {}
     let iTalk := DialecticGetConfigInt "Hotkeys" "TalkToNPC" 0
     let iVoice := DialecticGetConfigInt "Hotkeys" "ToggleVoice" 0
     let iManual := DialecticGetConfigInt "Hotkeys" "ManualActivate" 0
-    let iModes := DialecticGetConfigInt "Hotkeys" "ToggleModes" 0
-    let iLLM := DialecticGetConfigInt "Hotkeys" "ToggleLLMModel" 0
+    let iControl := DialecticGetConfigInt "Hotkeys" "DialecticControl" 0
     let iHalt := DialecticGetConfigInt "Hotkeys" "StopTalking" 0
-    let iDynamic := DialecticGetConfigInt "Hotkeys" "DynamicProfileMenu" 0
     let iOpenMicMute := DialecticGetConfigInt "Hotkeys" "OpenMicMute" 0
     let iPipVision := DialecticGetConfigInt "Hotkeys" "PipVision" 0
 
@@ -36,21 +32,13 @@ begin function {}
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iManual
         SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iManual
     endif
-    if iModes > 0
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iModes
-        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iModes
-    endif
-    if iLLM > 0
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iLLM
-        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iLLM
+    if iControl > 0
+        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iControl
+        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iControl
     endif
     if iHalt > 0
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iHalt
         SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iHalt
-    endif
-    if iDynamic > 0
-        SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iDynamic
-        SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iDynamic
     endif
     if iOpenMicMute > 0
         SetOnKeyDownEventHandler (CompileScript "Dialectic/HotkeyKeyDown.txt") 1 iOpenMicMute
@@ -61,5 +49,5 @@ begin function {}
         SetOnKeyUpEventHandler (CompileScript "Dialectic/HotkeyKeyUp.txt") 1 iPipVision
     endif
 
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 owner=jip_events talk=%g voice=%g manual=%g modes=%g llm=%g halt=%g dynamic=%g open_mic_mute=%g pipvision=%g%r" iTalk iVoice iManual iModes iLLM iHalt iDynamic iOpenMicMute iPipVision
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 owner=jip_events talk=%g voice=%g control=%g manual=%g halt=%g open_mic_mute=%g pipvision=%g%r" iTalk iVoice iControl iManual iHalt iOpenMicMute iPipVision
 end

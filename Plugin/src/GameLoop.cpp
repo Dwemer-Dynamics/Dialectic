@@ -1158,6 +1158,19 @@ static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
         state.containerMenuOpen || state.loadingMenuOpen;
 }
 
+void RequestDialecticControlMenuOpen() {
+    const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
+        Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
+        return;
+    }
+    Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
+}
+
 void RequestModeMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
@@ -1253,89 +1266,6 @@ void RequestDynamicProfileMenuOpen() {
         return;
     }
     Logger::LogError("GameLoop: Failed to open dynamic profile selector through native UI adapter");
-}
-
-static std::string BuildAgentNameSummary(
-    const std::vector<std::pair<uint32_t, std::string>>& actors,
-    std::size_t limit = 8) {
-    std::ostringstream summary;
-    const std::size_t count = std::min(limit, actors.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        if (i > 0) {
-            summary << ", ";
-        }
-        summary << (actors[i].second.empty() ? "Unknown NPC" : actors[i].second);
-    }
-    if (actors.size() > count) {
-        summary << " and " << (actors.size() - count) << " more";
-    }
-    return summary.str();
-}
-
-void ManageAIAgents(int action) {
-    switch (action) {
-        case 0:
-            ActivationManager::ActivateCurrentTarget(ActivationManager::ActivationSource::Manual);
-            return;
-        case 1: {
-            const std::size_t count = ActivationManager::ActivateNearbyActors(
-                ActivationManager::ActivationSource::Manual);
-            Logger::LogInfo("GameLoop: AI Agent manager added %zu nearby actor(s)", count);
-            Console::Print("[Dialectic] Added %zu nearby AI agent(s)", count);
-            return;
-        }
-        case 2: {
-            uint32_t formId = 0;
-            std::string name;
-            const NPCDetector::NPCInfo crosshairNpc = NPCDetector::GetCrosshairNPC();
-            if (crosshairNpc.isValid) {
-                formId = crosshairNpc.formId;
-                name = crosshairNpc.name;
-            } else {
-                const auto& target = TargetManager::GetCurrentTarget();
-                formId = target.formId;
-                name = target.name;
-            }
-            if (formId == 0 || !ActivationManager::DeactivateActor(formId)) {
-                Console::Print("[Dialectic] Target is not an active AI agent");
-                return;
-            }
-            Logger::LogInfo("GameLoop: AI Agent manager removed %s (0x%08X)", name.c_str(), formId);
-            Console::Print("[Dialectic] Removed AI agent: %s", name.empty() ? "Unknown NPC" : name.c_str());
-            return;
-        }
-        case 3: {
-            const std::size_t count = ActivationManager::DeactivateAllActors();
-            Logger::LogInfo("GameLoop: AI Agent manager removed all %zu agent(s)", count);
-            Console::Print("[Dialectic] Removed %zu AI agent(s)", count);
-            return;
-        }
-        case 4: {
-            const auto agents = AgentManager::GetRegisteredAgentSnapshot();
-            const std::string names = BuildAgentNameSummary(agents);
-            Logger::LogInfo("GameLoop: Active AI agents (%zu): %s", agents.size(), names.c_str());
-            if (agents.empty()) {
-                Console::Print("[Dialectic] No active AI agents");
-            } else {
-                Console::Print("[Dialectic] Active AI agents (%zu): %s", agents.size(), names.c_str());
-            }
-            return;
-        }
-        case 5: {
-            const auto actors = ActivationManager::GetNearbyManageableActors();
-            const std::string names = BuildAgentNameSummary(actors);
-            Logger::LogInfo("GameLoop: Nearby manageable actors (%zu): %s", actors.size(), names.c_str());
-            if (actors.empty()) {
-                Console::Print("[Dialectic] No nearby NPCs available");
-            } else {
-                Console::Print("[Dialectic] Nearby NPCs (%zu): %s", actors.size(), names.c_str());
-            }
-            return;
-        }
-        default:
-            Logger::LogWarning("GameLoop: Ignoring unknown AI Agent management action=%d", action);
-            return;
-    }
 }
 
 static uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
@@ -3766,16 +3696,20 @@ static void HandleOpenMicVoiceDetected() {
     if (!Config::openMicEnabled || Config::openMicMuted) {
         return;
     }
-    if ((!g_conversationActive && !Config::narratorModeEnabled) || g_voiceInputActive || VoiceRecorder::IsRecording()) {
-        Logger::LogInfo("GameLoop: Ignoring open mic trigger activeConversation=%d voiceActive=%d recording=%d",
-            g_conversationActive ? 1 : 0,
+    if (g_voiceInputActive || VoiceRecorder::IsRecording()) {
+        Logger::LogInfo("GameLoop: Ignoring open mic trigger voiceActive=%d recording=%d",
             g_voiceInputActive.load() ? 1 : 0,
             VoiceRecorder::IsRecording() ? 1 : 0);
         return;
     }
 
-    if (!g_conversationActive && Config::narratorModeEnabled) {
-        StartNarratorConversation("open mic narrator mode");
+    if (!g_conversationActive) {
+        if (Config::narratorModeEnabled) {
+            StartNarratorConversation("open mic narrator mode");
+        } else if (TryStartConversationFromCurrentTarget() != ConversationStartResult::Started) {
+            Logger::LogInfo("GameLoop: Open mic detected speech without an available NPC target");
+            return;
+        }
     }
 
     StartVoiceInputInternal(true);
@@ -3790,7 +3724,12 @@ static void UpdateOpenMicMonitoringState() {
     const bool shouldMonitor =
         Config::openMicEnabled &&
         !Config::openMicMuted &&
-        (g_conversationActive || Config::narratorModeEnabled) &&
+        g_gameState.isInGame &&
+        !g_gameState.isLoading &&
+        !g_gameState.isPaused &&
+        !g_gameState.isInMenu &&
+        !g_gameState.isInDialogue &&
+        InputManager::IsGameForeground() &&
         !g_voiceInputActive &&
         !VoiceRecorder::IsRecording();
 
@@ -4112,23 +4051,9 @@ void Update(float deltaTime) {
     }
     ProfileUpdateSubsystem("PipVisionManager::Update", []() { PipVisionManager::Update(); });
     
-    const bool dynamicProfileMenuTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::DynamicProfileMenu);
-    const bool toggleModesTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleModes);
-    const bool toggleLLMModelTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleLLMModel);
-
-    if (dynamicProfileMenuTriggered) {
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed");
-        RequestDynamicProfileMenuOpen();
-    }
-
-    if (toggleModesTriggered) {
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed");
-        RequestModeMenuOpen();
-    }
-
-    if (toggleLLMModelTriggered) {
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed");
-        RequestLLMModelMenuOpen();
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::DialecticControl)) {
+        Logger::LogInfo("GameLoop: DialecticControl hotkey pressed");
+        RequestDialecticControlMenuOpen();
     }
 
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::OpenMicMute)) {
@@ -4145,7 +4070,7 @@ void Update(float deltaTime) {
     // Voice input handling (hold-to-talk)
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
-            Console::Print("[Dialectic] Already recording...");
+            Console::Print("[Dialectic] Recording...");
         } else {
             ClearConversationIfPartnerLeftScene("voice input");
             if (!g_conversationActive) {
@@ -4156,7 +4081,7 @@ void Update(float deltaTime) {
                     const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
                     if (startResult != ConversationStartResult::Started) {
                         if (startResult == ConversationStartResult::NoTarget) {
-                            Console::Print("[Dialectic] Target an NPC first");
+                            Console::Print("[Dialectic] Target an NPC");
                         }
                         return;
                     }
@@ -4506,7 +4431,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     if (!g_conversationActive) {
         Log("GameLoop: Voice input requested without active conversation");
         if (!openMicTriggered) {
-            Console::Print("[Dialectic] Target an NPC first");
+            Console::Print("[Dialectic] Target an NPC");
         }
         return;
     }
@@ -4519,16 +4444,14 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     int voiceKey = openMicTriggered ? -1 : InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice);
     if (!openMicTriggered && voiceKey <= 0) {
         Log("GameLoop: Voice input requested with no bound hotkey");
-        Console::Print("[Dialectic] Mic is not bound");
+        Console::Print("[Dialectic] Voice key not bound");
         return;
     }
 
     Log("GameLoop: Starting %s voice input on device: %s",
         openMicTriggered ? "open-mic" : "push-to-talk",
         VoiceRecorder::GetCurrentRecordingDeviceName().c_str());
-    Console::Print(openMicTriggered
-        ? "[Dialectic] Open mic recording..."
-        : "[Dialectic] Recording... (release voice key to send)");
+    Console::Print("[Dialectic] Recording...");
 
     ResetBoredEventTimer(openMicTriggered ? "open mic recording start" : "voice recording start");
     // Treat mic input as player interruption: new player intent cancels
@@ -4568,7 +4491,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
         } else {
             Log("GameLoop: STT returned empty result");
             if (!openMicTriggered) {
-                Console::Print("[Dialectic] Could not transcribe audio");
+                Console::Print("[Dialectic] No speech detected");
             }
         }
     }, openMicSilenceMs);

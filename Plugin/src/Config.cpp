@@ -273,6 +273,43 @@ namespace Config {
         Logger::LogInfo("Created user configuration: %s", GetCustomINIPath());
     }
 
+    // Collapses the three retired selector bindings into the new control hotkey once.
+    static void MigrateDialecticControlHotkey() {
+        std::string configuredValue;
+        if (TryReadCustomINIValue("Hotkeys", "DialecticControl", configuredValue)) {
+            return;
+        }
+
+        static constexpr const char* kLegacyKeys[] = {
+            "ToggleModes",
+            "ToggleLLMModel",
+            "DynamicProfileMenu"
+        };
+
+        int migratedScanCode = 0;
+        const char* migratedFrom = nullptr;
+        for (const char* legacyKey : kLegacyKeys) {
+            const int scanCode = ReadINIInt("Hotkeys", legacyKey, 0);
+            if (scanCode > 0) {
+                migratedScanCode = scanCode;
+                migratedFrom = legacyKey;
+                break;
+            }
+        }
+
+        const std::string value = std::to_string(migratedScanCode);
+        if (!WriteCustomINIValue("Hotkeys", "DialecticControl", value.c_str())) {
+            Logger::LogWarning("Could not persist migrated Dialectic Control hotkey");
+            return;
+        }
+
+        if (migratedFrom) {
+            Logger::LogInfo("Migrated [Hotkeys] %s=%d to DialecticControl",
+                migratedFrom,
+                migratedScanCode);
+        }
+    }
+
     static bool ParsePort(const std::string& rawPort, int& portOut, const char* source) {
         try {
             const int parsed = std::stoi(Trim(rawPort));
@@ -596,6 +633,7 @@ namespace Config {
         Logger::LogSection(resolveConnection ? "LOADING CONFIGURATION" : "RELOADING RUNTIME SETTINGS");
         
         EnsureCustomINIExists();
+        MigrateDialecticControlHotkey();
         const std::string defaultIniPath = GetDefaultINIPath();
         const std::string customIniPath = GetCustomINIPath();
         Logger::LogDebug("Default INI path: %s", defaultIniPath.c_str());
@@ -908,9 +946,7 @@ namespace Config {
         const int hotkeyManualActivate = ReadINIInt("Hotkeys", "ManualActivate", 0);
         const int hotkeyOpenMenu = ReadINIInt("Hotkeys", "OpenMenu", 0);
         const int hotkeyQuickCommand = ReadINIInt("Hotkeys", "QuickCommand", 0);
-        const int hotkeyDynamicProfileMenu = ReadINIInt("Hotkeys", "DynamicProfileMenu", 0);
-        const int hotkeyToggleModes = ReadINIInt("Hotkeys", "ToggleModes", 0);
-        const int hotkeyToggleLLMModel = ReadINIInt("Hotkeys", "ToggleLLMModel", 0);
+        const int hotkeyDialecticControl = ReadINIInt("Hotkeys", "DialecticControl", 0);
         const int hotkeyOpenMicMute = ReadINIInt("Hotkeys", "OpenMicMute", 0);
         const int hotkeyPipVision = ReadINIInt("Hotkeys", "PipVision", 0);
 
@@ -944,9 +980,7 @@ namespace Config {
         iniFile << "ManualActivate=" << hotkeyManualActivate << "\n";
         iniFile << "OpenMenu=" << hotkeyOpenMenu << "\n";
         iniFile << "QuickCommand=" << hotkeyQuickCommand << "\n";
-        iniFile << "DynamicProfileMenu=" << hotkeyDynamicProfileMenu << "\n";
-        iniFile << "ToggleModes=" << hotkeyToggleModes << "\n";
-        iniFile << "ToggleLLMModel=" << hotkeyToggleLLMModel << "\n";
+        iniFile << "DialecticControl=" << hotkeyDialecticControl << "\n";
         iniFile << "OpenMicMute=" << hotkeyOpenMicMute << "\n";
         iniFile << "PipVision=" << hotkeyPipVision << "\n\n";
         

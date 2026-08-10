@@ -29,6 +29,7 @@ enum class LifecycleEvent {
 };
 
 enum class NativeToolMenu {
+    DialecticControl,
     Mode,
     LlmModel,
     DynamicProfile

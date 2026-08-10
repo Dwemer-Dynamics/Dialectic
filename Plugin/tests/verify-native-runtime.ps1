@@ -30,7 +30,6 @@ $cmakeFile = Join-Path $PluginRoot 'CMakeLists.txt'
 $repoRoot = Split-Path -Parent $PluginRoot
 $mcmFile = Join-Path $repoRoot 'Mod\Data\MCM\Dialectic.json'
 $iniFile = Join-Path $repoRoot 'Mod\Data\NVSE\Plugins\dialectic.ini'
-$agentManagementScript = Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic\AgentManagementAction.gek'
 
 Require-Path (Join-Path $PluginRoot 'vendor\xnvse-sdk\nvse\PluginAPI.h') 'pinned xNVSE SDK'
 Require-Path (Join-Path $sourceRoot 'FNVRuntime.cpp') 'native runtime'
@@ -138,27 +137,14 @@ Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'EnforceCombatDialogueGate\(
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(speakerFormId\)' 'rechat speaker combat gate'
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(targetFormId\)' 'rechat target combat gate'
 
-# CHIM-equivalent AI Agent management operations must remain wired through the
-# canonical activation/agent/target registries.
-Require-Text $mcmFile '"listTitle": "AI Agents"' 'AI Agents MCM page'
-foreach ($label in @(
-    'Add Targeted NPC',
-    'Add All Nearby NPCs',
-    'Remove Targeted AI Agent',
-    'Remove All AI Agents',
-    'List Active AI Agents',
-    'Refresh Nearby NPCs'
-)) {
-    Require-Text $mcmFile ([regex]::Escape($label)) "AI Agent operation '$label'"
+# The retired AI Agents MCM must stay removed while the core agent runtime remains intact.
+Reject-Text @($mcmFile) '"listTitle": "AI Agents"|AgentManagementAction\.gek' 'retired AI Agents MCM wiring'
+if (Test-Path -LiteralPath (Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic\AgentManagementAction.gek')) {
+    $failures.Add('Retired AI Agent MCM callback must not be restored')
 }
-Require-Path $agentManagementScript 'AI Agent MCM callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 0' 'targeted agent activation callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 1' 'nearby agent activation callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 2' 'targeted agent removal callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 3' 'all-agent removal callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 4' 'active-agent listing callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 5' 'nearby-agent listing callback'
-Require-Text (Join-Path $sourceRoot 'main.cpp') '"DialecticManageAIAgents"' 'AI Agent xNVSE command registration'
+Reject-Text @((Join-Path $sourceRoot 'GameLoop.cpp'), (Join-Path $sourceRoot 'GameLoop.h')) '\bManageAIAgents\b|BuildAgentNameSummary' 'retired AI Agent management entrypoint'
+Reject-Text @((Join-Path $sourceRoot 'main.cpp')) 'GameLoop::ManageAIAgents' 'active AI Agent MCM command wiring'
+Require-Text (Join-Path $sourceRoot 'main.cpp') 'Deprecated AI Agent MCM ABI slot' 'reserved AI Agent command ABI slot'
 Require-Text (Join-Path $sourceRoot 'ActivationManager.cpp') 'ActivateNearbyActors' 'nearby agent activation implementation'
 Require-Text (Join-Path $sourceRoot 'ActivationManager.cpp') 'DeactivateAllActors' 'all-agent removal implementation'
 Require-Text (Join-Path $sourceRoot 'AgentManager.cpp') 'UnregisterAIAgent' 'canonical agent removal implementation'

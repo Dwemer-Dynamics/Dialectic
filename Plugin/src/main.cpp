@@ -220,6 +220,7 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "manualactivate" || normalizedKey == "manualactivatenpc") { return "ManualActivate"; }
     if (normalizedKey == "openmenu") { return "OpenMenu"; }
     if (normalizedKey == "quickcommand") { return "QuickCommand"; }
+    if (normalizedKey == "dialecticcontrol") { return "DialecticControl"; }
     if (normalizedKey == "dynamicprofilemenu") { return "DynamicProfileMenu"; }
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
@@ -278,16 +279,8 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
             outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC);
             return true;
         }
-        if (k == "dynamicprofilemenu") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu);
-            return true;
-        }
-        if (k == "togglemodes") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes);
-            return true;
-        }
-        if (k == "togglellmmodel") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel);
+        if (k == "dialecticcontrol") {
+            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl);
             return true;
         }
     }
@@ -353,9 +346,7 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "togglevoice") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice); return true; }
         if (k == "openmicmute") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::OpenMicMute); return true; }
         if (k == "manualactivate" || k == "manualactivatenpc") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC); return true; }
-        if (k == "dynamicprofilemenu") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu); return true; }
-        if (k == "togglemodes") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes); return true; }
-        if (k == "togglellmmodel") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel); return true; }
+        if (k == "dialecticcontrol") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl); return true; }
     }
 
     if (s == "rechat") {
@@ -1182,18 +1173,8 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
     return true;
 }
 
-static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
-    int action = -1;
+static bool Cmd_DialecticDeprecatedManageAIAgents_Execute(COMMAND_ARGS) {
     *result = 0;
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
-        Logger::LogWarning("DialecticManageAIAgents failed to extract action");
-        return true;
-    }
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-    GameLoop::ManageAIAgents(action);
-    *result = 1;
     return true;
 }
 
@@ -1396,9 +1377,9 @@ static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
-static CommandInfo kCommandInfo_DialecticManageAIAgents = {
-    "DialecticManageAIAgents", "", 0, "Runs an in-game Dialectic AI Agent management operation.", 0, 1,
-    kParams_Integer, Cmd_DialecticManageAIAgents_Execute, nullptr, nullptr, 0
+static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
+    "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
@@ -1493,7 +1474,7 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenModeMenu,
         &kCommandInfo_DialecticOpenLLMModelMenu,
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
-        &kCommandInfo_DialecticManageAIAgents,
+        &kCommandInfo_DialecticDeprecatedManageAIAgents,
         &kCommandInfo_DialecticDiagnosticBridgeTick,
         &kCommandInfo_DialecticClearActorSnapshotRequest,
         &kCommandInfo_DialecticMarkPlayerInventoryDirty,

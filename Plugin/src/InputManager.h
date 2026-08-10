@@ -14,9 +14,7 @@ enum class HotkeyAction {
     ManualActivateNPC,
     OpenMenu,
     QuickCommand,
-    DynamicProfileMenu,
-    ToggleModes,
-    ToggleLLMModel,
+    DialecticControl,
     PipVision,
     Count
 };
