@@ -172,10 +172,13 @@ Reject-Text @(
     (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp')
 ) 'Initialization started|Uploading Fallout voice samples|Sending Fallout faction|Uploading .*factions|Uploading .*locations|Scanning loaded Fallout' 'initialization progress popup'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'PlayerRef\.GetParentCell' 'loaded player cell prompt gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxExAlt' 'initialization prompt message box'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') '\|OK\|Close"' 'initialization prompt OK and Close buttons'
 Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'Initialize Now|Not Now' 'retired initialization prompt choices'
+Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'if MenuMode' 'menu mode initialization prompt gate'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'iButton != 0' 'initialization prompt Close action gate'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'SetINIIntC "Setup:InitializationPromptVersion" 1' 'prompt marker after user selection'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'MessageExAlt 4 "#4\|Dialectic initialization has started\. Please wait\."' 'happy initialization started notice'
 Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'
 

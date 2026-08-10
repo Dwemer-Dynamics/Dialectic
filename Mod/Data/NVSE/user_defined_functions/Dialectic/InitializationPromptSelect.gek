@@ -1,6 +1,8 @@
 int iButton
 
 Begin Function {iButton}
+    SetINIIntC "Setup:InitializationPromptVersion" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+
     if eval iButton != 0
         return
     endif
