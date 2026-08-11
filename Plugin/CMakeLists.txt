@@ -68,6 +68,7 @@ add_library(${PROJECT_NAME} SHARED
     src/GameLoop.cpp
     src/Console.cpp
     src/IngameNotifier.cpp
+    src/DialecticInitialization.cpp
     src/VersionCheck.cpp
     src/NPCDetector.cpp
     src/VoiceRecorder.cpp

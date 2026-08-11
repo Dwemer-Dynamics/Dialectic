@@ -1,7 +1,7 @@
 {
   "modName": "Dialectic",
-  "displayName": "Dialectic",
-  "description": "Configure Dialectic AI dialogue, activation, sound, hotkeys, and behavior settings.",
+  "displayName": "DIALECTIC",
+  "description": "Configure DIALECTIC AI dialogue, activation, sound, hotkeys, and behavior settings.",
   "saveFile": "../NVSE/Plugins/dialectic_custom.ini",
   "minMCMVersion": 1,
   "minModVersion": 1,
@@ -63,7 +63,7 @@
           }
         },
         "3": {
-          "title": "Dialectic Control",
+          "title": "DIALECTIC Control",
           "type": 3,
           "enable": 1,
           "mouse": "Keyboard key for opening chat mode, LLM model, and dynamic profile settings. Unbound by default.",
@@ -156,7 +156,7 @@
           "title": "Enable Auto Activate",
           "type": 5,
           "enable": 1,
-          "mouse": "Automatically activates nearby eligible NPCs as Dialectic AI agents.",
+          "mouse": "Automatically activates nearby eligible NPCs as DIALECTIC AI agents.",
           "vars": [
             {
               "configINI": "AutoActivate:Enabled",
@@ -547,7 +547,7 @@
           "type": 2,
           "enable": 1,
           "suffix": "s",
-          "mouse": "Seconds of quiet time before Dialectic may ask a nearby managed NPC for an idle comment.",
+          "mouse": "Seconds of quiet time before DIALECTIC may ask a nearby managed NPC for an idle comment.",
           "vars": [
             {
               "configINI": "BoredEvents:TimerSeconds",
@@ -965,45 +965,19 @@
       "enable": 1,
       "options": {
         "1": {
-          "title": "World Data",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
-          "title": "Send Faction and Location Info",
+          "title": "Initialize DIALECTIC",
           "type": 5,
           "enable": 1,
-          "mouse": "Scans Fallout factions and map marker locations in the background, then sends them to the Dialectic server. Progress appears in the Pip-Boy notification area.",
+          "mouse": "Sends Fallout voice samples, factions, and locations to the DIALECTIC server in the background.",
           "vars": [
             {
-              "configINI": "Tools:SendWorldData",
+              "configINI": "Tools:InitializeDialectic",
               "default": 0
             }
           ],
           "call": {
             "type": "file",
-            "value": "Dialectic/SyncWorldData.gek"
-          }
-        },
-        "3": {
-          "title": "Voice Samples",
-          "enable": 1,
-          "type": 0
-        },
-        "4": {
-          "title": "Send All Voice Samples",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Uploads every configured Fallout voice sample from Data/Dialectic/*_voices.csv to the Dialectic server.",
-          "vars": [
-            {
-              "configINI": "Tools:SendVoiceSamples",
-              "default": 0
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/SendVoiceSamples.gek"
+            "value": "Dialectic/InitializeDialectic.gek"
           }
         }
       }

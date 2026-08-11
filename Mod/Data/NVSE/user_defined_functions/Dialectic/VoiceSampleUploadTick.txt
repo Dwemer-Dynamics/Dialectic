@@ -5,7 +5,6 @@ begin function {}
     set fSend to GetINIFloat_Cached "Tools:SendVoiceSamples" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
     if eval fSend > 0
         SetINIIntC "Tools:SendVoiceSamples" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-        PrintC "[Dialectic] Uploading Fallout voice samples"
         DialecticSendAllVoiceSamples
     endif
 

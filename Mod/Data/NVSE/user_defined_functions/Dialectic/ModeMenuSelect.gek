@@ -6,5 +6,5 @@ Begin Function {iButton}
     endif
 
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_mode_select.tmp" 0 "%.0f\n" iButton
-    PrintC "[Dialectic] Mode selection sent."
+    PrintC "[DIALECTIC] Mode selection sent."
 End
