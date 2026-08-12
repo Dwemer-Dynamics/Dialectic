@@ -2406,7 +2406,7 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor && currentTarget.isAlive && currentTarget.formId != 0 && !currentTarget.name.empty()) {
+    if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
         if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
             Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
             Logger::LogInfo("GameLoop: TargetManager NPC %s is excluded, cannot start conversation",
@@ -2625,9 +2625,7 @@ static void PrepareTextInputTargetHint() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor &&
-        currentTarget.isAlive &&
-        currentTarget.formId != 0 &&
+    if (currentTarget.formId != 0 &&
         !currentTarget.name.empty() &&
         !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
         IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
