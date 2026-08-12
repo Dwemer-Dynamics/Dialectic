@@ -1169,6 +1169,15 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
             continue;
         }
 
+        const std::uint8_t baseType = reference->baseForm->typeID;
+        const bool validCharacter = reference->typeID == kFormType_Character &&
+            baseType == kFormType_TESNPC;
+        const bool validCreature = reference->typeID == kFormType_Creature &&
+            baseType == kFormType_TESCreature;
+        if (!validCharacter && !validCreature) {
+            continue;
+        }
+
         NativeActorState state;
         auto* actorBase = static_cast<TESActorBase*>(reference->baseForm);
         state.formId = reference->refID;
@@ -1176,7 +1185,7 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
         state.cellFormId = cell->refID;
         state.worldspaceFormId = cell->worldSpace ? cell->worldSpace->refID : 0;
         state.referenceType = reference->typeID;
-        state.baseType = reference->baseForm->typeID;
+        state.baseType = baseType;
         state.creature =
             reference->typeID == kFormType_Creature || state.baseType == kFormType_TESCreature;
         state.deleted = reference->IsDeleted() || reference->IsTaken() ||
