@@ -61,7 +61,7 @@
 #include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.2"
+#define DIALECTIC_VERSION "0.7.3"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION

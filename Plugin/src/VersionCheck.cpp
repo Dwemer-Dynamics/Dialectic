@@ -13,7 +13,7 @@
 #include <utility>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.2"
+#define DIALECTIC_VERSION "0.7.3"
 #endif
 
 namespace {
