@@ -3894,7 +3894,10 @@ static void ProcessNativeRuntimeEvents() {
                 g_loadedSaveInitBlocked = false;
                 break;
             case Type::CellChanged:
-                ResetRuntimeForAIActions("native_cell_changed", false, false, false);
+                // The event flag marks a hard interior/worldspace boundary.
+                if (event.flag) {
+                    ResetRuntimeForAIActions("native_cell_changed", false, false, false);
+                }
                 break;
             case Type::ReloadConfig:
                 MarkRuntimeConfigDirty();
