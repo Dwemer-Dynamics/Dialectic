@@ -58,9 +58,10 @@
 #include "TaskManager.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
+#include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.2"
+#define DIALECTIC_VERSION "0.7.3"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
@@ -220,6 +221,7 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "manualactivate" || normalizedKey == "manualactivatenpc") { return "ManualActivate"; }
     if (normalizedKey == "openmenu") { return "OpenMenu"; }
     if (normalizedKey == "quickcommand") { return "QuickCommand"; }
+    if (normalizedKey == "dialecticcontrol") { return "DialecticControl"; }
     if (normalizedKey == "dynamicprofilemenu") { return "DynamicProfileMenu"; }
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
@@ -278,16 +280,8 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
             outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC);
             return true;
         }
-        if (k == "dynamicprofilemenu") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu);
-            return true;
-        }
-        if (k == "togglemodes") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes);
-            return true;
-        }
-        if (k == "togglellmmodel") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel);
+        if (k == "dialecticcontrol") {
+            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl);
             return true;
         }
     }
@@ -353,9 +347,7 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "togglevoice") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice); return true; }
         if (k == "openmicmute") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::OpenMicMute); return true; }
         if (k == "manualactivate" || k == "manualactivatenpc") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC); return true; }
-        if (k == "dynamicprofilemenu") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu); return true; }
-        if (k == "togglemodes") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes); return true; }
-        if (k == "togglellmmodel") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel); return true; }
+        if (k == "dialecticcontrol") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl); return true; }
     }
 
     if (s == "rechat") {
@@ -1006,7 +998,11 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
         try {
             VoiceSampleBatchUploadFNV::BatchUploadSummary summary;
             const auto uploadResult = VoiceSampleBatchUploadFNV::SendAllVoiceSamples(summary,
-                [&token]() { return token.IsCancellationRequested(); });
+                [&token]() { return token.IsCancellationRequested(); },
+                [](int completed, int total) {
+                    DialecticInitialization::ReportVoiceProgress(
+                        static_cast<std::size_t>(completed), static_cast<std::size_t>(total));
+                });
             Logger::LogInfo(
                 "DialecticSendAllVoiceSamples result=%d mappings=%d csv=%d archive=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
                 static_cast<int>(uploadResult),
@@ -1021,8 +1017,12 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
             if (uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success || summary.uploaded > 0) {
                 AgentManager::RefreshRegisteredAgentVoices();
             }
+            const bool success = uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success &&
+                summary.missing == 0 && summary.failed == 0 && !summary.timedOut && !summary.cancelled;
+            DialecticInitialization::ReportVoiceFinished(success);
         } catch (...) {
             g_voiceSampleBatchRunning = false;
+            DialecticInitialization::ReportVoiceFinished(false);
             Logger::LogError("DialecticSendAllVoiceSamples worker failed with an exception");
             throw;
         }
@@ -1030,6 +1030,7 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
     }) == 0) {
         g_voiceSampleBatchRunning = false;
         Logger::LogWarning("DialecticSendAllVoiceSamples could not queue background task");
+        DialecticInitialization::ReportVoiceFinished(false);
         return false;
     }
 
@@ -1040,6 +1041,14 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
 
 static bool Cmd_DialecticSendAllVoiceSamples_Execute(COMMAND_ARGS) {
     Dialectic_RequestVoiceSampleBatch("NVSE command");
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticInitialize_Execute(COMMAND_ARGS) {
+    DialecticInitialization::Begin();
+    WorldDataSyncFNV::RequestSync();
+    Dialectic_RequestVoiceSampleBatch("DIALECTIC initialization");
     *result = 1;
     return true;
 }
@@ -1182,18 +1191,8 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
     return true;
 }
 
-static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
-    int action = -1;
+static bool Cmd_DialecticDeprecatedManageAIAgents_Execute(COMMAND_ARGS) {
     *result = 0;
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
-        Logger::LogWarning("DialecticManageAIAgents failed to extract action");
-        return true;
-    }
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-    GameLoop::ManageAIAgents(action);
-    *result = 1;
     return true;
 }
 
@@ -1312,43 +1311,48 @@ static bool Cmd_DialecticSetConfigFloatById_Execute(COMMAND_ARGS) {
 }
 
 static CommandInfo kCommandInfo_DialecticGetConfigInt = {
-    "DialecticGetConfigInt", "", 0, "Gets a Dialectic integer INI setting.", 0, 3,
+    "DialecticGetConfigInt", "", 0, "Gets a DIALECTIC integer INI setting.", 0, 3,
     kParams_ConfigStringsFallbackInt, Cmd_DialecticGetConfigInt_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigInt = {
-    "DialecticSetConfigInt", "", 0, "Sets a Dialectic integer INI setting.", 0, 3,
+    "DialecticSetConfigInt", "", 0, "Sets a DIALECTIC integer INI setting.", 0, 3,
     kParams_ConfigStringsValueInt, Cmd_DialecticSetConfigInt_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigFloat = {
-    "DialecticGetConfigFloat", "", 0, "Gets a Dialectic float INI setting.", 0, 3,
+    "DialecticGetConfigFloat", "", 0, "Gets a DIALECTIC float INI setting.", 0, 3,
     kParams_ConfigStringsFallbackFloat, Cmd_DialecticGetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigFloat = {
-    "DialecticSetConfigFloat", "", 0, "Sets a Dialectic float INI setting.", 0, 3,
+    "DialecticSetConfigFloat", "", 0, "Sets a DIALECTIC float INI setting.", 0, 3,
     kParams_ConfigStringsValueFloat, Cmd_DialecticSetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticReloadConfig = {
-    "DialecticReloadConfig", "", 0, "Reloads Dialectic INI settings.", 0, 0,
+    "DialecticReloadConfig", "", 0, "Reloads DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticReloadConfig_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSaveConfig = {
-    "DialecticSaveConfig", "", 0, "Saves Dialectic INI settings.", 0, 0,
+    "DialecticSaveConfig", "", 0, "Saves DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticSaveConfig_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSyncWorldData = {
-    "DialecticSyncWorldData", "", 0, "Syncs Fallout factions and locations to DialecticServer.", 0, 0,
+    "DialecticSyncWorldData", "", 0, "Syncs Fallout factions and locations to the DIALECTIC Server.", 0, 0,
     nullptr, Cmd_DialecticSyncWorldData_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSendAllVoiceSamples = {
-    "DialecticSendAllVoiceSamples", "", 0, "Uploads configured Fallout voice samples to DialecticServer.", 0, 0,
+    "DialecticSendAllVoiceSamples", "", 0, "Uploads configured Fallout voice samples to the DIALECTIC Server.", 0, 0,
     nullptr, Cmd_DialecticSendAllVoiceSamples_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticInitialize = {
+    "DialecticInitialize", "", 0, "Initializes DIALECTIC voice samples, factions, and locations.", 0, 0,
+    nullptr, Cmd_DialecticInitialize_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetRecordingDeviceCount = {
@@ -1372,53 +1376,53 @@ static CommandInfo kCommandInfo_DialecticSetRecordingDevice = {
 };
 
 static CommandInfo kCommandInfo_DialecticSendSetConf = {
-    "DialecticSendSetConf", "", 0, "Sends a DialecticServer setconf payload.", 0, 1,
+    "DialecticSendSetConf", "", 0, "Sends a DIALECTIC Server setconf payload.", 0, 1,
     kParams_SetConfPayload, Cmd_DialecticSendSetConf_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticUpdateActiveQuest = {
-    "DialecticUpdateActiveQuest", "", 0, "Sends the currently selected Fallout quest to DialecticServer.", 0, 3,
+    "DialecticUpdateActiveQuest", "", 0, "Sends the currently selected Fallout quest to the DIALECTIC Server.", 0, 3,
     kParams_ActiveQuestUpdate, Cmd_DialecticUpdateActiveQuest_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenModeMenu = {
-    "DialecticOpenModeMenu", "", 0, "Requests the Dialectic mode selector menu.", 0, 0,
+    "DialecticOpenModeMenu", "", 0, "Requests the DIALECTIC mode selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenModeMenu_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenLLMModelMenu = {
-    "DialecticOpenLLMModelMenu", "", 0, "Requests the Dialectic LLM model selector menu.", 0, 0,
+    "DialecticOpenLLMModelMenu", "", 0, "Requests the DIALECTIC LLM model selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenLLMModelMenu_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
-    "DialecticOpenDynamicProfileMenu", "", 0, "Requests the Dialectic dynamic profile selector menu.", 0, 0,
+    "DialecticOpenDynamicProfileMenu", "", 0, "Requests the DIALECTIC dynamic profile selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
-static CommandInfo kCommandInfo_DialecticManageAIAgents = {
-    "DialecticManageAIAgents", "", 0, "Runs an in-game Dialectic AI Agent management operation.", 0, 1,
-    kParams_Integer, Cmd_DialecticManageAIAgents_Execute, nullptr, nullptr, 0
+static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
+    "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
-    "DialecticDiagnosticBridgeTick", "", 0, "Records a lightweight Dialectic script-bridge diagnostic tick.", 0, 1,
+    "DialecticDiagnosticBridgeTick", "", 0, "Records a lightweight DIALECTIC script-bridge diagnostic tick.", 0, 1,
     kParams_Integer, Cmd_DialecticDiagnosticBridgeTick_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticClearActorSnapshotRequest = {
-    "DialecticClearActorSnapshotRequest", "", 0, "Acknowledges and removes Dialectic actor snapshot bridge requests.", 0, 0,
+    "DialecticClearActorSnapshotRequest", "", 0, "Acknowledges and removes DIALECTIC actor snapshot bridge requests.", 0, 0,
     nullptr, Cmd_DialecticClearActorSnapshotRequest_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticMarkPlayerInventoryDirty = {
     "DialecticMarkPlayerInventoryDirty", "", 0,
-    "Queues a coalesced native refresh of the player's Dialectic inventory.", 0, 0,
+    "Queues a coalesced native refresh of the player's DIALECTIC inventory.", 0, 0,
     nullptr, Cmd_DialecticMarkPlayerInventoryDirty_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHotkey = {
-    "DialecticHandleHotkey", "", 0, "Queues a configured Dialectic hotkey scan-code press.", 0, 1,
+    "DialecticHandleHotkey", "", 0, "Queues a configured DIALECTIC hotkey scan-code press.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkey_Execute, nullptr, nullptr, 0
 };
 
@@ -1428,27 +1432,27 @@ static CommandInfo kCommandInfo_DialecticHandleHaltHotkey = {
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHotkeyUp = {
-    "DialecticHandleHotkeyUp", "", 0, "Releases a configured Dialectic hotkey scan code.", 0, 1,
+    "DialecticHandleHotkeyUp", "", 0, "Releases a configured DIALECTIC hotkey scan code.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkeyUp_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigIntById = {
-    "DialecticGetConfigIntById", "", 0, "Gets a Dialectic integer INI setting by stable MCM id.", 0, 2,
+    "DialecticGetConfigIntById", "", 0, "Gets a DIALECTIC integer INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdFallbackInt, Cmd_DialecticGetConfigIntById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigIntById = {
-    "DialecticSetConfigIntById", "", 0, "Sets a Dialectic integer INI setting by stable MCM id.", 0, 2,
+    "DialecticSetConfigIntById", "", 0, "Sets a DIALECTIC integer INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdValueInt, Cmd_DialecticSetConfigIntById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigFloatById = {
-    "DialecticGetConfigFloatById", "", 0, "Gets a Dialectic float INI setting by stable MCM id.", 0, 2,
+    "DialecticGetConfigFloatById", "", 0, "Gets a DIALECTIC float INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdFallbackFloat, Cmd_DialecticGetConfigFloatById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigFloatById = {
-    "DialecticSetConfigFloatById", "", 0, "Sets a Dialectic float INI setting by stable MCM id.", 0, 2,
+    "DialecticSetConfigFloatById", "", 0, "Sets a DIALECTIC float INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdValueFloat, Cmd_DialecticSetConfigFloatById_Execute, nullptr, nullptr, 0
 };
 
@@ -1458,7 +1462,7 @@ static CommandInfo kCommandInfo_DialecticCaptureDialoguePrompt = {
 };
 
 static CommandInfo kCommandInfo_DialecticCaptureDialogue = {
-    "DialecticCaptureDialogue", "", 0, "Submits captured Fallout dialogue directly to the Dialectic runtime.", 0, 9,
+    "DialecticCaptureDialogue", "", 0, "Submits captured Fallout dialogue directly to the DIALECTIC runtime.", 0, 9,
     kParams_CapturedDialogue, Cmd_DialecticCaptureDialogue_Execute, nullptr, nullptr, 0
 };
 
@@ -1493,7 +1497,7 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenModeMenu,
         &kCommandInfo_DialecticOpenLLMModelMenu,
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
-        &kCommandInfo_DialecticManageAIAgents,
+        &kCommandInfo_DialecticDeprecatedManageAIAgents,
         &kCommandInfo_DialecticDiagnosticBridgeTick,
         &kCommandInfo_DialecticClearActorSnapshotRequest,
         &kCommandInfo_DialecticMarkPlayerInventoryDirty,
@@ -1504,7 +1508,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticGetCurrentRecordingDevice,
         &kCommandInfo_DialecticSetRecordingDevice,
         &kCommandInfo_DialecticUpdateFalloutStat,
-        &kCommandInfo_DialecticHandleHotkeyUp
+        &kCommandInfo_DialecticHandleHotkeyUp,
+        &kCommandInfo_DialecticInitialize
     };
 
     for (CommandInfo* command : commands) {

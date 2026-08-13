@@ -34,7 +34,7 @@ begin function {}
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            PrintC "[Dialectic] Wrote text input bridge file."
+            PrintC "[DIALECTIC] Wrote text input bridge file."
             sv_Destruct sTextInputMenu
         end) 600 105 "Talking to %z" sTargetName
         SetTextInputExtendedProps 0 0 0 32767 2
@@ -47,7 +47,7 @@ begin function {}
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            PrintC "[Dialectic] Wrote text input bridge file."
+            PrintC "[DIALECTIC] Wrote text input bridge file."
             sv_Destruct sTextInputMenu
         end) 600 105 "Talking to target"
         SetTextInputExtendedProps 0 0 0 32767 2

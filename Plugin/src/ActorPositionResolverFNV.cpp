@@ -753,6 +753,18 @@ PositionResult ResolveActor(uint32_t formId) {
     }
 
     if (nativeFresh) {
+        RefreshPositionCacheFromBridge();
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            const auto now = std::chrono::steady_clock::now();
+            const auto bridgeActor = g_latestBridgePositions.find(formId);
+            if (g_latestBridgeActorScanTime.time_since_epoch().count() != 0 &&
+                now - g_latestBridgeActorScanTime <= kPositionCacheTtl &&
+                bridgeActor != g_latestBridgePositions.end()) {
+                return bridgeActor->second;
+            }
+        }
+
         PositionResult result;
         result.source = "native_actor_registry";
         result.formId = formId;
@@ -942,6 +954,31 @@ std::vector<PositionResult> GetRecentActorPositions() {
                     "actor_registry", NativeComparisonTelemetry::Result::Unavailable,
                     "bridge snapshot unavailable");
             }
+        }
+
+        std::unordered_set<uint32_t> nativeFormIds;
+        nativeFormIds.reserve(nativePositions.size());
+        for (const PositionResult& position : nativePositions) {
+            nativeFormIds.insert(position.formId);
+        }
+
+        std::unordered_map<uint32_t, PositionResult> freshBridgePositions;
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            if (g_latestBridgeActorScanTime.time_since_epoch().count() != 0 &&
+                comparisonNow - g_latestBridgeActorScanTime <= kPositionCacheTtl) {
+                freshBridgePositions = g_latestBridgePositions;
+            }
+        }
+        for (const auto& entry : freshBridgePositions) {
+            PositionResult fallback = entry.second;
+            if (nativeFormIds.find(fallback.formId) != nativeFormIds.end() ||
+                !fallback.resolved ||
+                !IsPositionInPlayerScene(fallback)) {
+                continue;
+            }
+            CachePosition(fallback);
+            nativePositions.push_back(std::move(fallback));
         }
         return nativePositions;
     }

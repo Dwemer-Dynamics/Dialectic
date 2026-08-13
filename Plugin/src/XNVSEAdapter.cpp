@@ -46,6 +46,7 @@ Tile* g_passiveSubtitleTile = nullptr;
 Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
 Script* g_stopLookFunction = nullptr;
+Script* g_dialecticControlMenuFunction = nullptr;
 Script* g_modeMenuFunction = nullptr;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
@@ -1004,6 +1005,7 @@ void Shutdown() {
     g_eventManager = nullptr;
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
+    g_dialecticControlMenuFunction = nullptr;
     g_modeMenuFunction = nullptr;
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
@@ -1167,6 +1169,15 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
             continue;
         }
 
+        const std::uint8_t baseType = reference->baseForm->typeID;
+        const bool validCharacter = reference->typeID == kFormType_Character &&
+            baseType == kFormType_TESNPC;
+        const bool validCreature = reference->typeID == kFormType_Creature &&
+            baseType == kFormType_TESCreature;
+        if (!validCharacter && !validCreature) {
+            continue;
+        }
+
         NativeActorState state;
         auto* actorBase = static_cast<TESActorBase*>(reference->baseForm);
         state.formId = reference->refID;
@@ -1174,7 +1185,7 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
         state.cellFormId = cell->refID;
         state.worldspaceFormId = cell->worldSpace ? cell->worldSpace->refID : 0;
         state.referenceType = reference->typeID;
-        state.baseType = reference->baseForm->typeID;
+        state.baseType = baseType;
         state.creature =
             reference->typeID == kFormType_Creature || state.baseType == kFormType_TESCreature;
         state.deleted = reference->IsDeleted() || reference->IsTaken() ||
@@ -1995,12 +2006,21 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
     const char* source = nullptr;
     const char* name = "unknown";
     switch (menu) {
+        case NativeToolMenu::DialecticControl:
+            function = &g_dialecticControlMenuFunction;
+            name = "dialectic_control";
+            source = R"(
+begin function {}
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting:|Chat Modes|LLM Model|Dynamic Profiles|Close Menu"
+end
+)";
+            break;
         case NativeToolMenu::Mode:
             function = &g_modeMenuFunction;
             name = "mode";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^Dialectic Modes^Select active mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode"
+    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^DIALECTIC Chat Modes^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
 end
 )";
             break;
@@ -2009,7 +2029,7 @@ end
             name = "llm_model";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/LLMModelMenuSelect.gek") "^Dialectic LLM Model^Select active LLM connector slot:|Standard LLM|Fast LLM|Powerful LLM|Experimental LLM"
+    MessageBoxExAlt (CompileScript "Dialectic/LLMModelMenuSelect.gek") "^DIALECTIC LLM Model^Select active LLM connector slot:|Standard LLM|Fast LLM|Powerful LLM|Experimental LLM|Close Menu"
 end
 )";
             break;
@@ -2018,7 +2038,7 @@ end
             name = "dynamic_profile";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DynamicProfileMenuSelect.gek") "^Dialectic Dynamic Profiles^Select profile update target:|Target NPC|Nearby AI NPCs|Narrator"
+    MessageBoxExAlt (CompileScript "Dialectic/DynamicProfileMenuSelect.gek") "^DIALECTIC Dynamic Profiles^Select profile update target:|Target NPC|Nearby AI NPCs|Narrator|Close Menu"
 end
 )";
             break;

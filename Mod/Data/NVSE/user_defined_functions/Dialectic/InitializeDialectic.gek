@@ -9,6 +9,6 @@ Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
         return
     endif
 
-    SetINIIntC "Tools:SendVoiceSamples" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    DialecticSendAllVoiceSamples
+    SetINIIntC "Tools:InitializeDialectic" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    call (CompileScript "Dialectic/RunDialecticInitialization.gek")
 End

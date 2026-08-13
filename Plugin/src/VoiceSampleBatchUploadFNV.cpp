@@ -3,7 +3,6 @@
 #include "HTTPManager.h"
 #include "VoiceSampleOverridesFNV.h"
 #include "VoiceSampleResolverFNV.h"
-#include "Console.h"
 #include "RuntimeSnapshot.h"
 
 #include <algorithm>
@@ -335,7 +334,8 @@ namespace VoiceSampleBatchUploadFNV {
     }
 
     BatchUploadResult SendAllVoiceSamples(BatchUploadSummary& summary,
-                                          const std::function<bool()>& cancelRequested) {
+                                          const std::function<bool()>& cancelRequested,
+                                          const std::function<void(int, int)>& progress) {
         summary = BatchUploadSummary{};
         const auto deadline = std::chrono::steady_clock::now() + kBatchTimeout;
         Log("[VOICE_BATCH] Request accepted; loading Fallout voice mappings");
@@ -352,6 +352,9 @@ namespace VoiceSampleBatchUploadFNV {
             scanTimedOut,
             cancelRequested);
         summary.totalMappings = static_cast<int>(candidates.size());
+        if (progress) {
+            progress(0, summary.totalMappings);
+        }
         summary.timedOut = scanTimedOut;
         summary.cancelled = cancelRequested && cancelRequested();
         Log("[VOICE_BATCH] Candidate scan complete mappings=%d csv=%d loose_files_seen=%d archive_samples=%d timed_out=%d cancelled=%d",
@@ -365,7 +368,6 @@ namespace VoiceSampleBatchUploadFNV {
 
         if (candidates.empty()) {
             Log("[VOICE_BATCH] No Fallout voice sample mappings were loaded");
-            Console::Print("[Dialectic] No voice sample mappings found");
             return summary.timedOut ? BatchUploadResult::TimedOut : BatchUploadResult::NoSamplesUploaded;
         }
 
@@ -374,8 +376,6 @@ namespace VoiceSampleBatchUploadFNV {
             summary.csvMappings,
             summary.looseMappings,
             summary.archiveMappings);
-        Console::Print("[Dialectic] Uploading Fallout voice samples...");
-
         std::vector<VoiceSampleCandidate> orderedCandidates;
         orderedCandidates.reserve(candidates.size());
         for (const auto& pair : candidates) {
@@ -403,6 +403,9 @@ namespace VoiceSampleBatchUploadFNV {
                 Log("[VOICE_BATCH] Missing voice sample for %s: %s",
                     candidate.voiceType.c_str(),
                     candidate.hasArchiveEntry ? candidate.archiveEntry.archivePath.c_str() : candidate.dataPath.c_str());
+                if (progress) {
+                    progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+                }
                 continue;
             }
 
@@ -416,6 +419,9 @@ namespace VoiceSampleBatchUploadFNV {
                 Log("[VOICE_BATCH] Upload failed for %s from %s",
                     candidate.voiceType.c_str(),
                     candidate.originalName.c_str());
+                if (progress) {
+                    progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+                }
                 continue;
             }
 
@@ -425,6 +431,9 @@ namespace VoiceSampleBatchUploadFNV {
                 candidate.originalName.c_str(),
                 candidate.source.c_str(),
                 static_cast<unsigned long long>(candidate.fileSize));
+            if (progress) {
+                progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+            }
         }
 
         Log("[VOICE_BATCH] Complete: mappings=%d csv=%d loose_files_seen=%d archive_samples=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
@@ -438,11 +447,6 @@ namespace VoiceSampleBatchUploadFNV {
             summary.timedOut ? 1 : 0,
             summary.cancelled ? 1 : 0);
         if (summary.cancelled) return BatchUploadResult::Cancelled;
-        Console::Print("[Dialectic] Voice samples: %d uploaded, %d missing, %d failed",
-            summary.uploaded,
-            summary.missing,
-            summary.failed);
-
         if (summary.timedOut) {
             return BatchUploadResult::TimedOut;
         }

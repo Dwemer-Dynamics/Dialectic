@@ -33,6 +33,7 @@
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
+#include "DialecticInitialization.h"
 #include "TradeManager.h"
 #include "RuntimeSnapshot.h"
 #include "RuntimeGeneration.h"
@@ -65,7 +66,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.7.2"
+#define DIALECTIC_VERSION "0.7.3"
 #endif
 
 // Forward declarations
@@ -400,7 +401,7 @@ static bool IsConversationTargetEligible(
     Logger::LogInfo("GameLoop: Conversation target rejected by creature policy: %s (0x%08X): %s",
         name.c_str(), formId, reason.empty() ? "not eligible" : reason.c_str());
     if (notify) {
-        Console::Print("[Dialectic] Manually activate %s before talking.", name.c_str());
+        Console::Print("[DIALECTIC] Manually activate %s before talking.", name.c_str());
     }
     return false;
 }
@@ -481,7 +482,7 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
         oldPartner.c_str(),
         oldPartnerFormId,
         reason ? reason : "scene validation");
-    Console::Print("[Dialectic] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
+    Console::Print("[DIALECTIC] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
     StopConversation();
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
@@ -814,7 +815,7 @@ static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::str
     Logger::LogInfo("GameLoop: %s mode rejected %s (0x%08X), distance=%.1f radius=%.1f",
         Config::currentMode.c_str(), name.c_str(), formId, spatial.airDistance, radius);
     if (notify) {
-        Console::Print("[Dialectic] Move closer to %s", name.empty() ? "the target" : name.c_str());
+        Console::Print("[DIALECTIC] Move closer to %s", name.empty() ? "the target" : name.c_str());
     }
     return false;
 }
@@ -1098,7 +1099,7 @@ static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
     Config::narratorModeEnabled = modeIndex == 4;
 
     if (sendServerUpdate) {
-        Console::Print("[Dialectic] Mode: %s", modeLabel);
+        Console::Print("[DIALECTIC] Mode: %s", modeLabel);
     }
     Logger::LogInfo("GameLoop: Dialectic mode set to %s (%d)", modeName, modeIndex);
 
@@ -1156,6 +1157,19 @@ static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
     return !state.inGame || state.paused || state.pipboyOpen ||
         state.pauseMenuOpen || state.dialogueMenuOpen || state.barterMenuOpen ||
         state.containerMenuOpen || state.loadingMenuOpen;
+}
+
+void RequestDialecticControlMenuOpen() {
+    const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
+        Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
+        return;
+    }
+    Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
 }
 
 void RequestModeMenuOpen() {
@@ -1255,89 +1269,6 @@ void RequestDynamicProfileMenuOpen() {
     Logger::LogError("GameLoop: Failed to open dynamic profile selector through native UI adapter");
 }
 
-static std::string BuildAgentNameSummary(
-    const std::vector<std::pair<uint32_t, std::string>>& actors,
-    std::size_t limit = 8) {
-    std::ostringstream summary;
-    const std::size_t count = std::min(limit, actors.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        if (i > 0) {
-            summary << ", ";
-        }
-        summary << (actors[i].second.empty() ? "Unknown NPC" : actors[i].second);
-    }
-    if (actors.size() > count) {
-        summary << " and " << (actors.size() - count) << " more";
-    }
-    return summary.str();
-}
-
-void ManageAIAgents(int action) {
-    switch (action) {
-        case 0:
-            ActivationManager::ActivateCurrentTarget(ActivationManager::ActivationSource::Manual);
-            return;
-        case 1: {
-            const std::size_t count = ActivationManager::ActivateNearbyActors(
-                ActivationManager::ActivationSource::Manual);
-            Logger::LogInfo("GameLoop: AI Agent manager added %zu nearby actor(s)", count);
-            Console::Print("[Dialectic] Added %zu nearby AI agent(s)", count);
-            return;
-        }
-        case 2: {
-            uint32_t formId = 0;
-            std::string name;
-            const NPCDetector::NPCInfo crosshairNpc = NPCDetector::GetCrosshairNPC();
-            if (crosshairNpc.isValid) {
-                formId = crosshairNpc.formId;
-                name = crosshairNpc.name;
-            } else {
-                const auto& target = TargetManager::GetCurrentTarget();
-                formId = target.formId;
-                name = target.name;
-            }
-            if (formId == 0 || !ActivationManager::DeactivateActor(formId)) {
-                Console::Print("[Dialectic] Target is not an active AI agent");
-                return;
-            }
-            Logger::LogInfo("GameLoop: AI Agent manager removed %s (0x%08X)", name.c_str(), formId);
-            Console::Print("[Dialectic] Removed AI agent: %s", name.empty() ? "Unknown NPC" : name.c_str());
-            return;
-        }
-        case 3: {
-            const std::size_t count = ActivationManager::DeactivateAllActors();
-            Logger::LogInfo("GameLoop: AI Agent manager removed all %zu agent(s)", count);
-            Console::Print("[Dialectic] Removed %zu AI agent(s)", count);
-            return;
-        }
-        case 4: {
-            const auto agents = AgentManager::GetRegisteredAgentSnapshot();
-            const std::string names = BuildAgentNameSummary(agents);
-            Logger::LogInfo("GameLoop: Active AI agents (%zu): %s", agents.size(), names.c_str());
-            if (agents.empty()) {
-                Console::Print("[Dialectic] No active AI agents");
-            } else {
-                Console::Print("[Dialectic] Active AI agents (%zu): %s", agents.size(), names.c_str());
-            }
-            return;
-        }
-        case 5: {
-            const auto actors = ActivationManager::GetNearbyManageableActors();
-            const std::string names = BuildAgentNameSummary(actors);
-            Logger::LogInfo("GameLoop: Nearby manageable actors (%zu): %s", actors.size(), names.c_str());
-            if (actors.empty()) {
-                Console::Print("[Dialectic] No nearby NPCs available");
-            } else {
-                Console::Print("[Dialectic] Nearby NPCs (%zu): %s", actors.size(), names.c_str());
-            }
-            return;
-        }
-        default:
-            Logger::LogWarning("GameLoop: Ignoring unknown AI Agent management action=%d", action);
-            return;
-    }
-}
-
 static uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
     const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
     if (!speaker.empty() && IsPlayerSpeakerName(speaker)) {
@@ -1418,13 +1349,13 @@ static void SendDynamicProfileBatchRequest(const std::vector<std::string>& npcNa
     }
 
     if (cleaned.empty()) {
-        Console::Print("[Dialectic] No AI NPCs found for dynamic profile update");
+        Console::Print("[DIALECTIC] No AI NPCs found for dynamic profile update");
         Logger::LogInfo("GameLoop: Dynamic profile request skipped; empty NPC list");
         return;
     }
 
     const std::string npcList = JoinCsv(cleaned);
-    Console::Print("[Dialectic] Updating %zu dynamic profile%s",
+    Console::Print("[DIALECTIC] Updating %zu dynamic profile%s",
         cleaned.size(),
         cleaned.size() == 1 ? "" : "s");
     Logger::LogInfo("GameLoop: Sending updateprofiles_batch_async for [%s]", npcList.c_str());
@@ -1446,13 +1377,13 @@ static void SendDynamicProfileBatchRequest(const std::vector<std::string>& npcNa
 static void TriggerDynamicProfileForCurrentTarget() {
     const auto& target = TargetManager::GetCurrentTarget();
     if (!target.isActor || target.name.empty() || target.name == "<no name>") {
-        Console::Print("[Dialectic] Target an AI NPC to update their dynamic profile");
+        Console::Print("[DIALECTIC] Target an AI NPC to update their dynamic profile");
         Logger::LogInfo("GameLoop: UpdateTargetProfile skipped; invalid target");
         return;
     }
 
     if (!AgentManager::IsAIAgent(target.formId)) {
-        Console::Print("[Dialectic] %s is not an active Dialectic NPC", target.name.c_str());
+        Console::Print("[DIALECTIC] %s is not an active DIALECTIC NPC", target.name.c_str());
         Logger::LogInfo("GameLoop: UpdateTargetProfile skipped; %s 0x%08X is not an AI agent",
             target.name.c_str(),
             target.formId);
@@ -1465,7 +1396,7 @@ static void TriggerDynamicProfileForCurrentTarget() {
 static void TriggerDynamicProfilesForNearbyAgents() {
     const auto player = ActorPositionResolverFNV::ResolvePlayer();
     if (!player.resolved) {
-        Console::Print("[Dialectic] Could not resolve player position for nearby profile update");
+        Console::Print("[DIALECTIC] Could not resolve player position for nearby profile update");
         Logger::LogInfo("GameLoop: UpdateNearbyProfiles skipped; player position unresolved");
         return;
     }
@@ -1527,7 +1458,7 @@ static void TriggerDynamicProfilesForNearbyAgents() {
 }
 
 static void TriggerDynamicProfileForNarrator() {
-    Console::Print("[Dialectic] Updating The Narrator dynamic profile");
+    Console::Print("[DIALECTIC] Updating The Narrator dynamic profile");
     Logger::LogInfo("GameLoop: Sending updateprofile_narrator");
     HTTPManager::SendEvent("updateprofile_narrator", "{\"schema\":\"dialectic.dynamic_profile.v1\",\"npc\":\"The Narrator\"}");
 }
@@ -2219,7 +2150,7 @@ static bool ParseBridgeFlag(const std::unordered_map<std::string, std::string>& 
 
 static void CancelDialogueForCombatEntry() {
     Logger::LogInfo("GameLoop: Player entered combat - cancelling active AI dialogue");
-    Console::Print("[Dialectic] Combat started - clearing AI dialogue");
+    Console::Print("[DIALECTIC] Combat started - clearing AI dialogue");
     SpeakManager::CancelDialogueTurn("combat_entry", false, false);
     ResetBoredEventTimer("combat entry");
 }
@@ -2388,7 +2319,7 @@ static bool IsConversationTargetOnCooldown(uint32_t formId, const std::string& n
         formId,
         std::max<long long>(0, remainingMs) / 1000.0);
     if (notify) {
-        Console::Print("[Dialectic] %s has finished talking with you for now.",
+        Console::Print("[DIALECTIC] %s has finished talking with you for now.",
             displayName.empty() ? "This NPC" : displayName.c_str());
     }
     return true;
@@ -2402,13 +2333,13 @@ static FreshTargetResult TrySetCurrentTargetFromCrosshair(bool announceTarget) {
     }
 
     if (NPCDetector::IsExcluded(npc.formId, npc.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", npc.name.c_str());
         Logger::LogInfo("GameLoop: Crosshair NPC %s is excluded", npc.name.c_str());
         return FreshTargetResult::Blocked;
     }
 
     if (npc.isDead) {
-        Console::Print("[Dialectic] Cannot talk to %s (dead)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (dead)", npc.name.c_str());
         Logger::LogInfo("GameLoop: Crosshair NPC %s is dead", npc.name.c_str());
         return FreshTargetResult::Blocked;
     }
@@ -2432,7 +2363,7 @@ static bool UpdateConversationPartnerFromCurrentTarget(const char* reason) {
     }
 
     if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", currentTarget.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
         Logger::LogInfo("GameLoop: Current target %s is excluded", currentTarget.name.c_str());
         return false;
     }
@@ -2475,9 +2406,9 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor && currentTarget.isAlive && currentTarget.formId != 0 && !currentTarget.name.empty()) {
+    if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
         if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
-            Console::Print("[Dialectic] Cannot talk to %s (excluded)", currentTarget.name.c_str());
+            Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
             Logger::LogInfo("GameLoop: TargetManager NPC %s is excluded, cannot start conversation",
                 currentTarget.name.c_str());
             return ConversationStartResult::Blocked;
@@ -2533,7 +2464,7 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         }
 
         if (!bestPosition.resolved) {
-            Console::Print("[Dialectic] No NPC found nearby");
+            Console::Print("[DIALECTIC] No NPC found nearby");
             Logger::LogInfo("GameLoop: No valid NPC found for conversation");
             return ConversationStartResult::NoTarget;
         }
@@ -2549,13 +2480,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     if (NPCDetector::IsExcluded(npc.formId, npc.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", npc.name.c_str());
         Logger::LogInfo("GameLoop: NPC %s is excluded, cannot start conversation", npc.name.c_str());
         return ConversationStartResult::Blocked;
     }
 
     if (npc.isDead) {
-        Console::Print("[Dialectic] Cannot talk to %s (dead)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (dead)", npc.name.c_str());
         Logger::LogInfo("GameLoop: NPC %s is dead, cannot start conversation", npc.name.c_str());
         return ConversationStartResult::Blocked;
     }
@@ -2694,9 +2625,7 @@ static void PrepareTextInputTargetHint() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor &&
-        currentTarget.isAlive &&
-        currentTarget.formId != 0 &&
+    if (currentTarget.formId != 0 &&
         !currentTarget.name.empty() &&
         !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
         IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
@@ -2758,7 +2687,7 @@ static void ProcessTextInputBridge() {
         const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
         if (startResult != ConversationStartResult::Started) {
             if (startResult == ConversationStartResult::NoTarget) {
-                Console::Print("[Dialectic] Target an NPC before sending text");
+                Console::Print("[DIALECTIC] Target an NPC before sending text");
             }
             return;
         }
@@ -3766,16 +3695,20 @@ static void HandleOpenMicVoiceDetected() {
     if (!Config::openMicEnabled || Config::openMicMuted) {
         return;
     }
-    if ((!g_conversationActive && !Config::narratorModeEnabled) || g_voiceInputActive || VoiceRecorder::IsRecording()) {
-        Logger::LogInfo("GameLoop: Ignoring open mic trigger activeConversation=%d voiceActive=%d recording=%d",
-            g_conversationActive ? 1 : 0,
+    if (g_voiceInputActive || VoiceRecorder::IsRecording()) {
+        Logger::LogInfo("GameLoop: Ignoring open mic trigger voiceActive=%d recording=%d",
             g_voiceInputActive.load() ? 1 : 0,
             VoiceRecorder::IsRecording() ? 1 : 0);
         return;
     }
 
-    if (!g_conversationActive && Config::narratorModeEnabled) {
-        StartNarratorConversation("open mic narrator mode");
+    if (!g_conversationActive) {
+        if (Config::narratorModeEnabled) {
+            StartNarratorConversation("open mic narrator mode");
+        } else if (TryStartConversationFromCurrentTarget() != ConversationStartResult::Started) {
+            Logger::LogInfo("GameLoop: Open mic detected speech without an available NPC target");
+            return;
+        }
     }
 
     StartVoiceInputInternal(true);
@@ -3790,7 +3723,12 @@ static void UpdateOpenMicMonitoringState() {
     const bool shouldMonitor =
         Config::openMicEnabled &&
         !Config::openMicMuted &&
-        (g_conversationActive || Config::narratorModeEnabled) &&
+        g_gameState.isInGame &&
+        !g_gameState.isLoading &&
+        !g_gameState.isPaused &&
+        !g_gameState.isInMenu &&
+        !g_gameState.isInDialogue &&
+        InputManager::IsGameForeground() &&
         !g_voiceInputActive &&
         !VoiceRecorder::IsRecording();
 
@@ -3813,7 +3751,7 @@ static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool 
 
     Logger::LogInfo("GameLoop: Resetting AI runtime state (%s)", resetReason);
     if (showNotice) {
-        Console::Print("[Dialectic] Clearing active dialogue");
+        Console::Print("[DIALECTIC] Clearing active dialogue");
     }
 
     g_voiceInputActive = false;
@@ -4112,23 +4050,9 @@ void Update(float deltaTime) {
     }
     ProfileUpdateSubsystem("PipVisionManager::Update", []() { PipVisionManager::Update(); });
     
-    const bool dynamicProfileMenuTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::DynamicProfileMenu);
-    const bool toggleModesTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleModes);
-    const bool toggleLLMModelTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleLLMModel);
-
-    if (dynamicProfileMenuTriggered) {
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed");
-        RequestDynamicProfileMenuOpen();
-    }
-
-    if (toggleModesTriggered) {
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed");
-        RequestModeMenuOpen();
-    }
-
-    if (toggleLLMModelTriggered) {
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed");
-        RequestLLMModelMenuOpen();
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::DialecticControl)) {
+        Logger::LogInfo("GameLoop: DialecticControl hotkey pressed");
+        RequestDialecticControlMenuOpen();
     }
 
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::OpenMicMute)) {
@@ -4139,13 +4063,13 @@ void Update(float deltaTime) {
             Config::openMicMuted ? "1" : "0");
         UpdateOpenMicMonitoringState();
         Logger::LogInfo("GameLoop: Open mic mute toggled muted=%d", Config::openMicMuted ? 1 : 0);
-        Console::Print(Config::openMicMuted ? "[Dialectic] Open mic muted" : "[Dialectic] Open mic unmuted");
+        Console::Print(Config::openMicMuted ? "[DIALECTIC] Open mic muted" : "[DIALECTIC] Open mic unmuted");
     }
     
     // Voice input handling (hold-to-talk)
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
-            Console::Print("[Dialectic] Already recording...");
+            Console::Print("[DIALECTIC] Recording...");
         } else {
             ClearConversationIfPartnerLeftScene("voice input");
             if (!g_conversationActive) {
@@ -4156,7 +4080,7 @@ void Update(float deltaTime) {
                     const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
                     if (startResult != ConversationStartResult::Started) {
                         if (startResult == ConversationStartResult::NoTarget) {
-                            Console::Print("[Dialectic] Target an NPC first");
+                            Console::Print("[DIALECTIC] Target an NPC");
                         }
                         return;
                     }
@@ -4197,6 +4121,7 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("SpeakManager::ProcessQueue", []() { SpeakManager::ProcessQueue(); });
         ProfileUpdateSubsystem("LoadedPluginsFNV::Update", []() { LoadedPluginsFNV::Update(); });
         ProfileUpdateSubsystem("WorldDataSyncFNV::Update", []() { WorldDataSyncFNV::Update(); });
+        ProfileUpdateSubsystem("DialecticInitialization::Update", []() { DialecticInitialization::Update(); });
         ProfileUpdateSubsystem("SpatialSnapshotManagerFNV::Update", []() {
             SpatialSnapshotManagerFNV::Update(1);
         });
@@ -4250,14 +4175,14 @@ static bool EnforceCombatDialogueGate(uint32_t actorFormId, const char* source, 
         source ? source : "unknown",
         actorFormId);
     if (notify) {
-        Console::Print("[Dialectic] AI dialogue is disabled during combat");
+        Console::Print("[DIALECTIC] AI dialogue is disabled during combat");
     }
     return false;
 }
 
 void HaltAIActionsNow() {
     Log("GameLoop: Halt AI Actions requested");
-    Console::Print("[Dialectic] Halting AI actions");
+    Console::Print("[DIALECTIC] Halting AI actions");
 
     const int haltedActors = ResetRuntimeForAIActions("halt_ai_actions", true, false, true);
     Logger::LogInfo("GameLoop: Halt AI Actions completed for %d actor(s)", haltedActors);
@@ -4268,7 +4193,7 @@ bool StartConversation() {
     
     if (!target.isActor || !target.isAlive) {
         Log("GameLoop: Cannot start conversation - invalid target");
-        Console::Print("[Dialectic] Target is not a valid NPC");
+        Console::Print("[DIALECTIC] Target is not a valid NPC");
         return false;
     }
 
@@ -4337,7 +4262,7 @@ void StopConversation() {
     if (!g_conversationActive) return;
     
     Log("GameLoop: Ending conversation with %s", g_conversationPartner.c_str());
-    Console::Print("[Dialectic] Conversation ended");
+    Console::Print("[DIALECTIC] Conversation ended");
     
     // Stop any ongoing speech
     SpeakManager::CancelDialogueTurn("conversation_stop", true, false);
@@ -4362,7 +4287,7 @@ void StopConversation() {
 void SendPlayerMessage(const std::string& message) {
     if (!g_conversationActive) {
         Log("GameLoop: Cannot send message - no active conversation");
-    Console::Print("[Dialectic] No active conversation");
+    Console::Print("[DIALECTIC] No active conversation");
         return;
     }
 
@@ -4506,7 +4431,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     if (!g_conversationActive) {
         Log("GameLoop: Voice input requested without active conversation");
         if (!openMicTriggered) {
-            Console::Print("[Dialectic] Target an NPC first");
+            Console::Print("[DIALECTIC] Target an NPC");
         }
         return;
     }
@@ -4519,16 +4444,14 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     int voiceKey = openMicTriggered ? -1 : InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice);
     if (!openMicTriggered && voiceKey <= 0) {
         Log("GameLoop: Voice input requested with no bound hotkey");
-        Console::Print("[Dialectic] Mic is not bound");
+        Console::Print("[DIALECTIC] Voice key not bound");
         return;
     }
 
     Log("GameLoop: Starting %s voice input on device: %s",
         openMicTriggered ? "open-mic" : "push-to-talk",
         VoiceRecorder::GetCurrentRecordingDeviceName().c_str());
-    Console::Print(openMicTriggered
-        ? "[Dialectic] Open mic recording..."
-        : "[Dialectic] Recording... (release voice key to send)");
+    Console::Print("[DIALECTIC] Recording...");
 
     ResetBoredEventTimer(openMicTriggered ? "open mic recording start" : "voice recording start");
     // Treat mic input as player interruption: new player intent cancels
@@ -4563,12 +4486,12 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
                 SendPlayerMessage(cleanedText);
             } else {
                 Log("GameLoop: No active conversation for voice input");
-                Console::Print("[Dialectic] No active conversation");
+                Console::Print("[DIALECTIC] No active conversation");
             }
         } else {
             Log("GameLoop: STT returned empty result");
             if (!openMicTriggered) {
-                Console::Print("[Dialectic] Could not transcribe audio");
+                Console::Print("[DIALECTIC] No speech detected");
             }
         }
     }, openMicSilenceMs);
