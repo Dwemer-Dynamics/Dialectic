@@ -220,6 +220,8 @@ namespace HTTPManager {
                jsonBody.find("\"type\":\"nearby_actors\"") != std::string::npos ||
                jsonBody.find("\"type\":\"nearby_items\"") != std::string::npos ||
                jsonBody.find("\"type\":\"points_of_interest\"") != std::string::npos ||
+               jsonBody.find("\"type\":\"world_factions\"") != std::string::npos ||
+               jsonBody.find("\"type\":\"world_locations\"") != std::string::npos ||
                jsonBody.find("\"type\":\"activity_status_bulk\"") != std::string::npos;
     }
 
