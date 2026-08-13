@@ -1018,7 +1018,7 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
                 AgentManager::RefreshRegisteredAgentVoices();
             }
             const bool success = uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success &&
-                summary.missing == 0 && summary.failed == 0 && !summary.timedOut && !summary.cancelled;
+                summary.failed == 0 && !summary.timedOut && !summary.cancelled;
             DialecticInitialization::ReportVoiceFinished(success);
         } catch (...) {
             g_voiceSampleBatchRunning = false;
@@ -1046,7 +1046,12 @@ static bool Cmd_DialecticSendAllVoiceSamples_Execute(COMMAND_ARGS) {
 }
 
 static bool Cmd_DialecticInitialize_Execute(COMMAND_ARGS) {
-    DialecticInitialization::Begin();
+    if (!DialecticInitialization::TryBegin()) {
+        Logger::LogInfo("DIALECTIC initialization request ignored; initialization is already active");
+        *result = 1;
+        return true;
+    }
+
     WorldDataSyncFNV::RequestSync();
     Dialectic_RequestVoiceSampleBatch("DIALECTIC initialization");
     *result = 1;
