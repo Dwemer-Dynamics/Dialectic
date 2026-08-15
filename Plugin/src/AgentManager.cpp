@@ -116,6 +116,8 @@ namespace AgentManager {
         }
         return nullptr;
     }
+
+    static std::string NormalizeName(const std::string& value);
     
     bool IsAIAgent(uint32_t formID) {
         std::lock_guard<std::mutex> lock(g_agentsMutex);
@@ -127,10 +129,38 @@ namespace AgentManager {
     }
 
     void RegisterAIAgent(uint32_t formID, const std::string& name, RegistrationSource source, float distance) {
-        std::lock_guard<std::mutex> lock(g_agentsMutex);
         if (formID == 0) {
             return;
         }
+
+        std::vector<uint32_t> sameNameAgents;
+        {
+            const std::string targetName = NormalizeName(name);
+            std::lock_guard<std::mutex> lock(g_agentsMutex);
+            for (const auto& existing : g_agents) {
+                if (!existing ||
+                    existing->formID == formID ||
+                    targetName.empty() ||
+                    NormalizeName(existing->actorName) != targetName) {
+                    continue;
+                }
+                sameNameAgents.push_back(existing->formID);
+            }
+        }
+        std::vector<uint32_t> deletedSameNameAgents;
+        for (uint32_t existingFormID : sameNameAgents) {
+            RuntimeSnapshot::ActorState actor;
+            if (RuntimeSnapshot::TryGetActor(existingFormID, actor) && actor.deleted) {
+                deletedSameNameAgents.push_back(existingFormID);
+            }
+        }
+        for (uint32_t deletedFormID : deletedSameNameAgents) {
+            Log("AgentManager: Retiring deleted same-name agent replaced by 0x%08X: 0x%08X",
+                formID, deletedFormID);
+            UnregisterAIAgent(deletedFormID);
+        }
+
+        std::lock_guard<std::mutex> lock(g_agentsMutex);
 
         std::shared_ptr<AIAgent> agent = FindAgentLocked(formID);
         if (!agent) {
@@ -250,13 +280,27 @@ namespace AgentManager {
             return 0;
         }
 
-        std::lock_guard<std::mutex> lock(g_agentsMutex);
-        for (const auto& agent : g_agents) {
-            if (agent && NormalizeName(agent->actorName) == target) {
-                return agent->formID;
+        std::vector<uint32_t> matchingFormIDs;
+        {
+            std::lock_guard<std::mutex> lock(g_agentsMutex);
+            for (const auto& agent : g_agents) {
+                if (agent && NormalizeName(agent->actorName) == target) {
+                    matchingFormIDs.push_back(agent->formID);
+                }
             }
         }
-        return 0;
+
+        for (uint32_t formID : matchingFormIDs) {
+            RuntimeSnapshot::ActorState actor;
+            if (RuntimeSnapshot::TryGetActor(formID, actor) &&
+                actor.loaded3D &&
+                !actor.deleted &&
+                !actor.dead) {
+                return formID;
+            }
+        }
+
+        return matchingFormIDs.empty() ? 0 : matchingFormIDs.front();
     }
 
     std::vector<std::pair<uint32_t, std::string>> GetRegisteredAgentSnapshot() {

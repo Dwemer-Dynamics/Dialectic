@@ -52,6 +52,9 @@ bool IsConversationActive();
 // Get current conversation partner name
 const std::string& GetConversationPartner();
 
+// Get the live reference bound to the current conversation partner
+uint32_t GetConversationPartnerFormId();
+
 // Process voice input (when voice key is held/released)
 void StartVoiceInput();
 void StopVoiceInput();

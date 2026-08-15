@@ -3754,7 +3754,112 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return actorFormIdNameMismatch ? 0 : line.actorFormId;
     }
 
-    static bool ShouldDropLineBeforePlayback(const ScriptLine& line, std::string* reason = nullptr) {
+    // Require a current-scene actor before binding queued dialogue to a reference.
+    static bool IsLivePlaybackSpeaker(uint32_t formId,
+                                      const std::string& expectedName,
+                                      std::string* reason = nullptr) {
+        if (formId == 0) {
+            if (reason) {
+                *reason = "speaker form id is unresolved";
+            }
+            return false;
+        }
+
+        const auto position = ActorPositionResolverFNV::ResolveActor(formId);
+        if (!position.resolved) {
+            if (reason) {
+                *reason = "speaker position is unresolved";
+            }
+            return false;
+        }
+        if (!position.actorName.empty() && !EqualsIgnoreCase(position.actorName, expectedName)) {
+            if (reason) {
+                *reason = "speaker form id belongs to a different actor";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsPositionInPlayerScene(position)) {
+            if (reason) {
+                *reason = "speaker is not in the player's current scene";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsActorPositionFresh(formId, kDialogueActorFreshnessMs)) {
+            if (reason) {
+                *reason = "speaker position is stale";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsActorInLatestScan(formId, kDialogueActorLatestScanMs)) {
+            if (reason) {
+                *reason = "speaker is not present in the latest spatial scan";
+            }
+            return false;
+        }
+        if (position.disabledKnown && position.isDisabled) {
+            if (reason) {
+                *reason = "speaker is disabled";
+            }
+            return false;
+        }
+        if (position.deadKnown && position.isDead) {
+            if (reason) {
+                *reason = "speaker is dead";
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    // Rebind once from live conversation state when a queued dynamic reference expires.
+    static bool TryRebindSpeakerForPlayback(ScriptLine& line,
+                                            uint32_t rejectedFormId,
+                                            const std::string& rejectionReason) {
+        struct Candidate {
+            uint32_t formId = 0;
+            const char* source = "";
+        };
+
+        std::vector<Candidate> candidates;
+        if (GameLoop::IsConversationActive() &&
+            EqualsIgnoreCase(GameLoop::GetConversationPartner(), line.actor)) {
+            candidates.push_back({GameLoop::GetConversationPartnerFormId(), "active conversation"});
+        }
+
+        const auto& target = TargetManager::GetCurrentTarget();
+        if (EqualsIgnoreCase(target.name, line.actor)) {
+            candidates.push_back({target.formId, "current target"});
+        }
+
+        for (const auto& position : ActorPositionResolverFNV::GetRecentActorPositions()) {
+            if (position.resolved && EqualsIgnoreCase(position.actorName, line.actor)) {
+                candidates.push_back({position.formId, "spatial scan"});
+            }
+        }
+
+        for (const Candidate& candidate : candidates) {
+            if (candidate.formId == 0 || candidate.formId == rejectedFormId) {
+                continue;
+            }
+            if (!IsLivePlaybackSpeaker(candidate.formId, line.actor)) {
+                continue;
+            }
+
+            line.actorFormId = candidate.formId;
+            Log("SpeakManager: Rebound queued speaker '%s' old=0x%08X new=0x%08X reason='%s' source='%s'",
+                line.actor.c_str(),
+                rejectedFormId,
+                candidate.formId,
+                rejectionReason.c_str(),
+                candidate.source);
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool ShouldDropLineBeforePlayback(ScriptLine& line, std::string* reason = nullptr) {
         if (line.runtimeGeneration != 0 && !RuntimeGeneration::IsCurrent(line.runtimeGeneration)) {
             if (reason) {
                 *reason = "runtime generation changed before playback";
@@ -3763,14 +3868,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         if (!IsActorDialogueLine(line)) {
             return false;
-        }
-
-        const uint32_t speakerFormId = ResolveSpeakerFormId(line);
-        if (speakerFormId == 0) {
-            if (reason) {
-                *reason = "speaker form id is unresolved";
-            }
-            return true;
         }
 
         const std::string currentSceneKey = CurrentPlayerSceneKey();
@@ -3784,44 +3881,19 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return true;
         }
 
-        const auto position = ActorPositionResolverFNV::ResolveActor(speakerFormId);
-        if (!position.resolved) {
-            if (reason) {
-                *reason = "speaker position is unresolved";
+        const uint32_t speakerFormId = ResolveSpeakerFormId(line);
+        std::string speakerReason;
+        if (!IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
+            if (TryRebindSpeakerForPlayback(line, speakerFormId, speakerReason)) {
+                return false;
             }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsPositionInPlayerScene(position)) {
             if (reason) {
-                *reason = "speaker is not in the player's current scene";
-            }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsActorPositionFresh(speakerFormId, kDialogueActorFreshnessMs)) {
-            if (reason) {
-                *reason = "speaker position is stale";
-            }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsActorInLatestScan(speakerFormId, kDialogueActorLatestScanMs)) {
-            if (reason) {
-                *reason = "speaker is not present in the latest spatial scan";
-            }
-            return true;
-        }
-        if (position.disabledKnown && position.isDisabled) {
-            if (reason) {
-                *reason = "speaker is disabled";
-            }
-            return true;
-        }
-        if (position.deadKnown && position.isDead) {
-            if (reason) {
-                *reason = "speaker is dead";
+                *reason = speakerReason;
             }
             return true;
         }
 
+        line.actorFormId = speakerFormId;
         return false;
     }
 
@@ -4540,6 +4612,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 UpdatePlaybackFrame();
                 return;
             }
+            readyAudio.actorFormId = readyAudio.line.actorFormId;
 
             if (readyAudio.textOnlyFallback) {
                 g_currentSpeaker = readyAudio.speaker;
