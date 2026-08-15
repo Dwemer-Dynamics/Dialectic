@@ -5,6 +5,7 @@
 #include "AgentManager.h"
 #include "Config.h"
 #include "Console.h"
+#include "GameLoop.h"
 #include "Logger.h"
 #include "Misc.h"
 #include "ResponseQueueFNV.h"
@@ -435,13 +436,26 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
         return 0;
     }
 
-    uint32_t agentFormId = AgentManager::FindAgentFormIdByName(speaker);
-    if (agentFormId != 0) {
-        return agentFormId;
+    if (GameLoop::IsConversationActive()) {
+        const uint32_t conversationFormId = GameLoop::GetConversationPartnerFormId();
+        const std::string registeredName = AgentManager::GetAgentName(conversationFormId);
+        const auto conversationPosition = ActorPositionResolverFNV::ResolveActor(conversationFormId);
+        if (conversationFormId != 0 &&
+            (EqualsIgnoreCase(registeredName, speaker) ||
+             (conversationPosition.resolved &&
+              EqualsIgnoreCase(conversationPosition.actorName, speaker)))) {
+            Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from active conversation as 0x%08X",
+                speaker.c_str(),
+                conversationFormId);
+            return conversationFormId;
+        }
     }
 
     const auto& target = TargetManager::GetCurrentTarget();
     if (target.formId != 0 && EqualsIgnoreCase(target.name, speaker)) {
+        Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from current target as 0x%08X",
+            speaker.c_str(),
+            target.formId);
         return target.formId;
     }
 
@@ -450,12 +464,25 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
     for (const auto& position : positions) {
         if (position.resolved &&
             position.formId != 0 &&
-            EqualsIgnoreCase(position.actorName, speaker)) {
+            EqualsIgnoreCase(position.actorName, speaker) &&
+            ActorPositionResolverFNV::IsPositionInPlayerScene(position) &&
+            ActorPositionResolverFNV::IsActorPositionFresh(position.formId, 8000) &&
+            ActorPositionResolverFNV::IsActorInLatestScan(position.formId, 8000) &&
+            !(position.disabledKnown && position.isDisabled) &&
+            !(position.deadKnown && position.isDead)) {
             Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from spatial cache as 0x%08X",
                 speaker.c_str(),
                 position.formId);
             return position.formId;
         }
+    }
+
+    const uint32_t agentFormId = AgentManager::FindAgentFormIdByName(speaker);
+    if (agentFormId != 0) {
+        Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from agent registry fallback as 0x%08X",
+            speaker.c_str(),
+            agentFormId);
+        return agentFormId;
     }
 
     return 0;

@@ -98,10 +98,10 @@ static bool EnforceCombatDialogueGate(uint32_t actorFormId, const char* source, 
 static GameState g_gameState;
 
 // Conversation state
-static bool g_conversationActive = false;
+static std::atomic<bool> g_conversationActive{false};
 static bool g_conversationIsNarrator = false;
 static std::string g_conversationPartner;
-static uint32_t g_conversationPartnerFormId = 0;
+static std::atomic<uint32_t> g_conversationPartnerFormId{0};
 struct ConversationCooldownEntry {
     std::string name;
     std::chrono::steady_clock::time_point until;
@@ -2643,7 +2643,7 @@ static void PrepareTextInputTargetHint() {
         WriteTextInputTargetHint(g_conversationPartner);
         Logger::LogInfo("GameLoop: Prepared active conversation chatbox target %s (0x%08X)",
             g_conversationPartner.c_str(),
-            g_conversationPartnerFormId);
+            g_conversationPartnerFormId.load());
         return;
     }
 
@@ -4224,7 +4224,7 @@ bool StartConversation() {
     SpeakManager::GuardActorForPendingDialogue(g_conversationPartnerFormId, g_conversationPartner);
     
     Log("GameLoop: Started conversation with %s (0x%08X)", 
-        g_conversationPartner.c_str(), g_conversationPartnerFormId);
+        g_conversationPartner.c_str(), g_conversationPartnerFormId.load());
     
     std::ostringstream npcId;
     npcId << "0x" << std::hex << std::setw(8) << std::setfill('0') << g_conversationPartnerFormId << std::dec;
@@ -4351,7 +4351,7 @@ void SendPlayerMessage(const std::string& message) {
             900);
         Log("GameLoop: Prompt metadata refresh for %s (0x%08X) ok=%d",
             g_conversationPartner.c_str(),
-            g_conversationPartnerFormId,
+            g_conversationPartnerFormId.load(),
             metadataOk ? 1 : 0);
     }
     if (Config::worldContextSendBeforePlayerInput) {
@@ -4418,11 +4418,15 @@ void SendPlayerMessage(const std::string& message) {
 }
 
 bool IsConversationActive() {
-    return g_conversationActive;
+    return g_conversationActive.load();
 }
 
 const std::string& GetConversationPartner() {
     return g_conversationPartner;
+}
+
+uint32_t GetConversationPartnerFormId() {
+    return g_conversationPartnerFormId.load();
 }
 
 void StartVoiceInput() {
