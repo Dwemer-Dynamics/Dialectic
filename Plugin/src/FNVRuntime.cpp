@@ -464,6 +464,8 @@ void CaptureFrame() {
 
     if (g_lastCellFormId != 0 && native.cellFormId != 0 && native.cellFormId != g_lastCellFormId) {
         const std::uint32_t previous = g_lastCellFormId;
+        const bool sameExteriorWorldspace = g_lastWorldspaceFormId != 0 &&
+            native.worldspaceFormId == g_lastWorldspaceFormId;
         Logger::LogInfo("[NATIVE_RUNTIME] cell changed old=0x%08X new=0x%08X",
             previous, native.cellFormId);
         ActionManager::CancelNativeRuntimeActions("cell_changed");
@@ -472,16 +474,19 @@ void CaptureFrame() {
         ActorPositionResolverFNV::InvalidateCache();
         SpatialAwarenessFNV::InvalidateCache();
         SpatialSnapshotManagerFNV::Invalidate();
-        const std::uint64_t generation = RuntimeGeneration::Advance("cell_changed");
-        GameThreadDispatcher::CancelAll("cell_changed");
-        TaskManager::CancelOlderThanGeneration(generation);
+        std::uint64_t generation = RuntimeGeneration::Current();
+        if (!sameExteriorWorldspace) {
+            generation = RuntimeGeneration::Advance("cell_changed");
+            GameThreadDispatcher::CancelAll("cell_changed");
+            TaskManager::CancelOlderThanGeneration(generation);
+        }
         g_lastActorCapture = {};
         g_lastEquipmentCapture = {};
         g_lastReferenceCapture = {};
         g_lastNavCaptureAttempt = {};
         g_lastQuestCapture = {};
         RuntimeEventBus::Publish({RuntimeEventBus::EventType::CellChanged, generation, 0,
-            native.cellFormId, previous, false, {}});
+            native.cellFormId, previous, !sameExteriorWorldspace, {}});
     }
     if (g_lastWorldspaceFormId != 0 && native.worldspaceFormId != g_lastWorldspaceFormId) {
         Logger::LogInfo("[NATIVE_RUNTIME] worldspace changed old=0x%08X new=0x%08X",

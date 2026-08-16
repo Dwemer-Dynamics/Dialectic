@@ -7,7 +7,7 @@
 
 namespace DialecticInitialization {
 
-void Begin();
+bool TryBegin();
 void QueueNotice(std::string message, IngameNotifier::Level level);
 void ReportVoiceProgress(std::size_t completed, std::size_t total);
 void ReportVoiceFinished(bool success);

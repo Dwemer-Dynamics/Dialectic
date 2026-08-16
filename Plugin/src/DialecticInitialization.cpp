@@ -69,8 +69,12 @@ void QueueFinalNoticeIfReady() {
 
 } // namespace
 
-void Begin() {
+bool TryBegin() {
     std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_active) {
+        return false;
+    }
+
     g_active = true;
     g_voiceFinished = false;
     g_voiceSucceeded = false;
@@ -86,6 +90,7 @@ void Begin() {
         "DIALECTIC initialization has started. Please wait.",
         IngameNotifier::Level::Success
     });
+    return true;
 }
 
 void QueueNotice(std::string message, IngameNotifier::Level level) {
