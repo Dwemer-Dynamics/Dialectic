@@ -898,6 +898,14 @@ static std::atomic<bool> g_textInputMenuPending(false);
 static std::atomic<DWORD> g_textInputMenuRequestTick(0);
 static std::atomic<DWORD> g_textInputMenuBlockUntilTick(0);
 
+struct PreparedTextInputTarget {
+    uint32_t formId = 0;
+    std::string name;
+    std::uint64_t runtimeGeneration = 0;
+};
+
+static PreparedTextInputTarget g_preparedTextInputTarget;
+
 static bool WriteToolBridgeSignal(const char* path, const char* label) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -2406,7 +2414,11 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
+    if (currentTarget.formId != 0 && !currentTarget.name.empty() &&
+        (!currentTarget.isActor || !currentTarget.isAlive)) {
+        Logger::LogInfo("GameLoop: Remembered target %s (0x%08X) has stale actor state; continuing target fallback",
+            currentTarget.name.c_str(), currentTarget.formId);
+    } else if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
         if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
             Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
             Logger::LogInfo("GameLoop: TargetManager NPC %s is excluded, cannot start conversation",
@@ -2505,8 +2517,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         : ConversationStartResult::Blocked;
 }
 
-static bool WriteTextInputTargetHint(const std::string& targetName) {
-    if (targetName.empty()) {
+static void ClearPreparedTextInputTarget() {
+    g_preparedTextInputTarget = {};
+}
+
+static bool WriteTextInputTargetHint(uint32_t formId, const std::string& targetName) {
+    if (formId == 0 || targetName.empty()) {
+        ClearPreparedTextInputTarget();
         ClearToolBridgeFile(kTextInputTargetPath);
         return false;
     }
@@ -2514,10 +2531,18 @@ static bool WriteTextInputTargetHint(const std::string& targetName) {
     std::ofstream out(kTextInputTargetPath, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
         Logger::LogWarning("GameLoop: Failed to write text input target hint");
+        ClearPreparedTextInputTarget();
         return false;
     }
 
     out << targetName << "\n";
+    g_preparedTextInputTarget.formId = formId;
+    g_preparedTextInputTarget.name = targetName;
+    g_preparedTextInputTarget.runtimeGeneration = RuntimeGeneration::Current();
+    Logger::LogInfo("[TEXT_INPUT_TARGET] retained form=0x%08X name=%s generation=%llu",
+        formId,
+        targetName.c_str(),
+        static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
     return true;
 }
 
@@ -2548,7 +2573,7 @@ static bool PrepareTargetFromNpcInfo(const NPCDetector::NPCInfo& npc, const char
     }
 
     TargetManager::SetCurrentTarget(npc.formId, npc.name, true);
-    WriteTextInputTargetHint(npc.name);
+    WriteTextInputTargetHint(npc.formId, npc.name);
     Logger::LogInfo("GameLoop: Prepared %s chatbox target %s (0x%08X)",
         source ? source : "unknown",
         npc.name.c_str(),
@@ -2601,7 +2626,7 @@ static bool PrepareNearestSpatialTextInputTarget(float maxDistance) {
     }
 
     TargetManager::SetCurrentTarget(bestPosition.formId, bestPosition.actorName, true);
-    WriteTextInputTargetHint(bestPosition.actorName);
+    WriteTextInputTargetHint(bestPosition.formId, bestPosition.actorName);
     Logger::LogInfo("GameLoop: Prepared nearest spatial chatbox target %s (0x%08X)",
         bestPosition.actorName.c_str(),
         bestPosition.formId);
@@ -2609,14 +2634,59 @@ static bool PrepareNearestSpatialTextInputTarget(float maxDistance) {
 }
 
 static void PrepareTextInputTargetHint() {
+    ClearPreparedTextInputTarget();
     ClearToolBridgeFile(kTextInputTargetPath);
 
-    if (PrepareTargetFromNpcInfo(NPCDetector::GetCrosshairNPC(), "crosshair")) {
+    const float targetRadius = GetConversationTargetRadius();
+    const NPCDetector::NPCInfo crosshairTarget = NPCDetector::GetCrosshairNPC();
+    const NPCDetector::NPCInfo closestTarget = NPCDetector::GetClosestNPC(targetRadius);
+    const auto currentTarget = TargetManager::GetCurrentTarget();
+    Logger::LogInfo(
+        "[TEXT_INPUT_TARGET] open generation=%llu radius=%.1f "
+        "crosshair(valid=%d form=0x%08X name=%s dead=%d creature=%d distance=%.1f) "
+        "closest(valid=%d form=0x%08X name=%s dead=%d creature=%d distance=%.1f) "
+        "current(form=0x%08X name=%s actor=%d alive=%d) "
+        "conversation(active=%d narrator=%d form=0x%08X name=%s)",
+        static_cast<unsigned long long>(RuntimeGeneration::Current()),
+        targetRadius,
+        crosshairTarget.isValid ? 1 : 0,
+        crosshairTarget.formId,
+        crosshairTarget.name.c_str(),
+        crosshairTarget.isDead ? 1 : 0,
+        crosshairTarget.isCreature ? 1 : 0,
+        crosshairTarget.distance,
+        closestTarget.isValid ? 1 : 0,
+        closestTarget.formId,
+        closestTarget.name.c_str(),
+        closestTarget.isDead ? 1 : 0,
+        closestTarget.isCreature ? 1 : 0,
+        closestTarget.distance,
+        currentTarget.formId,
+        currentTarget.name.c_str(),
+        currentTarget.isActor ? 1 : 0,
+        currentTarget.isAlive ? 1 : 0,
+        g_conversationActive ? 1 : 0,
+        g_conversationIsNarrator ? 1 : 0,
+        g_conversationPartnerFormId.load(),
+        g_conversationPartner.c_str());
+
+    if (PrepareTargetFromNpcInfo(crosshairTarget, "crosshair")) {
         return;
     }
 
-    const float targetRadius = GetConversationTargetRadius();
-    if (PrepareTargetFromNpcInfo(NPCDetector::GetClosestNPC(targetRadius), "nearest npc")) {
+    if (PrepareTargetFromNpcInfo(closestTarget, "nearest npc")) {
+        return;
+    }
+
+    if (currentTarget.formId != 0 &&
+        !currentTarget.name.empty() &&
+        !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
+        IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
+        !IsConversationTargetOnCooldown(currentTarget.formId, currentTarget.name, false)) {
+        WriteTextInputTargetHint(currentTarget.formId, currentTarget.name);
+        Logger::LogInfo("GameLoop: Prepared cached chatbox target %s (0x%08X)",
+            currentTarget.name.c_str(),
+            currentTarget.formId);
         return;
     }
 
@@ -2624,23 +2694,10 @@ static void PrepareTextInputTargetHint() {
         return;
     }
 
-    const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.formId != 0 &&
-        !currentTarget.name.empty() &&
-        !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
-        IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
-        !IsConversationTargetOnCooldown(currentTarget.formId, currentTarget.name, false)) {
-        WriteTextInputTargetHint(currentTarget.name);
-        Logger::LogInfo("GameLoop: Prepared cached chatbox target %s (0x%08X)",
-            currentTarget.name.c_str(),
-            currentTarget.formId);
-        return;
-    }
-
     if (g_conversationActive && !g_conversationIsNarrator &&
         g_conversationPartnerFormId != 0 && !g_conversationPartner.empty() &&
         IsConversationTargetEligible(g_conversationPartnerFormId, g_conversationPartner, false)) {
-        WriteTextInputTargetHint(g_conversationPartner);
+        WriteTextInputTargetHint(g_conversationPartnerFormId, g_conversationPartner);
         Logger::LogInfo("GameLoop: Prepared active conversation chatbox target %s (0x%08X)",
             g_conversationPartner.c_str(),
             g_conversationPartnerFormId.load());
@@ -2652,11 +2709,17 @@ static void PrepareTextInputTargetHint() {
 
 static void ProcessTextInputBridge() {
     const std::string status = ReadAndDeleteTextInputFile(kTextInputStatusPath);
+    bool bridgeClosed = false;
+    bool bridgeSubmitted = false;
+    bool bridgeBlocked = false;
     if (!status.empty()) {
         const auto statusValues = ParseBridgeKeyValueData(status);
-        if (ParseBridgeFlag(statusValues, "closed", false)) {
-            MarkTextInputMenuClosed(ParseBridgeFlag(statusValues, "submitted", false) ? "submitted" : "closed");
-        } else if (ParseBridgeFlag(statusValues, "blocked", false)) {
+        bridgeClosed = ParseBridgeFlag(statusValues, "closed", false);
+        bridgeSubmitted = ParseBridgeFlag(statusValues, "submitted", false);
+        bridgeBlocked = ParseBridgeFlag(statusValues, "blocked", false);
+        if (bridgeClosed) {
+            MarkTextInputMenuClosed(bridgeSubmitted ? "submitted" : "closed");
+        } else if (bridgeBlocked) {
             MarkTextInputMenuClosed("blocked");
         }
     }
@@ -2664,15 +2727,69 @@ static void ProcessTextInputBridge() {
     std::string message = TrimInput(ReadAndDeleteTextInputFile("Data\\NVSE\\Plugins\\dialectic_textinput.tmp"));
 
     if (message.empty()) {
-        if (!status.empty()) {
+        // entered/opening status files arrive while the menu is active; only terminal states may discard the target.
+        if (bridgeClosed || bridgeBlocked) {
+            Logger::LogInfo(
+                "[TEXT_INPUT_TARGET] bridge completed without message; clearing retained form=0x%08X name=%s generation=%llu",
+                g_preparedTextInputTarget.formId,
+                g_preparedTextInputTarget.name.c_str(),
+                static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
+            ClearPreparedTextInputTarget();
             Logger::LogInfo("GameLoop: Text input closed without a message; no request will be sent");
+        } else if (!status.empty()) {
+            Logger::LogInfo(
+                "[TEXT_INPUT_TARGET] bridge status received while menu remains open; retaining form=0x%08X name=%s generation=%llu",
+                g_preparedTextInputTarget.formId,
+                g_preparedTextInputTarget.name.c_str(),
+                static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
         }
         return;
     }
 
+    const PreparedTextInputTarget preparedTarget = g_preparedTextInputTarget;
+    ClearPreparedTextInputTarget();
     MarkTextInputMenuClosed("message received");
     Logger::LogInfo("GameLoop: Received typed message from script bridge: %s", message.c_str());
+    const std::uint64_t currentGeneration = RuntimeGeneration::Current();
+    const bool hasPreparedTarget = preparedTarget.formId != 0 && !preparedTarget.name.empty();
+    const bool preparedGenerationCurrent = hasPreparedTarget &&
+        RuntimeGeneration::IsCurrent(preparedTarget.runtimeGeneration);
+    const auto submitCurrentTarget = TargetManager::GetCurrentTarget();
+    const NPCDetector::NPCInfo submitCrosshairTarget = NPCDetector::GetCrosshairNPC();
+    Logger::LogInfo(
+        "[TEXT_INPUT_TARGET] submit prepared(form=0x%08X name=%s generation=%llu current_generation=%llu valid_generation=%d) "
+        "current(form=0x%08X name=%s actor=%d alive=%d) "
+        "crosshair(valid=%d form=0x%08X name=%s dead=%d distance=%.1f) "
+        "conversation(active=%d narrator=%d form=0x%08X name=%s)",
+        preparedTarget.formId,
+        preparedTarget.name.c_str(),
+        static_cast<unsigned long long>(preparedTarget.runtimeGeneration),
+        static_cast<unsigned long long>(currentGeneration),
+        preparedGenerationCurrent ? 1 : 0,
+        submitCurrentTarget.formId,
+        submitCurrentTarget.name.c_str(),
+        submitCurrentTarget.isActor ? 1 : 0,
+        submitCurrentTarget.isAlive ? 1 : 0,
+        submitCrosshairTarget.isValid ? 1 : 0,
+        submitCrosshairTarget.formId,
+        submitCrosshairTarget.name.c_str(),
+        submitCrosshairTarget.isDead ? 1 : 0,
+        submitCrosshairTarget.distance,
+        g_conversationActive ? 1 : 0,
+        g_conversationIsNarrator ? 1 : 0,
+        g_conversationPartnerFormId.load(),
+        g_conversationPartner.c_str());
+    if (hasPreparedTarget && !preparedGenerationCurrent) {
+        Logger::LogWarning(
+            "[TEXT_INPUT_TARGET] discarded retained target because runtime generation changed form=0x%08X name=%s prepared_generation=%llu current_generation=%llu reason=%s",
+            preparedTarget.formId,
+            preparedTarget.name.c_str(),
+            static_cast<unsigned long long>(preparedTarget.runtimeGeneration),
+            static_cast<unsigned long long>(currentGeneration),
+            RuntimeGeneration::LastReason());
+    }
     if (ShouldRouteToNarrator(message, true)) {
+        Logger::LogInfo("[TEXT_INPUT_TARGET] routing submitted text to narrator");
         if (!g_conversationActive || !g_conversationIsNarrator) {
             StartNarratorConversation("typed input");
         }
@@ -2683,13 +2800,31 @@ static void ProcessTextInputBridge() {
     ClearConversationIfPartnerLeftScene("typed input");
 
     if (!g_conversationActive) {
-        Logger::LogInfo("GameLoop: No active conversation for typed message, trying current target");
-        const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
-        if (startResult != ConversationStartResult::Started) {
-            if (startResult == ConversationStartResult::NoTarget) {
-                Console::Print("[DIALECTIC] Target an NPC before sending text");
+        if (preparedGenerationCurrent) {
+            Logger::LogInfo("GameLoop: Starting typed conversation with prepared chatbox target %s (0x%08X)",
+                preparedTarget.name.c_str(), preparedTarget.formId);
+            TargetManager::SetCurrentTarget(preparedTarget.formId, preparedTarget.name, true);
+            if (!StartConversation()) {
+                const auto failedTarget = TargetManager::GetCurrentTarget();
+                Logger::LogWarning(
+                    "[TEXT_INPUT_TARGET] prepared conversation start failed retained(form=0x%08X name=%s) current(form=0x%08X name=%s actor=%d alive=%d)",
+                    preparedTarget.formId,
+                    preparedTarget.name.c_str(),
+                    failedTarget.formId,
+                    failedTarget.name.c_str(),
+                    failedTarget.isActor ? 1 : 0,
+                    failedTarget.isAlive ? 1 : 0);
+                return;
             }
-            return;
+        } else {
+            Logger::LogInfo("GameLoop: No active conversation for typed message, trying current target");
+            const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
+            if (startResult != ConversationStartResult::Started) {
+                if (startResult == ConversationStartResult::NoTarget) {
+                    Console::Print("[DIALECTIC] Target an NPC before sending text");
+                }
+                return;
+            }
         }
     } else if (!g_conversationIsNarrator) {
         if (IsConversationTargetOnCooldown(g_conversationPartnerFormId, g_conversationPartner, true)) {
@@ -2697,6 +2832,23 @@ static void ProcessTextInputBridge() {
             g_conversationIsNarrator = false;
             g_conversationPartner.clear();
             g_conversationPartnerFormId = 0;
+            return;
+        }
+        if (preparedGenerationCurrent) {
+            TargetManager::SetCurrentTarget(preparedTarget.formId, preparedTarget.name, true);
+            if (!UpdateConversationPartnerFromCurrentTarget("typed input prepared chatbox target")) {
+                const auto failedTarget = TargetManager::GetCurrentTarget();
+                Logger::LogWarning(
+                    "[TEXT_INPUT_TARGET] prepared conversation retarget failed retained(form=0x%08X name=%s) current(form=0x%08X name=%s actor=%d alive=%d)",
+                    preparedTarget.formId,
+                    preparedTarget.name.c_str(),
+                    failedTarget.formId,
+                    failedTarget.name.c_str(),
+                    failedTarget.isActor ? 1 : 0,
+                    failedTarget.isAlive ? 1 : 0);
+                return;
+            }
+            SendPlayerMessage(message);
             return;
         }
         const FreshTargetResult crosshairResult = TrySetCurrentTargetFromCrosshair(false);
