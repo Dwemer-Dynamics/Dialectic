@@ -482,7 +482,6 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
         oldPartner.c_str(),
         oldPartnerFormId,
         reason ? reason : "scene validation");
-    Console::Print("[DIALECTIC] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
     StopConversation();
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
