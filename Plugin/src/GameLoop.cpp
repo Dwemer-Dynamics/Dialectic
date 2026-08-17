@@ -87,7 +87,7 @@ static void TriggerDynamicProfileForCurrentTarget();
 static void TriggerDynamicProfilesForNearbyAgents();
 static void TriggerDynamicProfileForNarrator();
 static void UpdateBoredEventTimer();
-static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool showNotice,
+static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue = true);
 static void MaybeSendLoadedSaveInit();
 static void PrepareTextInputTargetHint();
@@ -482,6 +482,7 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
         oldPartner.c_str(),
         oldPartnerFormId,
         reason ? reason : "scene validation");
+    Console::Print("[DIALECTIC] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
     StopConversation();
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
@@ -2156,7 +2157,7 @@ static void CancelDialogueForCombatEntry() {
 
 static void CancelDialogueForVanillaDialogueEntry() {
     Logger::LogInfo("GameLoop: Vanilla dialogue menu opened - cancelling active AI dialogue");
-    ResetRuntimeForAIActions("vanilla_dialogue_menu_open", true, false, false, false);
+    ResetRuntimeForAIActions("vanilla_dialogue_menu_open", true, false, false);
 }
 
 static bool HasDialoguePlaybackWorkForMenuPause() {
@@ -3742,16 +3743,13 @@ static void UpdateOpenMicMonitoringState() {
     }
 }
 
-static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool showNotice,
+static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue) {
     const bool hadConversation = g_conversationActive;
     const std::string previousPartner = g_conversationPartner;
     const char* resetReason = reason ? reason : "runtime reset";
 
     Logger::LogInfo("GameLoop: Resetting AI runtime state (%s)", resetReason);
-    if (showNotice) {
-        Console::Print("[DIALECTIC] Clearing active dialogue");
-    }
 
     g_voiceInputActive = false;
     VoiceRecorder::StopRecording();
@@ -3817,7 +3815,7 @@ static void MaybeSendLoadedSaveInit() {
     g_lastSeenGamets = currentGamets;
 
     const char* reason = firstInit ? "loaded_save" : "gamets_rollback";
-    ResetRuntimeForAIActions(reason, false, detectedRollback || g_conversationActive || SpeakManager::IsSpeaking(), false);
+    ResetRuntimeForAIActions(reason, false, false);
     Logger::LogInfo("GameLoop: Sending init event for %s at gamets=%lld (plugin=%s)",
                     reason,
                     currentGamets,
@@ -3835,7 +3833,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerInventoryManagerFNV::Reset("native_pre_load_game");
                 PlayerSurvivalManagerFNV::Reset("native_pre_load_game");
                 FalloutStatsManagerFNV::Reset("native_pre_load_game");
-                ResetRuntimeForAIActions("native_pre_load_game", false, false, false);
+                ResetRuntimeForAIActions("native_pre_load_game", false, false);
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
@@ -3847,7 +3845,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::Reset("native_load_game");
                 PlayerSurvivalManagerFNV::ForceRefresh("native_load_game", 3000);
                 FalloutStatsManagerFNV::Reset("native_load_game");
-                ResetRuntimeForAIActions("native_load_game", false, false, false);
+                ResetRuntimeForAIActions("native_load_game", false, false);
                 BeginDynamicProfileTimerBlock("load game");
                 DelayDynamicProfileTimerAfterLoad("game load");
                 g_loadedSaveInitSent = false;
@@ -3872,7 +3870,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::Reset("native_new_game");
                 PlayerSurvivalManagerFNV::ForceRefresh("native_new_game", 4000);
                 FalloutStatsManagerFNV::Reset("native_new_game");
-                ResetRuntimeForAIActions("native_new_game", false, false, false);
+                ResetRuntimeForAIActions("native_new_game", false, false);
                 g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
                 g_dynamicProfileBlockedAt = {};
                 g_dynamicProfileResumeNotBefore = {};
@@ -3886,7 +3884,7 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerInventoryManagerFNV::Reset("native_runtime_exit");
                 PlayerSurvivalManagerFNV::Reset("native_runtime_exit");
                 FalloutStatsManagerFNV::Reset("native_runtime_exit");
-                ResetRuntimeForAIActions("native_runtime_exit", false, false, false);
+                ResetRuntimeForAIActions("native_runtime_exit", false, false);
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
@@ -3895,7 +3893,7 @@ static void ProcessNativeRuntimeEvents() {
             case Type::CellChanged:
                 // The event flag marks a hard interior/worldspace boundary.
                 if (event.flag) {
-                    ResetRuntimeForAIActions("native_cell_changed", false, false, false);
+                    ResetRuntimeForAIActions("native_cell_changed", false, false);
                 }
                 break;
             case Type::ReloadConfig:
@@ -4186,7 +4184,7 @@ void HaltAIActionsNow() {
     Log("GameLoop: Halt AI Actions requested");
     Console::Print("[DIALECTIC] Halting AI actions");
 
-    const int haltedActors = ResetRuntimeForAIActions("halt_ai_actions", true, false, true);
+    const int haltedActors = ResetRuntimeForAIActions("halt_ai_actions", true, true);
     Logger::LogInfo("GameLoop: Halt AI Actions completed for %d actor(s)", haltedActors);
 }
 
