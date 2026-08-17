@@ -1128,6 +1128,37 @@ bool CaptureNativeGameState(NativeGameState& state) {
     return true;
 }
 
+bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection) {
+    inspection = {};
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* reference = FindKnownReference(player, actorFormId);
+    if (!reference || !reference->baseForm) {
+        return false;
+    }
+
+    const bool validCharacter = reference->typeID == kFormType_Character &&
+        reference->baseForm->typeID == kFormType_TESNPC;
+    const bool validCreature = reference->typeID == kFormType_Creature &&
+        reference->baseForm->typeID == kFormType_TESCreature;
+    if (!validCharacter && !validCreature) {
+        return false;
+    }
+
+    auto* actor = static_cast<Actor*>(reference);
+    auto* actorBase = static_cast<TESActorBase*>(reference->baseForm);
+    inspection.formId = reference->refID;
+    inspection.name = CopyGameString(actorBase->fullName.name);
+    if (reference->baseForm->typeID == kFormType_TESNPC) {
+        auto* npc = static_cast<TESNPC*>(actorBase);
+        TESRace* race = npc->race.race ? npc->race.race : npc->race1EC;
+        if (race) {
+            inspection.raceName = CopyGameString(race->fullName.name);
+        }
+    }
+    CaptureEquippedItems(actor, inspection.equipment);
+    return true;
+}
+
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment) {
     actors.clear();
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
