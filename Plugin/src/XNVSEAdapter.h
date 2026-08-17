@@ -88,6 +88,13 @@ struct NativeEquipmentItem {
     float condition{-1.0f};
 };
 
+struct NativeActorInspection {
+    std::string name;
+    std::string raceName;
+    std::uint32_t formId{0};
+    std::vector<NativeEquipmentItem> equipment;
+};
+
 struct NativeActorState {
     std::string name;
     std::string raceName;
@@ -286,6 +293,7 @@ std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
+bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection);
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
 bool CaptureNativeReferences(std::vector<NativeReferenceState>& references);
 bool CaptureNativeNavScene(NativeNavSceneState& scene);

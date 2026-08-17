@@ -28,7 +28,9 @@
 #include <cstdio>
 #include <cstdint>
 #include <fstream>
+#include <future>
 #include <iomanip>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -48,6 +50,7 @@ constexpr const char* kNearbyFurniturePath = "Data\\NVSE\\Plugins\\dialectic_nea
 constexpr int kInventoryOpenCooldownMs = 2500;
 constexpr auto kPostDialogueActionNoSpeechDelay = std::chrono::milliseconds(1200);
 constexpr auto kPostDialogueActionTimeout = std::chrono::seconds(30);
+constexpr auto kActorInspectionTimeout = std::chrono::milliseconds(850);
 
 std::atomic<uint64_t> g_requestCounter{0};
 
@@ -1782,6 +1785,84 @@ std::string FormatEquipmentList(const AgentManager::NPCData& data, size_t maxIte
     return joined.str();
 }
 
+std::string FormatNativeEquipmentList(
+    const std::vector<XNVSEAdapter::NativeEquipmentItem>& equipment,
+    size_t maxItems = 12) {
+    if (equipment.empty()) {
+        return "none equipped";
+    }
+
+    std::ostringstream result;
+    size_t emitted = 0;
+    for (const auto& item : equipment) {
+        if (item.name.empty()) {
+            continue;
+        }
+        if (emitted > 0) {
+            result << "; ";
+        }
+        result << item.name;
+        ++emitted;
+        if (emitted >= maxItems) {
+            break;
+        }
+    }
+    return emitted == 0 ? "none equipped" : result.str();
+}
+
+// Captures live race and equipment on the game thread without consulting fallback NPC stats.
+bool CaptureActorInspectionForAction(
+    uint32_t actorRef,
+    uint64_t generation,
+    XNVSEAdapter::NativeActorInspection& inspection,
+    const TaskManager::CancellationToken* token) {
+    struct CaptureResult {
+        bool ok{false};
+        XNVSEAdapter::NativeActorInspection inspection;
+    };
+
+    auto completion = std::make_shared<std::promise<CaptureResult>>();
+    std::future<CaptureResult> future = completion->get_future();
+    auto complete = [completion](CaptureResult result) {
+        try {
+            completion->set_value(std::move(result));
+        } catch (...) {
+        }
+    };
+    auto capture = [actorRef, complete]() {
+        CaptureResult result;
+        result.ok = XNVSEAdapter::CaptureNativeActorInspection(actorRef, result.inspection);
+        complete(std::move(result));
+    };
+
+    if (GameThreadDispatcher::IsGameThread()) {
+        capture();
+    } else {
+        const std::string key = "actor_inspection:" + std::to_string(actorRef);
+        const bool queued = GameThreadDispatcher::Enqueue(
+            "actor_inspection", key, generation, std::move(capture),
+            [complete](const char*) { complete({}); });
+        if (!queued) {
+            complete({});
+        }
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kActorInspectionTimeout;
+    while (future.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready) {
+        if ((token && token->IsCancellationRequested()) ||
+            std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+    }
+
+    CaptureResult captured = future.get();
+    if (!captured.ok) {
+        return false;
+    }
+    inspection = std::move(captured.inspection);
+    return true;
+}
+
 std::string BuildInventoryResult(const ActionRequest& request, const TaskManager::CancellationToken* token = nullptr) {
     const uint32_t actorRef = request.speakerFormId != 0 ? request.speakerFormId : request.targetFormId;
     AgentManager::NPCData data = CollectSnapshotForAction(actorRef, request.speaker, token);
@@ -1851,46 +1932,28 @@ std::string BuildInventoryResult(const ActionRequest& request, const TaskManager
 std::string BuildInspectResult(const ActionRequest& request, const TaskManager::CancellationToken* token = nullptr) {
     const uint32_t actorRef = request.targetFormId != 0 ? request.targetFormId : request.speakerFormId;
     const std::string hint = !request.target.empty() ? request.target : request.speaker;
-    AgentManager::NPCData data = CollectSnapshotForAction(actorRef, hint, token);
-    const std::string actorName = !data.displayName.empty() ? data.displayName : (hint.empty() ? "actor" : hint);
+    const std::string fallbackName = hint.empty() ? "actor" : hint;
+    if (actorRef == 0) {
+        return "There is no one here to inspect.";
+    }
+
+    XNVSEAdapter::NativeActorInspection inspection;
+    if (!CaptureActorInspectionForAction(actorRef, request.runtimeGeneration, inspection, token)) {
+        Logger::LogWarning("ActionManager: Inspect could not capture live race/equipment for 0x%08X", actorRef);
+        return "You cannot get a clear enough look at " + fallbackName +
+            " to identify their race or equipment.";
+    }
+
+    const std::string actorName = inspection.name.empty() ? fallbackName : inspection.name;
+    Logger::LogInfo("ActionManager: Inspect captured live actor 0x%08X race=%s equipment=%zu",
+        inspection.formId,
+        inspection.raceName.empty() ? "unavailable" : inspection.raceName.c_str(),
+        inspection.equipment.size());
 
     std::ostringstream result;
-    result << actorName;
-    if (data.refID != 0) {
-        result << " ref " << FormatRefId(data.refID);
-    }
-    if (!data.baseName.empty()) {
-        result << ", base " << data.baseName;
-    }
-    if (!data.race.empty()) {
-        result << ", race " << data.race;
-    }
-    if (!data.gender.empty()) {
-        result << ", gender " << data.gender;
-    }
-    if (!data.voiceId.empty()) {
-        result << ", voice " << data.voiceId;
-    } else if (!data.voiceName.empty()) {
-        result << ", voice " << data.voiceName;
-    }
-    result << ". Health " << std::fixed << std::setprecision(0) << data.health << "/" << data.healthMax
-           << ", AP " << data.actionPoints << "/" << data.actionPointsMax
-           << ", level " << data.level
-           << ", karma " << data.karma << ". ";
-    result << "SPECIAL S" << data.strength
-           << " P" << data.perception
-           << " E" << data.endurance
-           << " C" << data.charisma
-           << " I" << data.intelligence
-           << " A" << data.agility
-           << " L" << data.luck << ". ";
-    result << "Skills guns " << data.guns
-           << ", energy weapons " << data.energyWeapons
-           << ", melee " << data.meleeWeapons
-           << ", speech " << data.speech
-           << ", sneak " << data.sneak
-           << ", survival " << data.survival << ". ";
-    result << "Equipment: " << FormatEquipmentList(data) << ".";
+    result << actorName << ". Race: "
+           << (inspection.raceName.empty() ? "unavailable" : inspection.raceName)
+           << ". Equipment: " << FormatNativeEquipmentList(inspection.equipment) << ".";
     return result.str();
 }
 
