@@ -1934,13 +1934,14 @@ std::string BuildInspectResult(const ActionRequest& request, const TaskManager::
     const std::string hint = !request.target.empty() ? request.target : request.speaker;
     const std::string fallbackName = hint.empty() ? "actor" : hint;
     if (actorRef == 0) {
-        return fallbackName + " could not be inspected because no actor target was resolved.";
+        return "There is no one here to inspect.";
     }
 
     XNVSEAdapter::NativeActorInspection inspection;
     if (!CaptureActorInspectionForAction(actorRef, request.runtimeGeneration, inspection, token)) {
         Logger::LogWarning("ActionManager: Inspect could not capture live race/equipment for 0x%08X", actorRef);
-        return fallbackName + " could not be inspected because live race and equipment data were unavailable.";
+        return "You cannot get a clear enough look at " + fallbackName +
+            " to identify their race or equipment.";
     }
 
     const std::string actorName = inspection.name.empty() ? fallbackName : inspection.name;
