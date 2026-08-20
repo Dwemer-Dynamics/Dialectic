@@ -694,22 +694,22 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return 0;
         }
 
-        uint32_t targetFormId = line.rechatTargetFormId;
-        if (targetFormId != 0 && targetFormId != line.actorFormId) {
-            return targetFormId;
-        }
-
-        targetFormId = ResolveFaceTargetHint(line.rechatTargetHint, line.actorFormId);
-        if (targetFormId != 0) {
-            return targetFormId;
-        }
-
-        targetFormId = line.listenerFormId;
+        uint32_t targetFormId = line.listenerFormId;
         if (targetFormId != 0 && targetFormId != line.actorFormId) {
             return targetFormId;
         }
 
         targetFormId = ResolveFaceTargetHint(line.listenerHint, line.actorFormId);
+        if (targetFormId != 0) {
+            return targetFormId;
+        }
+
+        targetFormId = line.rechatTargetFormId;
+        if (targetFormId != 0 && targetFormId != line.actorFormId) {
+            return targetFormId;
+        }
+
+        targetFormId = ResolveFaceTargetHint(line.rechatTargetHint, line.actorFormId);
         if (targetFormId != 0) {
             return targetFormId;
         }
@@ -769,7 +769,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             std::ostringstream stream;
             stream << speaker.source << "/" << target.source
                 << " dx=" << std::fixed << std::setprecision(1) << dx
-                << " dy=" << dy;
+                << " dy=" << dy
+                << " yaw=" << yawDegrees;
             *reason = stream.str();
         }
         return true;
