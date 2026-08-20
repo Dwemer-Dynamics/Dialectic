@@ -1985,12 +1985,34 @@ end
         g_faceTargetFunction, speaker, 1, yawBits);
     if (!applied) {
         g_nativeFacingFailed.fetch_add(1, std::memory_order_relaxed);
-        Logger::LogWarning("[NATIVE_FACING] call failed speaker=0x%08X target=0x%08X",
-            speakerFormId, targetFormId);
-    } else {
-        g_nativeFacingApplied.fetch_add(1, std::memory_order_relaxed);
+        Logger::LogWarning("[NATIVE_FACING] call failed speaker=0x%08X target=0x%08X requested_yaw=%.1f",
+            speakerFormId, targetFormId, yawDegrees);
+        return false;
     }
-    return applied;
+
+    constexpr float kRadiansToDegrees = 57.2957795f;
+    float actualYawDegrees = speaker->rotZ * kRadiansToDegrees;
+    while (actualYawDegrees < 0.0f) {
+        actualYawDegrees += 360.0f;
+    }
+    while (actualYawDegrees >= 360.0f) {
+        actualYawDegrees -= 360.0f;
+    }
+    float yawDifference = std::fabs(actualYawDegrees - yawDegrees);
+    if (yawDifference > 180.0f) {
+        yawDifference = 360.0f - yawDifference;
+    }
+    if (yawDifference > 2.0f) {
+        g_nativeFacingFailed.fetch_add(1, std::memory_order_relaxed);
+        Logger::LogWarning("[NATIVE_FACING] heading mismatch speaker=0x%08X target=0x%08X requested_yaw=%.1f actual_yaw=%.1f",
+            speakerFormId, targetFormId, yawDegrees, actualYawDegrees);
+        return false;
+    }
+
+    g_nativeFacingApplied.fetch_add(1, std::memory_order_relaxed);
+    Logger::LogInfo("[NATIVE_FACING] applied speaker=0x%08X target=0x%08X requested_yaw=%.1f actual_yaw=%.1f",
+        speakerFormId, targetFormId, yawDegrees, actualYawDegrees);
+    return true;
 }
 
 bool ClearNativeFacing(std::uint32_t speakerFormId) {
