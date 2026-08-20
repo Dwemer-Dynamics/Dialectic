@@ -1965,16 +1965,9 @@ bool ApplyNativeFacing(std::uint32_t speakerFormId, std::uint32_t targetFormId, 
 
     if (!g_faceTargetFunction) {
         static constexpr const char* kFaceTargetSource = R"(
-int iTargetMod
-int iTargetLocal
 float fYaw
-ref rTarget
-begin function {iTargetMod, iTargetLocal, fYaw}
-    let rTarget := BuildRef iTargetMod iTargetLocal
-    if eval rTarget && IsFormValid rTarget
-        SetAngle Z fYaw
-        FaceObject rTarget
-    endif
+begin function {fYaw}
+    SetAngle Z fYaw
 end
 )";
         g_faceTargetFunction = g_scriptInterface->CompileScript(kFaceTargetSource);
@@ -1985,13 +1978,11 @@ end
         }
     }
 
-    const UInt32 targetMod = (targetFormId >> 24) & 0xFF;
-    const UInt32 targetLocal = targetFormId & 0x00FFFFFF;
     UInt32 yawBits = 0;
     static_assert(sizeof(yawBits) == sizeof(yawDegrees));
     std::memcpy(&yawBits, &yawDegrees, sizeof(yawBits));
     const bool applied = g_scriptInterface->CallFunctionAlt(
-        g_faceTargetFunction, speaker, 3, targetMod, targetLocal, yawBits);
+        g_faceTargetFunction, speaker, 1, yawBits);
     if (!applied) {
         g_nativeFacingFailed.fetch_add(1, std::memory_order_relaxed);
         Logger::LogWarning("[NATIVE_FACING] call failed speaker=0x%08X target=0x%08X",
