@@ -1196,6 +1196,15 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticWaitHereTarget_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    GameLoop::RequestControlMenuWaitHere();
+    *result = 1;
+    return true;
+}
+
 static bool Cmd_DialecticDeprecatedManageAIAgents_Execute(COMMAND_ARGS) {
     *result = 0;
     return true;
@@ -1405,6 +1414,11 @@ static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticWaitHereTarget = {
+    "DialecticWaitHereTarget", "", 0, "Applies Wait Here to the NPC captured by DIALECTIC Control.", 0, 0,
+    nullptr, Cmd_DialecticWaitHereTarget_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
     "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
     kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
@@ -1514,7 +1528,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticSetRecordingDevice,
         &kCommandInfo_DialecticUpdateFalloutStat,
         &kCommandInfo_DialecticHandleHotkeyUp,
-        &kCommandInfo_DialecticInitialize
+        &kCommandInfo_DialecticInitialize,
+        &kCommandInfo_DialecticWaitHereTarget
     };
 
     for (CommandInfo* command : commands) {

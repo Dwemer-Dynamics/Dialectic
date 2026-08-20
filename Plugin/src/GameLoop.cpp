@@ -137,6 +137,8 @@ static std::chrono::steady_clock::time_point g_lastRuntimeConfigFallbackPoll;
 static std::chrono::steady_clock::time_point g_lastRpgEventPoll;
 static std::atomic<bool> g_runtimeConfigDirty(false);
 static std::atomic<DWORD> g_runtimeConfigDirtyTick(0);
+static uint32_t g_dialecticControlTargetFormId = 0;
+static std::string g_dialecticControlTargetName;
 
 static std::mutex g_runtimeStatusMutex;
 static bool g_runtimeStatusPending = false;
@@ -1173,11 +1175,42 @@ void RequestDialecticControlMenuOpen() {
         Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
         return;
     }
+
+    NPCDetector::NPCInfo waitTarget = NPCDetector::GetCrosshairNPC();
+    if (!waitTarget.isValid || waitTarget.isDead || waitTarget.formId == 0x00000014) {
+        waitTarget = NPCDetector::GetClosestNPC();
+    }
+    if (waitTarget.isValid && !waitTarget.isDead && waitTarget.formId != 0x00000014) {
+        g_dialecticControlTargetFormId = waitTarget.formId;
+        g_dialecticControlTargetName = waitTarget.name;
+        Logger::LogInfo("GameLoop: DIALECTIC Control captured Wait Here target %s (0x%08X) at %.1f units",
+            waitTarget.name.c_str(), waitTarget.formId, waitTarget.distance);
+    } else {
+        g_dialecticControlTargetFormId = 0;
+        g_dialecticControlTargetName.clear();
+        Logger::LogInfo("GameLoop: DIALECTIC Control found no living NPC for Wait Here");
+    }
+
     if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
         Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
         return;
     }
     Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
+}
+
+void RequestControlMenuWaitHere() {
+    const uint32_t actorFormId = g_dialecticControlTargetFormId;
+    const std::string actorName = g_dialecticControlTargetName;
+    g_dialecticControlTargetFormId = 0;
+    g_dialecticControlTargetName.clear();
+
+    if (actorFormId == 0) {
+        Console::Print("[DIALECTIC] Look at an NPC or stand near one before choosing Wait Here");
+        Logger::LogInfo("GameLoop: DIALECTIC Control Wait Here selected without an NPC target");
+        return;
+    }
+
+    ActionManager::RequestWaitHere(actorFormId, actorName, "DialecticControl");
 }
 
 void RequestModeMenuOpen() {

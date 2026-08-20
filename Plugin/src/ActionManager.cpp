@@ -3142,6 +3142,54 @@ bool IsActionCommand(const std::string& actionName) {
     return CanonicalActions().find(normalized) != CanonicalActions().end();
 }
 
+bool RequestWaitHere(uint32_t actorFormId,
+                     const std::string& actorName,
+                     const char* source) {
+    const char* sourceName = source ? source : "ActionManager";
+    RuntimeSnapshot::GameState gameState;
+    RuntimeSnapshot::ActorState actor;
+    if (actorFormId == 0 ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
+        Logger::LogWarning("%s: Wait Here rejected by native scene gate actor=0x%08X",
+            sourceName, actorFormId);
+        Console::Print("[DIALECTIC] Wait Here failed: NPC is no longer available");
+        return false;
+    }
+
+    ActionRequest request;
+    request.action = "WaitHere";
+    request.speaker = actor.name.empty() ? actorName : actor.name;
+    request.target = request.speaker;
+    request.speakerFormId = actorFormId;
+    request.targetFormId = actorFormId;
+    request.runtimeGeneration = RuntimeGeneration::Current();
+
+    const std::string commandKey = request.action + ":" + FormatRefId(actorFormId);
+    const bool queued = GameThreadDispatcher::Enqueue("action", commandKey, request.runtimeGeneration,
+        [request, sourceName = std::string(sourceName)]() {
+            if (XNVSEAdapter::ExecuteNativePackageAction(
+                    request.speakerFormId, request.targetFormId, 18)) {
+                TrackNativePackageAction(request);
+                Console::Print("[DIALECTIC] %s will wait here", request.speaker.c_str());
+                Logger::LogInfo("[NATIVE_ACTION] control menu started WaitHere actor=0x%08X source=%s",
+                    request.speakerFormId, sourceName.c_str());
+                return;
+            }
+
+            Console::Print("[DIALECTIC] Wait Here failed for %s", request.speaker.c_str());
+            Logger::LogWarning("[NATIVE_ACTION] control menu WaitHere failed actor=0x%08X source=%s",
+                request.speakerFormId, sourceName.c_str());
+        });
+    if (!queued) {
+        Console::Print("[DIALECTIC] Wait Here could not be queued");
+        Logger::LogWarning("%s: Failed to queue Wait Here actor=0x%08X", sourceName, actorFormId);
+    }
+    return queued;
+}
+
 bool HandleRoleCommandJson(const std::string& lineObject,
                            const char* source,
                            uint64_t runtimeGeneration) {
