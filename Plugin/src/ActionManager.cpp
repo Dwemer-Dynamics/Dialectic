@@ -3011,14 +3011,21 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             if ((actionCode == 4 || actionCode == 5 || actionCode == 33)) {
                 bool handledByCompanionAdapter = false;
                 bool usedCcc = false;
-                if (XNVSEAdapter::ExecuteNativeCompanionCommand(
-                        request.speakerFormId, actionCode, handledByCompanionAdapter, usedCcc) &&
-                    handledByCompanionAdapter) {
-                    TrackNativePackageAction(request);
-                    SendFuncretResult(request, request.action + " started successfully.");
-                    Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
-                    Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
-                        request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                const bool companionCommandSucceeded = XNVSEAdapter::ExecuteNativeCompanionCommand(
+                    request.speakerFormId, actionCode, handledByCompanionAdapter, usedCcc);
+                if (handledByCompanionAdapter) {
+                    if (companionCommandSucceeded) {
+                        TrackNativePackageAction(request);
+                        SendFuncretResult(request, request.action + " started successfully.");
+                        Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
+                        Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
+                            request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                    } else {
+                        SendFuncretResult(request, request.action + " failed because companion_adapter_rejected.");
+                        Console::Print("[DIALECTIC] Action failed: %s", request.action.c_str());
+                        Logger::LogWarning("[NATIVE_ACTION] companion adapter rejected action=%s speaker=0x%08X adapter=%s",
+                            request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                    }
                     return;
                 }
             }
@@ -3532,15 +3539,15 @@ void UpdateNativePackageStates() {
         }
         for (auto it = g_nativePackageStates.begin(); it != g_nativePackageStates.end();) {
             const NativePackageState& state = it->second;
-            bool shouldCleanup = state.generation != generation;
+            const std::string& action = state.request.action;
+            const bool persistentCompanionState = action == "MakeFollower" || action == "FollowPlayer" ||
+                action == "WaitHere" || action == "Relax";
+            bool shouldCleanup = state.generation != generation && !persistentCompanionState;
             std::string reason = shouldCleanup ? "stale_generation" : "";
 
             RuntimeSnapshot::ActorState speaker;
             const bool speakerReady = RuntimeSnapshot::TryGetActor(it->first, speaker) &&
                 !speaker.deleted && !speaker.dead && speaker.loaded3D;
-            const std::string& action = state.request.action;
-            const bool persistentCompanionState = action == "MakeFollower" || action == "FollowPlayer" ||
-                action == "WaitHere" || action == "Relax";
             if (!shouldCleanup && !speakerReady && !persistentCompanionState) {
                 shouldCleanup = true;
                 reason = "speaker_left_scene";

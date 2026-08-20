@@ -2784,9 +2784,18 @@ bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
     if (!actor) {
         return false;
     }
+    if (actionCode == 4) {
+        // MakeFollower belongs to CCC when it is installed, including for actors not yet in its roster.
+        handled = true;
+        usedCcc = true;
+    }
     if (!g_cccManagedQueryFunction) {
         g_cccManagedQueryFunction = g_scriptInterface->CompileScript(R"(
-begin function {}
+int iActionCode
+begin function {iActionCode}
+    if eval iActionCode == 4 && CCCInFaction JIPCCCIsHired == 0
+        Call JIPCCCAddCompanion
+    endif
     SetFunctionValue CCCInFaction JIPCCCIsHired
 end
 )");
@@ -2799,8 +2808,12 @@ end
     alignas(NVSEArrayVarInterface::Element)
         unsigned char managedStorage[sizeof(NVSEArrayVarInterface::Element)]{};
     auto* managedResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(managedStorage);
-    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult, 0) ||
+    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult,
+            1, static_cast<UInt32>(actionCode)) ||
         managedResult->GetNumber() == 0.0) {
+        if (actionCode == 4) {
+            Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
+        }
         return false;
     }
     handled = true;
