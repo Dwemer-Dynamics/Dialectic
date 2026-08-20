@@ -43,7 +43,7 @@ namespace Config {
     float headVoiceVolume = 100.0f;
     bool audio3DPlaybackEnabled = true;
     bool audioCameraBased = false;
-    float audio3DPanStrength = 2.5f;
+    float audio3DPanStrength = 1.0f;
     bool audioInvertHeading = false;
     float audioDistanceScale = 2.0f;
     float audioPlaybackDropoffInteriorPercent = 70.0f;

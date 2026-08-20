@@ -39,7 +39,7 @@ namespace AudioManager {
     static float g_volume = 1.0f;
     static bool g_3DPlaybackEnabled = true;
     static bool g_cameraBasedAudio = false;
-    static float g_3DPanStrength = 2.5f;
+    static float g_3DPanStrength = 1.0f;
     static float g_lastAppliedPan = 99.0f;
 
     // Recording state
@@ -407,11 +407,9 @@ namespace AudioManager {
             }
         }
         const float rightComponent = (dx * rightX + dy * rightY) / horizontalDistance;
-        const float boostedPan = Clamp(rightComponent * g_3DPanStrength, -1.0f, 1.0f);
-        const float shapedPan = boostedPan < 0.0f
-            ? -std::pow(std::fabs(boostedPan), 0.75f)
-            : std::pow(std::fabs(boostedPan), 0.75f);
-        ApplyPannedOutputMatrix(shapedPan);
+        constexpr float kMaxEarPan = 0.75f;
+        const float pan = Clamp(rightComponent * g_3DPanStrength, -kMaxEarPan, kMaxEarPan);
+        ApplyPannedOutputMatrix(pan);
     }
 
     void Set3DPlaybackEnabled(bool enabled) {
