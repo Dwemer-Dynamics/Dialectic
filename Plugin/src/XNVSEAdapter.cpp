@@ -2792,9 +2792,11 @@ bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
     if (!g_cccManagedQueryFunction) {
         g_cccManagedQueryFunction = g_scriptInterface->CompileScript(R"(
 int iActionCode
+ref rSelf
 begin function {iActionCode}
+    let rSelf := GetSelf
     if eval iActionCode == 4 && CCCInFaction JIPCCCIsHired == 0
-        Call JIPCCCAddCompanion
+        rSelf.Call JIPCCCAddCompanion
     endif
     SetFunctionValue CCCInFaction JIPCCCIsHired
 end
