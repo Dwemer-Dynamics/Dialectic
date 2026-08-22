@@ -1577,6 +1577,10 @@ static bool IsBoredEventBlocked(std::string& reason) {
         reason = "paused";
         return true;
     }
+    if (Config::boredAvoidInMenu && IsTextInputMenuActiveOrRecentlyClosed()) {
+        reason = "text input active";
+        return true;
+    }
     if (Config::boredAvoidInMenu && g_gameState.isInMenu) {
         reason = "menu open";
         return true;
