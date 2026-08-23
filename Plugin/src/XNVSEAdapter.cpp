@@ -1128,6 +1128,37 @@ bool CaptureNativeGameState(NativeGameState& state) {
     return true;
 }
 
+bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection) {
+    inspection = {};
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* reference = FindKnownReference(player, actorFormId);
+    if (!reference || !reference->baseForm) {
+        return false;
+    }
+
+    const bool validCharacter = reference->typeID == kFormType_Character &&
+        reference->baseForm->typeID == kFormType_TESNPC;
+    const bool validCreature = reference->typeID == kFormType_Creature &&
+        reference->baseForm->typeID == kFormType_TESCreature;
+    if (!validCharacter && !validCreature) {
+        return false;
+    }
+
+    auto* actor = static_cast<Actor*>(reference);
+    auto* actorBase = static_cast<TESActorBase*>(reference->baseForm);
+    inspection.formId = reference->refID;
+    inspection.name = CopyGameString(actorBase->fullName.name);
+    if (reference->baseForm->typeID == kFormType_TESNPC) {
+        auto* npc = static_cast<TESNPC*>(actorBase);
+        TESRace* race = npc->race.race ? npc->race.race : npc->race1EC;
+        if (race) {
+            inspection.raceName = CopyGameString(race->fullName.name);
+        }
+    }
+    CaptureEquippedItems(actor, inspection.equipment);
+    return true;
+}
+
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment) {
     actors.clear();
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
@@ -1934,16 +1965,9 @@ bool ApplyNativeFacing(std::uint32_t speakerFormId, std::uint32_t targetFormId, 
 
     if (!g_faceTargetFunction) {
         static constexpr const char* kFaceTargetSource = R"(
-int iTargetMod
-int iTargetLocal
 float fYaw
-ref rTarget
-begin function {iTargetMod, iTargetLocal, fYaw}
-    let rTarget := BuildRef iTargetMod iTargetLocal
-    if eval rTarget && IsFormValid rTarget
-        SetAngle Z fYaw
-        FaceObject rTarget
-    endif
+begin function {fYaw}
+    SetAngle Z fYaw
 end
 )";
         g_faceTargetFunction = g_scriptInterface->CompileScript(kFaceTargetSource);
@@ -1954,21 +1978,41 @@ end
         }
     }
 
-    const UInt32 targetMod = (targetFormId >> 24) & 0xFF;
-    const UInt32 targetLocal = targetFormId & 0x00FFFFFF;
     UInt32 yawBits = 0;
     static_assert(sizeof(yawBits) == sizeof(yawDegrees));
     std::memcpy(&yawBits, &yawDegrees, sizeof(yawBits));
     const bool applied = g_scriptInterface->CallFunctionAlt(
-        g_faceTargetFunction, speaker, 3, targetMod, targetLocal, yawBits);
+        g_faceTargetFunction, speaker, 1, yawBits);
     if (!applied) {
         g_nativeFacingFailed.fetch_add(1, std::memory_order_relaxed);
-        Logger::LogWarning("[NATIVE_FACING] call failed speaker=0x%08X target=0x%08X",
-            speakerFormId, targetFormId);
-    } else {
-        g_nativeFacingApplied.fetch_add(1, std::memory_order_relaxed);
+        Logger::LogWarning("[NATIVE_FACING] call failed speaker=0x%08X target=0x%08X requested_yaw=%.1f",
+            speakerFormId, targetFormId, yawDegrees);
+        return false;
     }
-    return applied;
+
+    constexpr float kRadiansToDegrees = 57.2957795f;
+    float actualYawDegrees = speaker->rotZ * kRadiansToDegrees;
+    while (actualYawDegrees < 0.0f) {
+        actualYawDegrees += 360.0f;
+    }
+    while (actualYawDegrees >= 360.0f) {
+        actualYawDegrees -= 360.0f;
+    }
+    float yawDifference = std::fabs(actualYawDegrees - yawDegrees);
+    if (yawDifference > 180.0f) {
+        yawDifference = 360.0f - yawDifference;
+    }
+    if (yawDifference > 2.0f) {
+        g_nativeFacingFailed.fetch_add(1, std::memory_order_relaxed);
+        Logger::LogWarning("[NATIVE_FACING] heading mismatch speaker=0x%08X target=0x%08X requested_yaw=%.1f actual_yaw=%.1f",
+            speakerFormId, targetFormId, yawDegrees, actualYawDegrees);
+        return false;
+    }
+
+    g_nativeFacingApplied.fetch_add(1, std::memory_order_relaxed);
+    Logger::LogInfo("[NATIVE_FACING] applied speaker=0x%08X target=0x%08X requested_yaw=%.1f actual_yaw=%.1f",
+        speakerFormId, targetFormId, yawDegrees, actualYawDegrees);
+    return true;
 }
 
 bool ClearNativeFacing(std::uint32_t speakerFormId) {
@@ -2753,9 +2797,20 @@ bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
     if (!actor) {
         return false;
     }
+    if (actionCode == 4) {
+        // MakeFollower belongs to CCC when it is installed, including for actors not yet in its roster.
+        handled = true;
+        usedCcc = true;
+    }
     if (!g_cccManagedQueryFunction) {
         g_cccManagedQueryFunction = g_scriptInterface->CompileScript(R"(
-begin function {}
+int iActionCode
+ref rSelf
+begin function {iActionCode}
+    let rSelf := GetSelf
+    if eval iActionCode == 4 && CCCInFaction JIPCCCIsHired == 0
+        rSelf.Call JIPCCCAddCompanion
+    endif
     SetFunctionValue CCCInFaction JIPCCCIsHired
 end
 )");
@@ -2768,8 +2823,12 @@ end
     alignas(NVSEArrayVarInterface::Element)
         unsigned char managedStorage[sizeof(NVSEArrayVarInterface::Element)]{};
     auto* managedResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(managedStorage);
-    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult, 0) ||
+    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult,
+            1, static_cast<UInt32>(actionCode)) ||
         managedResult->GetNumber() == 0.0) {
+        if (actionCode == 4) {
+            Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
+        }
         return false;
     }
     handled = true;
