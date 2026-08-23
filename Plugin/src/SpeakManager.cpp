@@ -3,6 +3,7 @@
 #include "AudioManager.h"
 #include "AgentManager.h"
 #include "ActorEligibilityFNV.h"
+#include "ActivityStatusFNV.h"
 #include "ActorPositionResolverFNV.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
@@ -193,6 +194,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static PendingRechatRetry g_pendingRechatRetry;
     static std::string g_lastRechatter;
     static bool g_rechatChainClosed = false;
+    static bool g_rechatChainAutonomous = false;
     static std::string g_rechatChainId;
     static std::chrono::steady_clock::time_point g_rechatCooldownUntil = {};
     static ScriptLine g_pendingRechatLaunchLine;
@@ -963,6 +965,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (reason) {
                 *reason = "actor is currently controlled by a scene/dialogue package";
             }
+            return false;
+        }
+
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, reason)) {
             return false;
         }
 
@@ -2835,6 +2841,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_rechatInFlight = false;
         g_rechatInFlightSpeaker.clear();
         g_rechatChainClosed = false;
+        g_rechatChainAutonomous = false;
         g_rechatChainId.clear();
         g_lastRechatter.clear();
         g_pendingRechatRetry = PendingRechatRetry{};
@@ -2846,6 +2853,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void StartRechatChainForAutonomousEvent() {
         ResetRechatChainState();
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            g_rechatChainAutonomous = true;
+        }
         Log("SpeakManager: Opened a fresh rechat chain from autonomous event");
     }
 
@@ -3268,6 +3279,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};
@@ -4873,6 +4885,23 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
+        bool autonomousResponse = false;
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            autonomousResponse = g_rechatChainAutonomous;
+        }
+        if (autonomousResponse && line.actorFormId != 0) {
+            std::string activityReason;
+            if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(line.actorFormId, &activityReason)) {
+                Log("SpeakManager: Dropping stale autonomous response for %s (0x%08X): %s",
+                    line.actor.c_str(), line.actorFormId, activityReason.c_str());
+                std::lock_guard<std::mutex> lock(g_rechatMutex);
+                g_rechatChainClosed = true;
+                g_pendingRechatRetry = PendingRechatRetry{};
+                return;
+            }
+        }
+
         InsertInQueue(line);
     }
 
@@ -4966,6 +4995,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};

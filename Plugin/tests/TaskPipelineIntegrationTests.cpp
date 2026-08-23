@@ -1,3 +1,4 @@
+#include "ActivityStatusFNV.h"
 #include "GameThreadDispatcher.h"
 #include "TaskManager.h"
 
@@ -89,11 +90,30 @@ void TestStaleCompletionDropsOnPumpingThread() {
     Check(completionThread == pumpThread, "stale completion cleanup must execute on the pumping thread");
 }
 
+void TestAutomaticDialogueActivityEligibility() {
+    ActivityStatusFNV::AutomaticDialogueState missing;
+    Check(ActivityStatusFNV::AutomaticDialogueBlockReason(missing) == nullptr,
+        "missing activity state must fail open");
+
+    ActivityStatusFNV::AutomaticDialogueState sleeping;
+    sleeping.available = true;
+    sleeping.sleeping = true;
+    Check(std::string(ActivityStatusFNV::AutomaticDialogueBlockReason(sleeping)) == "actor is sleeping",
+        "sleeping actors must be blocked from automatic dialogue");
+
+    ActivityStatusFNV::AutomaticDialogueState unconscious;
+    unconscious.available = true;
+    unconscious.unconscious = true;
+    Check(std::string(ActivityStatusFNV::AutomaticDialogueBlockReason(unconscious)) == "actor is unconscious",
+        "unconscious actors must be blocked from automatic dialogue");
+}
+
 } // namespace
 
 int main() {
     TestCompletionUsesPumpingThreadWithOrdinaryQueueFull();
     TestStaleCompletionDropsOnPumpingThread();
+    TestAutomaticDialogueActivityEligibility();
     TaskManager::Shutdown();
     GameThreadDispatcher::Shutdown();
     if (g_failures == 0) std::printf("Task pipeline integration tests passed\n");
