@@ -2823,12 +2823,22 @@ end
     alignas(NVSEArrayVarInterface::Element)
         unsigned char managedStorage[sizeof(NVSEArrayVarInterface::Element)]{};
     auto* managedResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(managedStorage);
-    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult,
-            1, static_cast<UInt32>(actionCode)) ||
-        managedResult->GetNumber() == 0.0) {
-        if (actionCode == 4) {
+    const auto callManagedQuery = [&](bool recruitIfMissing) {
+        return g_scriptInterface->CallFunction(
+                   g_cccManagedQueryFunction, actor, nullptr, managedResult,
+                   1, recruitIfMissing ? static_cast<UInt32>(4) : static_cast<UInt32>(0)) &&
+               managedResult->GetNumber() != 0.0;
+    };
+    const bool wasManaged = callManagedQuery(false);
+    if (actionCode == 4 && !wasManaged) {
+        if (!callManagedQuery(true)) {
             Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
+            return false;
         }
+        Logger::LogInfo("[NATIVE_ACTION] JIP CCC added companion actor=0x%08X", actorFormId);
+        return true;
+    }
+    if (!wasManaged) {
         return false;
     }
     handled = true;
