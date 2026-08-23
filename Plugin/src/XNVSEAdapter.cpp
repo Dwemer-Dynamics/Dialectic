@@ -2829,16 +2829,16 @@ end
                    1, recruitIfMissing ? static_cast<UInt32>(4) : static_cast<UInt32>(0)) &&
                managedResult->GetNumber() != 0.0;
     };
-    const bool wasManaged = callManagedQuery(false);
-    if (actionCode == 4 && !wasManaged) {
+    bool managed = callManagedQuery(false);
+    if (actionCode == 4 && !managed) {
         if (!callManagedQuery(true)) {
             Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
             return false;
         }
+        managed = true;
         Logger::LogInfo("[NATIVE_ACTION] JIP CCC added companion actor=0x%08X", actorFormId);
-        return true;
     }
-    if (!wasManaged) {
+    if (!managed) {
         return false;
     }
     handled = true;
@@ -2847,19 +2847,12 @@ end
     if (!g_cccCompanionCommandFunction) {
         g_cccCompanionCommandFunction = g_scriptInterface->CompileScript(R"(
 int iActionCode
-int iSlot
-int iTask
 ref rSelf
 begin function {iActionCode}
     let rSelf := GetSelf
     if eval CCCInFaction JIPCCCIsHired == 0
         SetFunctionValue 0
         return
-    endif
-    let iSlot := rSelf.Call JIPCCCGetSlot
-    if eval iSlot != -1
-        let iTask := JIPCCCActiveTasks.aTaskData[iSlot][0]
-        Call JIPCCCAbortTask iSlot, iTask, rSelf, 3
     endif
     RemoveScriptPackage
     SetRestrained 0
@@ -2874,9 +2867,18 @@ begin function {iActionCode}
         AddScriptPackage JIPCCCRelax
     elseif eval iActionCode == 4 || iActionCode == 5
         RemoveFromFaction JIPCCCCurrentTask
+        SetPlayerTeammate 1
         SetFactionRank JIPCCCFollowState 1
         CCCSetFollowState 1
         rSelf.Call JIPCCCAddPackages
+        if eval GetPlayerTeammate == 0
+            SetFunctionValue 0
+            return
+        endif
+        if eval CCCInFaction JIPCCCFollowState != 1
+            SetFunctionValue 0
+            return
+        endif
     else
         SetFunctionValue 0
         return
@@ -2896,9 +2898,16 @@ end
     auto* commandResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(commandStorage);
     if (!g_scriptInterface->CallFunction(g_cccCompanionCommandFunction, actor, nullptr,
             commandResult, 1, static_cast<UInt32>(actionCode))) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion command call failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
         return false;
     }
-    return commandResult->GetNumber() != 0.0;
+    const bool succeeded = commandResult->GetNumber() != 0.0;
+    if (!succeeded) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion state verification failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
+    }
+    return succeeded;
 }
 
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
