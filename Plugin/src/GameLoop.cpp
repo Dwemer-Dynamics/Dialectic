@@ -1733,6 +1733,13 @@ static std::vector<std::pair<uint32_t, std::string>> BuildFreshBoredCandidates(f
             continue;
         }
 
+        std::string activityReason;
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, &activityReason)) {
+            Logger::LogDebug("GameLoop: Bored candidate %s (0x%08X) skipped: %s",
+                position.actorName.c_str(), position.formId, activityReason.c_str());
+            continue;
+        }
+
         AgentManager::MarkAgentSeen(position.formId, distance);
         fresh.push_back({ position.formId, position.actorName, distance });
     }
