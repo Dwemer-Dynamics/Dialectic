@@ -2692,12 +2692,6 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
         ResolveNearbyPoi(request);
     }
 
-    if (request.action == "Follow" && IsPlayerTargetName(request.target)) {
-        request.action = "FollowPlayer";
-        request.target = PlayerDisplayNameForAction();
-        request.targetFormId = Misc::GetPlayerFormId() != 0 ? Misc::GetPlayerFormId() : 0x00000014;
-    }
-
     if (request.action == "PickupItem" &&
         (request.itemRefId == 0 || request.itemBaseId == 0 || request.itemBaseId == request.itemRefId)) {
         ResolveNearbyItem(request);

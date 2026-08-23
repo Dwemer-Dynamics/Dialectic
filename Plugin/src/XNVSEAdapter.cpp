@@ -2477,8 +2477,14 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
     SetWeaponOut 0
     EvaluatePackage
 
-    if eval iActionCode == 4 || iActionCode == 5
+    if eval iActionCode == 4
         SetPlayerTeammate 1
+        AddToFaction DialecticFollowFaction 0
+        SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
+        SetPackageTargetDistance DialecticFollowTargetPackage 192
+        AddScriptPackage DialecticFollowTargetPackage
+    elseif eval iActionCode == 5
+        SetPlayerTeammate 0
         AddToFaction DialecticFollowFaction 0
         SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
         SetPackageTargetDistance DialecticFollowTargetPackage 192
