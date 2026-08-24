@@ -1,5 +1,4 @@
 #include "SpeakManager.h"
-#include "ActionManager.h"
 #include "AudioManager.h"
 #include "AgentManager.h"
 #include "ActorEligibilityFNV.h"
@@ -3242,8 +3241,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         ClearFaceTargetBridge();
         ClearSubtitleBridge();
         ClearDialogueGuardBridge();
-        ActionManager::ClearPostDialogueActions();
-
         std::vector<ScriptLine> abortedLines;
         {
             std::lock_guard<std::mutex> lock(g_queueMutex);
@@ -4184,13 +4181,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return false;
         }
         const uint32_t speakerFormId = ResolveSpeakerFormId(finishedLine);
-        if (ActionManager::HasPendingPostDialogueActionForSpeaker(speaker, speakerFormId)) {
-            Log("SpeakManager: Rechat skipped for %s trigger=%s because a post-dialogue action is pending",
-                speaker.c_str(), trigger);
-            WriteRechatStatus("skipped", speaker, trigger, "post_dialogue_action_pending");
-            return false;
-        }
-
         const HTTPManager::QueueStatus httpStatus = HTTPManager::GetQueueStatus();
         const bool httpQueueDrained = !httpStatus.streamInProgress && httpStatus.httpResponsesQueued == 0;
         const int queuedLines = CountItems();
@@ -4529,41 +4519,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             AudioManager::SetVolume(GetBaseVoiceVolume());
             ClearSubtitleBridge();
             ClearDialogueGuardBridge();
-            const HTTPManager::QueueStatus httpStatusForActions = HTTPManager::GetQueueStatus();
-            const bool responseStreamDrainedForActions =
-                !httpStatusForActions.streamInProgress &&
-                httpStatusForActions.httpResponsesQueued == 0 &&
-                httpStatusForActions.pendingHttpTasks == 0 &&
-                httpStatusForActions.activeHttpTasks == 0;
-            const int queuedLinesForActions = CountItems();
-            const int pendingAudioForActions = PendingAudioWorkCount();
-            const bool speechQueueDrainedForActions =
-                queuedLinesForActions == 0 &&
-                pendingAudioForActions == 0;
-            const bool flushedPostDialogueActions =
-                finishedLine.isFinalResponseLine &&
-                responseStreamDrainedForActions &&
-                speechQueueDrainedForActions &&
-                ActionManager::FlushPostDialogueActionsForSpeaker(finishedLine.actor,
-                                                                  finishedLine.actorFormId,
-                                                                  "SpeakManager");
-            if (finishedLine.isFinalResponseLine &&
-                (!responseStreamDrainedForActions || !speechQueueDrainedForActions) &&
-                ActionManager::HasPendingPostDialogueActionForSpeaker(finishedLine.actor,
-                                                                      finishedLine.actorFormId)) {
-                Log("SpeakManager: Holding post-dialogue action for %s because response/speech queue is not drained "
-                    "(http_stream=%d http_tasks=%zu/%zu http_queued=%zu dialogue=%d pendingAudio=%d)",
-                    finishedLine.actor.c_str(),
-                    httpStatusForActions.streamInProgress ? 1 : 0,
-                    httpStatusForActions.activeHttpTasks,
-                    httpStatusForActions.pendingHttpTasks,
-                    httpStatusForActions.httpResponsesQueued,
-                    queuedLinesForActions,
-                    pendingAudioForActions);
-            }
             if (!finishedLine.textOnlyFallback &&
-                !rechatAlreadyLaunched &&
-                !flushedPostDialogueActions) {
+                !rechatAlreadyLaunched) {
                 MaybeLaunchRechatAfterPlayback(finishedLine);
             }
         }
@@ -4959,8 +4916,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::SetVolume(GetBaseVoiceVolume());
         ClearSubtitleBridge();
         ClearPlayerInputTtsGate("stop_speaking");
-        ActionManager::ClearPostDialogueActions();
-
         {
             std::lock_guard<std::mutex> rechatLock(g_rechatMutex);
             g_rechatInFlight = false;

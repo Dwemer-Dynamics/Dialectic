@@ -67,6 +67,7 @@ Script* g_teleportActorFunction = nullptr;
 Script* g_killActorFunction = nullptr;
 Script* g_pickupTransferFunction = nullptr;
 Script* g_openTeammateContainerFunction = nullptr;
+Script* g_cccStopFollowingFunction = nullptr;
 Script* g_stopFollowingFunction = nullptr;
 Script* g_queryMerchantContainerFunction = nullptr;
 Script* g_queryOffersServicesFunction = nullptr;
@@ -2477,8 +2478,14 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
     SetWeaponOut 0
     EvaluatePackage
 
-    if eval iActionCode == 4 || iActionCode == 5
+    if eval iActionCode == 4
         SetPlayerTeammate 1
+        AddToFaction DialecticFollowFaction 0
+        SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
+        SetPackageTargetDistance DialecticFollowTargetPackage 192
+        AddScriptPackage DialecticFollowTargetPackage
+    elseif eval iActionCode == 5
+        SetPlayerTeammate 0
         AddToFaction DialecticFollowFaction 0
         SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
         SetPackageTargetDistance DialecticFollowTargetPackage 192
@@ -2829,16 +2836,16 @@ end
                    1, recruitIfMissing ? static_cast<UInt32>(4) : static_cast<UInt32>(0)) &&
                managedResult->GetNumber() != 0.0;
     };
-    const bool wasManaged = callManagedQuery(false);
-    if (actionCode == 4 && !wasManaged) {
+    bool managed = callManagedQuery(false);
+    if (actionCode == 4 && !managed) {
         if (!callManagedQuery(true)) {
             Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
             return false;
         }
+        managed = true;
         Logger::LogInfo("[NATIVE_ACTION] JIP CCC added companion actor=0x%08X", actorFormId);
-        return true;
     }
-    if (!wasManaged) {
+    if (!managed) {
         return false;
     }
     handled = true;
@@ -2847,19 +2854,12 @@ end
     if (!g_cccCompanionCommandFunction) {
         g_cccCompanionCommandFunction = g_scriptInterface->CompileScript(R"(
 int iActionCode
-int iSlot
-int iTask
 ref rSelf
 begin function {iActionCode}
     let rSelf := GetSelf
     if eval CCCInFaction JIPCCCIsHired == 0
         SetFunctionValue 0
         return
-    endif
-    let iSlot := rSelf.Call JIPCCCGetSlot
-    if eval iSlot != -1
-        let iTask := JIPCCCActiveTasks.aTaskData[iSlot][0]
-        Call JIPCCCAbortTask iSlot, iTask, rSelf, 3
     endif
     RemoveScriptPackage
     SetRestrained 0
@@ -2874,9 +2874,18 @@ begin function {iActionCode}
         AddScriptPackage JIPCCCRelax
     elseif eval iActionCode == 4 || iActionCode == 5
         RemoveFromFaction JIPCCCCurrentTask
+        SetPlayerTeammate 1
         SetFactionRank JIPCCCFollowState 1
         CCCSetFollowState 1
         rSelf.Call JIPCCCAddPackages
+        if eval GetPlayerTeammate == 0
+            SetFunctionValue 0
+            return
+        endif
+        if eval CCCInFaction JIPCCCFollowState != 1
+            SetFunctionValue 0
+            return
+        endif
     else
         SetFunctionValue 0
         return
@@ -2896,9 +2905,16 @@ end
     auto* commandResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(commandStorage);
     if (!g_scriptInterface->CallFunction(g_cccCompanionCommandFunction, actor, nullptr,
             commandResult, 1, static_cast<UInt32>(actionCode))) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion command call failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
         return false;
     }
-    return commandResult->GetNumber() != 0.0;
+    const bool succeeded = commandResult->GetNumber() != 0.0;
+    if (!succeeded) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion state verification failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
+    }
+    return succeeded;
 }
 
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
@@ -3173,6 +3189,53 @@ bool ExecuteNativeStopFollowing(std::uint32_t actorFormId) {
     if (!actor) {
         return false;
     }
+
+    bool cccRemovalScheduled = false;
+    std::vector<NativeLoadedPlugin> plugins;
+    const bool capturedPlugins = CaptureNativeLoadedPlugins(plugins);
+    const bool cccLoaded = capturedPlugins && std::any_of(
+        plugins.begin(), plugins.end(), [](const NativeLoadedPlugin& plugin) {
+            std::string name = plugin.name;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return name == "jip companions command & control.esp";
+        });
+    if (cccLoaded && g_scriptInterface->CallFunction) {
+        if (!g_cccStopFollowingFunction) {
+            g_cccStopFollowingFunction = g_scriptInterface->CompileScript(R"(
+ref rSelf
+begin function {}
+    let rSelf := GetSelf
+    if eval CCCInFaction JIPCCCIsHired
+        AddFormToFormList JIPCCCRemovedList rSelf
+        set JIPCCCMain.iRefreshHired to 0
+        if eval ListGetFormIndex JIPCCCRemovedList rSelf != -1
+            SetFunctionValue 1
+        else
+            SetFunctionValue 0
+        endif
+    else
+        SetFunctionValue 0
+    endif
+end
+)");
+        }
+        if (!g_cccStopFollowingFunction) {
+            Logger::LogWarning("[NATIVE_ACTION] JIP CCC detected but stop-following function did not compile");
+        } else {
+            alignas(NVSEArrayVarInterface::Element)
+                unsigned char resultStorage[sizeof(NVSEArrayVarInterface::Element)]{};
+            auto* result = reinterpret_cast<NVSEArrayVarInterface::Element*>(resultStorage);
+            cccRemovalScheduled = g_scriptInterface->CallFunction(
+                g_cccStopFollowingFunction, actor, nullptr, result, 0) &&
+                result->GetNumber() != 0.0;
+            if (cccRemovalScheduled) {
+                Logger::LogInfo("[NATIVE_ACTION] JIP CCC removal scheduled actor=0x%08X", actorFormId);
+            }
+        }
+    }
+
     if (!g_stopFollowingFunction) {
         static constexpr const char* kStopFollowingSource = R"(
 int iActorMod
@@ -3287,8 +3350,11 @@ end
     }
     const UInt32 actorMod = (actorFormId >> 24) & 0xFF;
     const UInt32 actorLocal = actorFormId & 0x00FFFFFF;
-    return g_scriptInterface->CallFunctionAlt(g_stopFollowingFunction, actor, 2,
-        actorMod, actorLocal);
+    const bool vanillaStopped = g_scriptInterface->CallFunctionAlt(
+        g_stopFollowingFunction, actor, 2, actorMod, actorLocal);
+    Logger::LogInfo("[NATIVE_ACTION] stop-following cleanup actor=0x%08X jip_ccc=%d vanilla=%d",
+        actorFormId, cccRemovalScheduled ? 1 : 0, vanillaStopped ? 1 : 0);
+    return cccRemovalScheduled || vanillaStopped;
 }
 
 bool ResolveNativeTradeMenu(std::uint32_t actorFormId,
