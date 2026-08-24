@@ -2109,7 +2109,7 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
             name = "dialectic_control";
             source = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting:|Chat Modes|LLM Model|Dynamic Profiles|Close Menu"
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Modes|LLM Model|Dynamic Profiles|Wait Here|Close Menu"
 end
 )";
             break;

@@ -66,6 +66,7 @@ void RequestTextInputMenuOpen();
 bool IsTextInputMenuActiveOrRecentlyClosed();
 void MarkRuntimeConfigDirty();
 void RequestDialecticControlMenuOpen();
+void RequestControlMenuWaitHere();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
 void RequestDynamicProfileMenuOpen();
