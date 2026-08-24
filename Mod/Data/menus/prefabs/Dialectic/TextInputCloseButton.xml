@@ -1,0 +1,46 @@
+<!-- Cancel button for the Dialectic chatbox.
+     Injected into the live TextEditMenu tree at runtime so JIP's own
+     Data\NVSE\plugins\textinput\texteditmenu.xml is never overridden.
+     Geometry and styling mirror JIP's TEM_OKButton so the pair reads as one row.
+     Clicks are routed by Dialectic/TextInputCloseClick.txt; id 100 is deliberately
+     not 1, so JIP's text-input close hook ignores it. -->
+
+<hotrect name="DialecticCloseButton">
+    <id> 100 </id>
+    <width>
+        <copy src="child(Button_Text)" trait="width"/>
+        <add> 20 </add>
+    </width>
+    <height>
+        <copy src="child(Button_Text)" trait="height"/>
+        <add> 20 </add>
+    </height>
+    <x>
+        <copy src="sibling(TEM_OKButton)" trait="x"/>
+        <sub src="me()" trait="width"/>
+        <sub> 20 </sub>
+    </x>
+    <y> <copy src="sibling(TEM_OKButton)" trait="y"/> </y>
+    <target> 1 </target>
+    <locus> 1 </locus>
+    <mouseoversound> UIMenuFocus </mouseoversound>
+
+    <rect name="Button_Box">
+        <depth> 3 </depth>
+        <include src="box.xml"/>
+        <visible> <copy src="parent()" trait="mouseover"/> </visible>
+    </rect>
+
+    <text name="Button_Text">
+        <font> <copy> 2 </copy> <add src="grandparent()" trait="user0"/> </font>
+        <string> Close </string>
+        <justify> 2 </justify>
+        <alpha>
+            <copy> 128 </copy>
+            <add> <copy> 127 </copy> <onlyif src="parent()" trait="mouseover"/> </add>
+        </alpha>
+        <depth> 3 </depth>
+        <x> <copy src="parent()" trait="width"/> <div> 2 </div> </x>
+        <y> <copy> 20 </copy> <sub> <copy> 2 </copy> <onlyif src="grandparent()" trait="user0"/> </sub> </y>
+    </text>
+</hotrect>

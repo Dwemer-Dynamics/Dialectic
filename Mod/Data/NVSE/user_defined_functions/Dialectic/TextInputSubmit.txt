@@ -1,0 +1,13 @@
+; Handles the JIP chatbox result outside the caller's 512-character expression limit.
+begin function {string_var sTextInputMenu}
+    if eval sTextInputMenu && (sv_Length sTextInputMenu) > 0
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+        PrintC "[DIALECTIC] Wrote text input bridge file."
+    else
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
+        PrintC "[DIALECTIC] Chatbox closed without sending."
+    endif
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
+    sv_Destruct sTextInputMenu
+end
