@@ -180,7 +180,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"equip", "EquipItem"},
         {"equipitem", "EquipItem"},
         {"follow", "Follow"},
-        {"followplayer", "FollowPlayer"},
+        {"followplayer", "Follow"},
         {"stopfollow", "StopFollowing"},
         {"stopfollowing", "StopFollowing"},
         {"stopfollowingplayer", "StopFollowing"},
@@ -193,9 +193,9 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"increasewalkspeed", "IncreaseWalkSpeed"},
         {"inspect", "Inspect"},
         {"inspectsurroundings", "InspectSurroundings"},
-        {"makefollower", "MakeFollower"},
-        {"joinplayerparty", "MakeFollower"},
-        {"jointoplayersquad", "MakeFollower"},
+        {"makefollower", "Follow"},
+        {"joinplayerparty", "Follow"},
+        {"jointoplayersquad", "Follow"},
         {"moveto", "MoveTo"},
         {"barter", "Barter"},
         {"showbartermenu", "Barter"},
@@ -243,7 +243,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
 
     if (!playerKey.empty()) {
         if (key == "follow" + playerKey) {
-            return "FollowPlayer";
+            return "Follow";
         }
         if (key == "stopfollowing" + playerKey || key == "stopfollow" + playerKey ||
             key == "dismiss" + playerKey || key == "dismiss" + playerKey + "fromparty" ||
@@ -251,7 +251,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
             return "StopFollowing";
         }
         if (key == "join" + playerKey + "party" || key == "jointo" + playerKey + "squad") {
-            return "MakeFollower";
+            return "Follow";
         }
         if (key == "takecapsfrom" + playerKey || key == "takegoldfrom" + playerKey) {
             return "TakeCapsFromPlayer";
@@ -502,13 +502,11 @@ const std::set<std::string>& CanonicalActions() {
         "EndConversation",
         "EquipItem",
         "Follow",
-        "FollowPlayer",
         "GiveCapsTo",
         "GiveItemTo",
         "IncreaseWalkSpeed",
         "Inspect",
         "InspectSurroundings",
-        "MakeFollower",
         "MoveTo",
         "Barter",
         "OpenInventory",
@@ -537,11 +535,9 @@ int ActionCodeForAction(const std::string& action) {
     if (action == "Attack") return 1;
     if (action == "OpenInventory") return 2;
     if (action == "Barter") return 3;
-    if (action == "MakeFollower") return 4;
-    if (action == "FollowPlayer") return 5;
+    if (action == "Follow") return 4;
     if (action == "ComeCloser") return 6;
     if (action == "MoveTo") return 7;
-    if (action == "Follow") return 8;
     if (action == "GiveCapsTo") return 9;
     if (action == "TakeCapsFromPlayer") return 10;
     if (action == "GiveItemTo") return 11;
@@ -2987,13 +2983,10 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                         Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                         Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
                             request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
-                    } else {
-                        SendFuncretResult(request, request.action + " failed because companion_adapter_rejected.");
-                        Console::Print("[DIALECTIC] Action failed: %s", request.action.c_str());
-                        Logger::LogWarning("[NATIVE_ACTION] companion adapter rejected action=%s speaker=0x%08X adapter=%s",
-                            request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                        return;
                     }
-                    return;
+                    Logger::LogWarning("[NATIVE_ACTION] companion adapter rejected action=%s speaker=0x%08X adapter=%s; trying permanent vanilla fallback",
+                        request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
                 }
             }
             if (packageNativeAction && XNVSEAdapter::ExecuteNativePackageAction(
