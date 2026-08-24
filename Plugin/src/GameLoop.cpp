@@ -1610,6 +1610,10 @@ static bool IsBoredEventBlocked(std::string& reason) {
         reason = "paused";
         return true;
     }
+    if (Config::boredAvoidInMenu && IsTextInputMenuActiveOrRecentlyClosed()) {
+        reason = "text input active";
+        return true;
+    }
     if (Config::boredAvoidInMenu && g_gameState.isInMenu) {
         reason = "menu open";
         return true;
@@ -1759,6 +1763,13 @@ static std::vector<std::pair<uint32_t, std::string>> BuildFreshBoredCandidates(f
             ? spatial.airDistance
             : DistanceBetween(player.position, position.position);
         if (maxDistance > 0.0f && distance > maxDistance) {
+            continue;
+        }
+
+        std::string activityReason;
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, &activityReason)) {
+            Logger::LogDebug("GameLoop: Bored candidate %s (0x%08X) skipped: %s",
+                position.actorName.c_str(), position.formId, activityReason.c_str());
             continue;
         }
 
