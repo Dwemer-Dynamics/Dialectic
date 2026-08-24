@@ -6,6 +6,7 @@
 #include "nvse/PluginAPI.h"
 #include "nvse/GameAPI.h"
 #include "nvse/GameData.h"
+#include "nvse/GameExtraData.h"
 #include "nvse/GameForms.h"
 #include "nvse/GameObjects.h"
 #include "nvse/GameProcess.h"
@@ -99,6 +100,57 @@ struct MapMarkerCaptureState {
 };
 MapMarkerCaptureState g_mapMarkerCapture;
 std::mutex g_mapMarkerMutex;
+
+// Resolve inherited base factions and per-reference rank changes into the actor's effective memberships.
+void CaptureActorFactions(Actor* actor, TESActorBase* actorBase,
+    std::vector<std::pair<std::uint32_t, int>>& factions) {
+    factions.clear();
+    if (!actor || !actorBase) {
+        return;
+    }
+
+    TESActorBase* factionBase = actorBase;
+    std::unordered_set<std::uint32_t> visitedTemplates;
+    while (factionBase->baseData.templateActor &&
+           (factionBase->baseData.templateFlags & TESActorBaseData::kTemplateFlag_UseFactions) != 0) {
+        TESForm* templateForm = factionBase->baseData.templateActor;
+        if (!templateForm ||
+            (templateForm->typeID != kFormType_TESNPC && templateForm->typeID != kFormType_TESCreature) ||
+            !visitedTemplates.insert(templateForm->refID).second) {
+            break;
+        }
+        factionBase = static_cast<TESActorBase*>(templateForm);
+    }
+
+    std::unordered_map<std::uint32_t, int> ranks;
+    for (auto iterator = factionBase->baseData.factionList.Begin(); !iterator.End(); ++iterator) {
+        TESActorBaseData::FactionListData* entry = iterator.Get();
+        if (!entry || !entry->faction || entry->faction->refID == 0) {
+            continue;
+        }
+        ranks[entry->faction->refID] = static_cast<int>(entry->rank);
+    }
+
+    auto* factionChanges = static_cast<ExtraFactionChanges*>(
+        actor->extraDataList.GetByType(kExtraData_FactionChanges));
+    ExtraFactionChanges::FactionListEntry* changes = factionChanges ? factionChanges->data : nullptr;
+    if (changes) {
+        for (auto iterator = changes->Begin(); !iterator.End(); ++iterator) {
+            ExtraFactionChanges::FactionListData* entry = iterator.Get();
+            if (!entry || !entry->faction || entry->faction->refID == 0) {
+                continue;
+            }
+            ranks[entry->faction->refID] = static_cast<std::int8_t>(entry->rank);
+        }
+    }
+
+    factions.reserve(ranks.size());
+    for (const auto& [formId, rank] : ranks) {
+        factions.emplace_back(formId, rank);
+    }
+    std::sort(factions.begin(), factions.end(),
+        [](const auto& left, const auto& right) { return left.first < right.first; });
+}
 
 std::mutex g_callbackMutex;
 MessageCallback g_callback;
@@ -1246,6 +1298,7 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
                     state.raceName = CopyGameString(race->fullName.name);
                 }
             }
+            CaptureActorFactions(actor, actorBase, state.factions);
         }
         state.inCombat = actor->IsInCombat();
         Actor* combatTarget = actor->GetCombatTarget();

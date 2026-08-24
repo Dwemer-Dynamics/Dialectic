@@ -1046,6 +1046,7 @@ namespace AgentManager {
             data.actionPoints = nativeActor.actionPoints;
             data.actionPointsMax = nativeActor.actionPointsMax;
             data.scale = nativeActor.scale;
+            data.factions = nativeActor.factions;
 
             data.equipment.reserve(nativeActor.equipment.size());
             for (const auto& nativeItem : nativeActor.equipment) {

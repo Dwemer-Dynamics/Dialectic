@@ -635,6 +635,7 @@ void CaptureFrame() {
                 actor.y = source.y;
                 actor.z = source.z;
                 actor.yaw = source.yaw;
+                actor.factions = source.factions;
                 actor.equipment.reserve(source.equipment.size());
                 for (const auto& sourceItem : source.equipment) {
                     RuntimeSnapshot::EquipmentItem item;

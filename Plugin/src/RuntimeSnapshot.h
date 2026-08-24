@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RuntimeSnapshot {
@@ -89,6 +90,7 @@ struct ActorState {
     float y{0.0f};
     float z{0.0f};
     float yaw{0.0f};
+    std::vector<std::pair<std::uint32_t, int>> factions;
     std::vector<EquipmentItem> equipment;
 };
 
