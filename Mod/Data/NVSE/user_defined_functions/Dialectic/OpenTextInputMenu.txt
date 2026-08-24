@@ -1,6 +1,8 @@
 ref rTarget
 string_var sTargetName
 string_var sHintTarget
+string_var sModeLabel
+array_var aModeLabels
 float fNarratorMode
 float fModeIndex
 
@@ -11,9 +13,23 @@ begin function {}
         return
     endif
 
-    set fNarratorMode to GetINIFloat "Narrator:Mode" "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    set fModeIndex to GetINIFloat "Modes:CurrentIndex" "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    if eval fNarratorMode > 0 || fModeIndex == 3
+    ; The mode and narrator flags are runtime state owned by the plugin; they are never
+    ; written back to dialectic_custom.ini, so read them from the plugin instead of the INI.
+    let fNarratorMode := DialecticGetConfigInt "Narrator" "Mode" 0
+    let fModeIndex := DialecticGetConfigInt "Modes" "CurrentIndex" 0
+    if eval fNarratorMode > 0
+        let fModeIndex := 4
+    endif
+
+    ; Index order mirrors ModeLabelFromIndex in Plugin/src/GameLoop.cpp.
+    let aModeLabels := ar_List "STANDARD" "WHISPER" "CLOSE" "SHOUT" "NARRATOR" "DIRECTOR" "INJECT EVENT" "INJECT & CHAT" "CHEAT"
+    if eval fModeIndex >= 0 && fModeIndex <= 8
+        let sModeLabel := aModeLabels[fModeIndex]
+    else
+        let sModeLabel := sv_Construct "STANDARD"
+    endif
+
+    if eval fModeIndex == 4
         let sTargetName := sv_Construct "The Narrator"
     else
         let sHintTarget := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_textinput_target.tmp" 1 1
@@ -31,29 +47,35 @@ begin function {}
     if eval sTargetName && (sv_Length sTargetName) > 0
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=%z\n" sTargetName
         ShowTextInputMenu (begin function {string_var sTextInputMenu}
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+            if eval sTextInputMenu && (sv_Length sTextInputMenu) > 0
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+                PrintC "[DIALECTIC] Wrote text input bridge file."
+            else
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
+                PrintC "[DIALECTIC] Chatbox closed without sending."
+            endif
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            PrintC "[DIALECTIC] Wrote text input bridge file."
             sv_Destruct sTextInputMenu
-        end) 600 105 "Talking to %z" sTargetName
+        end) 600 130 "Talking to %z [%z]" sTargetName sModeLabel
         SetTextInputExtendedProps 0 0 0 32767 2
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/red" 255
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/green" 255
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/blue" 255
+        call (CompileScript "Dialectic/ApplyTextInputMenuLayout.txt")
     else
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=fallback\n"
         ShowTextInputMenu (begin function {string_var sTextInputMenu}
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+            if eval sTextInputMenu && (sv_Length sTextInputMenu) > 0
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
+                PrintC "[DIALECTIC] Wrote text input bridge file."
+            else
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
+                PrintC "[DIALECTIC] Chatbox closed without sending."
+            endif
             WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            PrintC "[DIALECTIC] Wrote text input bridge file."
             sv_Destruct sTextInputMenu
-        end) 600 105 "Talking to target"
+        end) 600 130 "Talking to target [%z]" sModeLabel
         SetTextInputExtendedProps 0 0 0 32767 2
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/red" 255
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/green" 255
-        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/blue" 255
+        call (CompileScript "Dialectic/ApplyTextInputMenuLayout.txt")
     endif
 
     if eval sTargetName
@@ -61,5 +83,8 @@ begin function {}
     endif
     if eval sHintTarget
         sv_Destruct sHintTarget
+    endif
+    if eval sModeLabel
+        sv_Destruct sModeLabel
     endif
 end
