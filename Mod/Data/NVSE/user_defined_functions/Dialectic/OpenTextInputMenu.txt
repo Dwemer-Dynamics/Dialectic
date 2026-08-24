@@ -46,34 +46,12 @@ begin function {}
 
     if eval sTargetName && (sv_Length sTargetName) > 0
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=%z\n" sTargetName
-        ShowTextInputMenu (begin function {string_var sTextInputMenu}
-            if eval sTextInputMenu && (sv_Length sTextInputMenu) > 0
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
-                PrintC "[DIALECTIC] Wrote text input bridge file."
-            else
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
-                PrintC "[DIALECTIC] Chatbox closed without sending."
-            endif
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            sv_Destruct sTextInputMenu
-        end) 600 130 "Talking to %z [%z]" sTargetName sModeLabel
+        ShowTextInputMenu (CompileScript "Dialectic/TextInputSubmit.txt") 600 130 "Talking to %z [%z]" sTargetName sModeLabel
         SetTextInputExtendedProps 0 0 0 32767 2
         call (CompileScript "Dialectic/ApplyTextInputMenuLayout.txt")
     else
         WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "entered=1 target=fallback\n"
-        ShowTextInputMenu (begin function {string_var sTextInputMenu}
-            if eval sTextInputMenu && (sv_Length sTextInputMenu) > 0
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput.tmp" 0 "%z" sTextInputMenu
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "submitted=1\nclosed=1\n"
-                PrintC "[DIALECTIC] Wrote text input bridge file."
-            else
-                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
-                PrintC "[DIALECTIC] Chatbox closed without sending."
-            endif
-            WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
-            sv_Destruct sTextInputMenu
-        end) 600 130 "Talking to target [%z]" sModeLabel
+        ShowTextInputMenu (CompileScript "Dialectic/TextInputSubmit.txt") 600 130 "Talking to target [%z]" sModeLabel
         SetTextInputExtendedProps 0 0 0 32767 2
         call (CompileScript "Dialectic/ApplyTextInputMenuLayout.txt")
     endif

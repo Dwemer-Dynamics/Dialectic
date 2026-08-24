@@ -6,8 +6,9 @@ a narrow JIP UI adapter for `ShowTextInputMenu`.
 1. `ln_DialecticBootstrap.txt` registers the configured MCM hotkeys and starts
    `TextInputMenuTick.txt` once when a save is loaded.
 2. `GameLoop` requests the text-input menu through the native command path.
-3. `OpenTextInputMenu.txt` opens the JIP text input. The title shows the target and
-   the current chat mode (`Talking to Veronica [CHEAT]`), Narrator mode always targets
+3. `OpenTextInputMenu.txt` opens the JIP text input and passes submissions to the
+   parser-safe `TextInputSubmit.txt` callback. The title shows the target and the
+   current chat mode (`Talking to Veronica [CHEAT]`), Narrator mode always targets
    The Narrator, and typed text wraps onto a second line instead of running off the
    right edge.
 4. `ApplyTextInputMenuLayout.txt` tunes the open menu through runtime trait writes and
