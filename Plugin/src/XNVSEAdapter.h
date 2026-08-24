@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace XNVSEAdapter {
@@ -139,6 +140,7 @@ struct NativeActorState {
     float y{0.0f};
     float z{0.0f};
     float yaw{0.0f};
+    std::vector<std::pair<std::uint32_t, int>> factions;
     std::vector<NativeEquipmentItem> equipment;
 };
 
