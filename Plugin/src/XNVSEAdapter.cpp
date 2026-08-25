@@ -48,7 +48,7 @@ Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
 Script* g_stopLookFunction = nullptr;
 Script* g_dialecticControlMenuFunction = nullptr;
-Script* g_modeMenuFunction = nullptr;
+std::unordered_map<std::string, Script*> g_modeMenuFunctions;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
 Script* g_pipVisionToggleMenusFunction = nullptr;
@@ -1059,7 +1059,7 @@ void Shutdown() {
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
     g_dialecticControlMenuFunction = nullptr;
-    g_modeMenuFunction = nullptr;
+    g_modeMenuFunctions.clear();
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
     g_pipVisionToggleMenusFunction = nullptr;
@@ -2094,7 +2094,24 @@ end
     return g_scriptInterface->CallFunctionAlt(g_stopLookFunction, speaker, 0);
 }
 
-bool OpenNativeToolMenu(NativeToolMenu menu) {
+namespace {
+
+// The menu title is embedded in a compiled script string literal and MessageBoxExAlt
+// treats ^ and | as field separators, so drop anything that could break either parse.
+std::string SanitizeMenuTitle(const char* requested, const char* fallback) {
+    std::string title;
+    for (const char* cursor = requested; cursor && *cursor; ++cursor) {
+        const unsigned char character = static_cast<unsigned char>(*cursor);
+        if (character < 0x20 || character > 0x7E) continue;
+        if (character == '^' || character == '|' || character == '"') continue;
+        title.push_back(static_cast<char>(character));
+    }
+    return title.empty() ? std::string(fallback) : title;
+}
+
+}  // namespace
+
+bool OpenNativeToolMenu(NativeToolMenu menu, const char* titleOverride) {
     if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
         !g_scriptInterface->CallFunctionAlt) {
         return false;
@@ -2103,6 +2120,7 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
     Script** function = nullptr;
     const char* source = nullptr;
     const char* name = "unknown";
+    std::string dynamicSource;
     switch (menu) {
         case NativeToolMenu::DialecticControl:
             function = &g_dialecticControlMenuFunction;
@@ -2113,15 +2131,20 @@ begin function {}
 end
 )";
             break;
-        case NativeToolMenu::Mode:
-            function = &g_modeMenuFunction;
+        case NativeToolMenu::Mode: {
             name = "mode";
-            source = R"(
+            // The title advertises the active mode, so cache one compiled function per title.
+            const std::string title = SanitizeMenuTitle(titleOverride, "DIALECTIC Chat Modes");
+            function = &g_modeMenuFunctions[title];
+            dynamicSource = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^DIALECTIC Chat Modes^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
+    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^)" + title +
+                R"(^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
 end
 )";
+            source = dynamicSource.c_str();
             break;
+        }
         case NativeToolMenu::LlmModel:
             function = &g_llmModelMenuFunction;
             name = "llm_model";

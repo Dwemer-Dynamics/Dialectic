@@ -1077,6 +1077,16 @@ static const char* ModeLabelFromIndex(int modeIndex) {
     }
 }
 
+static const char* ModeTitleNameFromIndex(int modeIndex) {
+    // Keep titles aligned with the user-facing menu labels instead of internal mode names.
+    switch (modeIndex) {
+        case 6: return "INJECT EVENT";
+        case 7: return "INJECT & CHAT";
+        case 8: return "CHEAT";
+        default: return ModeNameFromIndex(modeIndex);
+    }
+}
+
 static int ModeIndexFromName(const std::string& rawMode) {
     const std::string mode = ToUpperCopy(TrimInput(rawMode));
     for (int i = 0; i <= 8; ++i) {
@@ -1219,7 +1229,9 @@ void RequestModeMenuOpen() {
         Logger::LogInfo("GameLoop: Ignoring mode selector while a blocking menu is open");
         return;
     }
-    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode)) {
+    const std::string modeMenuTitle = std::string("Mode: [") +
+        ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8)) + "]";
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode, modeMenuTitle.c_str())) {
         Logger::LogInfo("GameLoop: Opened mode selector through native UI adapter");
         return;
     }
