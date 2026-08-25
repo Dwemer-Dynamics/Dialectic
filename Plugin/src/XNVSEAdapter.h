@@ -320,7 +320,7 @@ void InvalidateNativePresentation();
 void InvalidateNativeObjectCache();
 bool ApplyNativeFacing(std::uint32_t speakerFormId, std::uint32_t targetFormId, float yawDegrees);
 bool ClearNativeFacing(std::uint32_t speakerFormId);
-bool OpenNativeToolMenu(NativeToolMenu menu);
+bool OpenNativeToolMenu(NativeToolMenu menu, const char* titleOverride = nullptr);
 bool ToggleNativePipVisionMenus();
 bool CaptureNativePipVisionScreenshot();
 bool ApplyNativeMfg(std::uint32_t actorFormId, int phoneme, int intensity, bool reset);
