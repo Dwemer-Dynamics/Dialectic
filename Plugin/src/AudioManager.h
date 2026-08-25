@@ -28,13 +28,10 @@ void Resume();
 
 // Update 3D audio positioning
 void Update(const Vector3& sourcePos, const Vector3& listenerPos,
-            const Vector3& listenerForward, float listenerYaw);
+            const Vector3& listenerForward);
 
 // Toggle player-heard 3D panning. When disabled, playback stays centered/flat 2D.
 void Set3DPlaybackEnabled(bool enabled);
-
-// Use listener camera forward vector instead of player actor yaw for 3D panning.
-void SetCameraBasedAudio(bool enabled);
 
 // Strength multiplier for player-heard 3D panning. 1.0 is natural, higher is more obvious.
 void Set3DPlaybackStrength(float strength);

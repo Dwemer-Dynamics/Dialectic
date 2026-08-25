@@ -11,6 +11,7 @@
 #include "nvse/GameObjects.h"
 #include "nvse/GameProcess.h"
 #include "nvse/GameUI.h"
+#include "nvse/NiObjects.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1179,6 +1180,53 @@ bool CaptureNativeGameState(NativeGameState& state) {
             state.containerMenuOpen || state.loadingMenuOpen;
         state.valid = true;
     return true;
+}
+
+bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ) {
+    forwardX = 0.0f;
+    forwardY = 0.0f;
+    forwardZ = 0.0f;
+
+    auto* interfaceManager = *reinterpret_cast<InterfaceManager**>(kInterfaceManagerAddress);
+    if (!interfaceManager) {
+        return false;
+    }
+
+    SceneGraph* sceneGraphs[] = {
+        interfaceManager->sceneGraph004,
+        interfaceManager->sceneGraph008,
+    };
+    for (SceneGraph* sceneGraph : sceneGraphs) {
+        if (!sceneGraph) {
+            continue;
+        }
+
+        // xNVSE exposes SceneGraph as an incomplete type; its documented camera pointer is at 0xDC.
+        auto* camera = *reinterpret_cast<NiAVObject**>(
+            reinterpret_cast<std::uintptr_t>(sceneGraph) + 0xDC);
+        if (!camera) {
+            continue;
+        }
+
+        const float* rotation = camera->dat0064.rotate.data;
+        const float candidateX = rotation[0];
+        const float candidateY = rotation[3];
+        const float candidateZ = rotation[6];
+        const float length = std::sqrt(
+            (candidateX * candidateX) +
+            (candidateY * candidateY) +
+            (candidateZ * candidateZ));
+        if (!std::isfinite(length) || length <= 0.001f) {
+            continue;
+        }
+
+        forwardX = candidateX / length;
+        forwardY = candidateY / length;
+        forwardZ = candidateZ / length;
+        return true;
+    }
+
+    return false;
 }
 
 bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection) {
