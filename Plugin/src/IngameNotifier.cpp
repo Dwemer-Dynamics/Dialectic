@@ -83,15 +83,14 @@ std::string NormalizeMessage(const std::string& message) {
 
 const char* IconForLevel(Level level) {
     switch (level) {
-    case Level::Success:
-        return "#4";
     case Level::Warning:
         return "#5";
     case Level::Error:
         return "#6";
+    case Level::Success:
     case Level::Info:
     default:
-        return "#3";
+        return "#4";
     }
 }
 
@@ -149,8 +148,10 @@ void Notify(const std::string& message, Level level) {
     }
 
     Logger::LogInfo("HUD notify: %s", normalized.c_str());
-    const std::uint32_t emotion = level == Level::Success ? 0U :
-        (level == Level::Error ? 3U : (level == Level::Warning ? 1U : 2U));
+    // QueueUIMessage emotions: happy=0, sad=1, neutral=2, pain=3. Routine info/debug
+    // notifications use happy so the HUD does not read as a constant problem.
+    const std::uint32_t emotion = level == Level::Error ? 3U :
+        (level == Level::Warning ? 1U : 0U);
     const auto deliver = [normalized, level, emotion]() {
         if (!XNVSEAdapter::QueueNativeNotification(normalized, emotion)) {
             std::lock_guard<std::mutex> lock(g_notificationMutex);
