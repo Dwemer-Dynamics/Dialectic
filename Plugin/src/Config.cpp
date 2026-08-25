@@ -42,7 +42,6 @@ namespace Config {
     float voiceVolume = 75.0f;
     float headVoiceVolume = 100.0f;
     bool audio3DPlaybackEnabled = true;
-    bool audioCameraBased = false;
     float audio3DPanStrength = 1.0f;
     bool audioInvertHeading = false;
     float audioDistanceScale = 2.0f;
@@ -687,7 +686,6 @@ namespace Config {
                 else if (key == "VoiceVolume") voiceVolume = std::stof(value);
                 else if (key == "HeadVoiceVolume") headVoiceVolume = std::stof(value);
                 else if (key == "Enable3DPlayback" || key == "Playback3D") audio3DPlaybackEnabled = (value == "1" || value == "true");
-                else if (key == "CameraBasedAudio" || key == "CameraBased") audioCameraBased = (value == "1" || value == "true");
                 else if (key == "Playback2D" || key == "Force2D") audio3DPlaybackEnabled = !(value == "1" || value == "true");
                 else if (key == "PanStrength" || key == "3DPanStrength") audio3DPanStrength = std::stof(value);
                 else if (key == "InvertHeading") audioInvertHeading = (value == "1" || value == "true");
@@ -740,7 +738,6 @@ namespace Config {
             else if (currentSection == "SpatialAudio") {
                 if (key == "Enabled") spatialAudioEnabled = (value == "1" || value == "true");
                 else if (key == "Enable3DPlayback" || key == "Playback3D") audio3DPlaybackEnabled = (value == "1" || value == "true");
-                else if (key == "CameraBasedAudio" || key == "CameraBased") audioCameraBased = (value == "1" || value == "true");
                 else if (key == "Playback2D" || key == "Force2D") audio3DPlaybackEnabled = !(value == "1" || value == "true");
                 else if (key == "PanStrength" || key == "3DPanStrength") audio3DPanStrength = std::stof(value);
                 else if (key == "InvertHeading") audioInvertHeading = (value == "1" || value == "true");
@@ -995,8 +992,6 @@ namespace Config {
         iniFile << "AnimationIntensity=" << animationIntensity << "\n";
         iniFile << "; Set 0 for flat 2D playback.\n";
         iniFile << "Enable3DPlayback=" << (audio3DPlaybackEnabled ? "1" : "0") << "\n";
-        iniFile << "; Use camera direction instead of player actor heading for 3D voice panning.\n";
-        iniFile << "CameraBasedAudio=" << (audioCameraBased ? "1" : "0") << "\n";
         iniFile << "; 1.0 is natural stereo separation; higher values make actor position more noticeable.\n";
         iniFile << "PanStrength=" << audio3DPanStrength << "\n";
         iniFile << "; Flip left/right heading if FNV orientation is reversed on your setup.\n";

@@ -294,6 +294,8 @@ bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
+// Read the active world camera's normalized forward vector for listener-relative audio.
+bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ);
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
 bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection);
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);

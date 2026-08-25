@@ -643,22 +643,6 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "19": {
-          "title": "Camera Based Audio",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Use the camera direction for 3D voice panning instead of the player actor heading.",
-          "vars": [
-            {
-              "configINI": "Audio:CameraBasedAudio",
-              "default": 0
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
         "4": {
           "title": "AI Voice Distance Scale",
           "type": 2.5,

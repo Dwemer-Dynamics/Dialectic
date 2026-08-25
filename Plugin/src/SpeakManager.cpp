@@ -2705,20 +2705,22 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
-        AudioManager::Vector3 listenerForward = { 0.0f, 1.0f, 0.0f };
-        float listenerYaw = listener.yawResolved ? listener.yaw : 0.0f;
+        AudioManager::Vector3 listenerForward = {};
+        XNVSEAdapter::CaptureNativeCameraForward(
+            listenerForward.x,
+            listenerForward.y,
+            listenerForward.z);
         if (Config::audioInvertHeading) {
-            listenerYaw += 3.14159265f;
+            listenerForward.x = -listenerForward.x;
+            listenerForward.y = -listenerForward.y;
         }
 
         AudioManager::Set3DPlaybackEnabled(Config::audio3DPlaybackEnabled);
-        AudioManager::SetCameraBasedAudio(Config::audioCameraBased);
         AudioManager::Set3DPlaybackStrength(Config::audio3DPanStrength);
         AudioManager::Update(
             ToAudioVector(speaker.position),
             ToAudioVector(listener.position),
-            listenerForward,
-            listenerYaw);
+            listenerForward);
 
         AudioManager::SetVolume(CalculatePlaybackVolume(speaker, listener, spatial));
     }

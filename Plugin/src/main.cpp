@@ -293,7 +293,6 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "animationresolution") { outValue = Config::animationResolution; return true; }
         if (k == "animationintensity") { outValue = Config::animationIntensity; return true; }
         if (k == "enable3dplayback" || k == "playback3d") { outValue = Config::audio3DPlaybackEnabled ? 1.0 : 0.0; return true; }
-        if (k == "camerabasedaudio" || k == "camerabased") { outValue = Config::audioCameraBased ? 1.0 : 0.0; return true; }
         if (k == "panstrength" || k == "3dpanstrength") { outValue = Config::audio3DPanStrength; return true; }
         if (k == "invertheading") { outValue = Config::audioInvertHeading ? 1.0 : 0.0; return true; }
         if (k == "distancescale" || k == "voicedistancescale") { outValue = Config::audioDistanceScale; return true; }
@@ -409,7 +408,6 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
         else if (k == "animationresolution") { Config::animationResolution = static_cast<int>(value); changed = true; }
         else if (k == "animationintensity") { Config::animationIntensity = static_cast<float>(value); changed = true; }
         else if (k == "enable3dplayback" || k == "playback3d") { Config::audio3DPlaybackEnabled = enabled; changed = true; }
-        else if (k == "camerabasedaudio" || k == "camerabased") { Config::audioCameraBased = enabled; changed = true; }
         else if (k == "playback2d" || k == "force2d") { Config::audio3DPlaybackEnabled = !enabled; changed = true; }
         else if (k == "panstrength" || k == "3dpanstrength") { Config::audio3DPanStrength = static_cast<float>(value); changed = true; }
         else if (k == "invertheading") { Config::audioInvertHeading = enabled; changed = true; }
@@ -526,7 +524,6 @@ static bool ResolveDialecticSettingId(int settingId, DialecticSettingRef& outSet
         case 50: outSetting = { "Audio", "VoiceVolume" }; return true;
         case 51: outSetting = { "Audio", "PanStrength" }; return true;
         case 52: outSetting = { "Audio", "DistanceScale" }; return true;
-        case 53: outSetting = { "Audio", "CameraBasedAudio" }; return true;
         case 60: outSetting = { "Distance", "ActivatingNpcInterior" }; return true;
         case 61: outSetting = { "Distance", "ActivatingNpcExterior" }; return true;
         case 62: outSetting = { "SpatialAudio", "InteriorHearingDistance" }; return true;
