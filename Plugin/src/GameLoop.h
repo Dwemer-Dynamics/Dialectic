@@ -69,6 +69,7 @@ void RequestDialecticControlMenuOpen();
 void RequestControlMenuWaitHere();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
+void NoteProfileModelSelection(int slot);
 void RequestDynamicProfileMenuOpen();
 void SubmitCapturedDialogue(const std::string& source,
                             const std::string& speaker,

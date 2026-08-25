@@ -1134,6 +1134,18 @@ static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
     }
 }
 
+void NoteProfileModelSelection(int slot) {
+    const int modelSlot = std::clamp(slot, 1, 4);
+    if (modelSlot == Config::currentProfileModelSlot) {
+        return;
+    }
+    Logger::LogInfo("GameLoop: LLM model slot selection %d -> %d (%s)",
+        Config::currentProfileModelSlot,
+        modelSlot,
+        ProfileModelLabelFromSlot(modelSlot));
+    Config::currentProfileModelSlot = modelSlot;
+}
+
 static void PollModeSelection() {
     int selectedModeIndex = 0;
     if (PollToolBridgeInt(kModeSelectPath, selectedModeIndex)) {
@@ -1201,7 +1213,13 @@ void RequestDialecticControlMenuOpen() {
         Logger::LogInfo("GameLoop: DIALECTIC Control found no living NPC for Wait Here");
     }
 
-    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
+    // Re-read the live mode state on every open so the buttons advertise current values.
+    XNVSEAdapter::NativeToolMenuStatus status;
+    status.chatMode = ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8));
+    status.llmMode = ToUpperCopy(ProfileModelLabelFromSlot(Config::currentProfileModelSlot));
+
+    if (XNVSEAdapter::OpenNativeToolMenu(
+            XNVSEAdapter::NativeToolMenu::DialecticControl, nullptr, &status)) {
         Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
         return;
     }
@@ -4219,6 +4237,9 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("PollModeSelection", []() { PollModeSelection(); });
     }
     if (ShouldPoll(g_lastLegacyToolPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("MaybeSyncRuntimeStateFromServer", []() {
+            MaybeSyncRuntimeStateFromServer(false);
+        });
         ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
         ProfileUpdateSubsystem("PollLegacyDynamicProfileToolRequests", []() { PollLegacyDynamicProfileToolRequests(); });
     }
