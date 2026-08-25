@@ -702,6 +702,22 @@ static std::string NormalizeBridgeValue(std::string value) {
 
 static std::string EscapeBridgeJson(const std::string& input);
 
+// Mirror LLM slot picks locally so DIALECTIC Control can advertise the effective model.
+static void CaptureSetConfSideEffects(const std::string& payload) {
+    const size_t atPos = payload.find('@');
+    if (atPos == std::string::npos) {
+        return;
+    }
+    if (TrimBridgeValue(payload.substr(0, atPos)) != "dialectic_profile_model") {
+        return;
+    }
+    try {
+        GameLoop::NoteProfileModelSelection(std::stoi(TrimBridgeValue(payload.substr(atPos + 1))));
+    } catch (...) {
+        Logger::LogWarning("DialecticSendSetConf: unreadable LLM model slot in payload");
+    }
+}
+
 static std::string NormalizeSetConfPayload(std::string payload) {
     payload = NormalizeBridgeValue(std::move(payload));
     if (payload.empty()) {
@@ -1119,11 +1135,14 @@ static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
         return true;
     }
 
-    std::string payload = NormalizeSetConfPayload(payloadBuffer);
+    const std::string rawPayload = NormalizeBridgeValue(payloadBuffer);
+    std::string payload = NormalizeSetConfPayload(rawPayload);
     if (payload.empty()) {
         Logger::LogWarning("DialecticSendSetConf called with empty payload");
         return true;
     }
+
+    CaptureSetConfSideEffects(rawPayload);
 
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();

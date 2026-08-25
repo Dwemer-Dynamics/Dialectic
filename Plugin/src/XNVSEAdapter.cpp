@@ -48,7 +48,7 @@ Tile* g_passiveSubtitleTile = nullptr;
 Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
 Script* g_stopLookFunction = nullptr;
-Script* g_dialecticControlMenuFunction = nullptr;
+std::unordered_map<std::string, Script*> g_dialecticControlMenuFunctions;
 std::unordered_map<std::string, Script*> g_modeMenuFunctions;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
@@ -1059,7 +1059,7 @@ void Shutdown() {
     g_eventManager = nullptr;
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
-    g_dialecticControlMenuFunction = nullptr;
+    g_dialecticControlMenuFunctions.clear();
     g_modeMenuFunctions.clear();
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
@@ -2159,7 +2159,9 @@ std::string SanitizeMenuTitle(const char* requested, const char* fallback) {
 
 }  // namespace
 
-bool OpenNativeToolMenu(NativeToolMenu menu, const char* titleOverride) {
+bool OpenNativeToolMenu(NativeToolMenu menu,
+                        const char* titleOverride,
+                        const NativeToolMenuStatus* status) {
     if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
         !g_scriptInterface->CallFunctionAlt) {
         return false;
@@ -2170,15 +2172,25 @@ bool OpenNativeToolMenu(NativeToolMenu menu, const char* titleOverride) {
     const char* name = "unknown";
     std::string dynamicSource;
     switch (menu) {
-        case NativeToolMenu::DialecticControl:
-            function = &g_dialecticControlMenuFunction;
+        case NativeToolMenu::DialecticControl: {
             name = "dialectic_control";
-            source = R"(
+            // The first two buttons advertise the live modes, so cache one compiled
+            // function per label pair instead of recompiling on every open.
+            const std::string chatLabel =
+                SanitizeMenuTitle(status ? status->chatMode.c_str() : nullptr, "STANDARD");
+            const std::string llmLabel =
+                SanitizeMenuTitle(status ? status->llmMode.c_str() : nullptr, "STANDARD");
+            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel];
+            dynamicSource = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Modes|LLM Model|Dynamic Profiles|Wait Here|Close Menu"
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Mode: [)" +
+                chatLabel + R"(]|LLM Mode: [)" + llmLabel +
+                R"(]|Dynamic Profiles|Wait Here|Close Menu"
 end
 )";
+            source = dynamicSource.c_str();
             break;
+        }
         case NativeToolMenu::Mode: {
             name = "mode";
             // The title advertises the active mode, so cache one compiled function per title.
