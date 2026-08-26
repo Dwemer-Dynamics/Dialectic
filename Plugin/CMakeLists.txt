@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Dialectic VERSION 0.8.1)
+project(Dialectic VERSION 0.8.5)
 
 math(EXPR DIALECTIC_PLUGIN_INFO_VERSION
     "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
