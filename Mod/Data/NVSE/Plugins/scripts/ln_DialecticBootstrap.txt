@@ -36,6 +36,7 @@ SetEventHandler "ITR:OnSoundPlayed" (CompileScript "Dialectic/DialogueGuardSound
 SetEventHandler "MCMExtMenuState" (CompileScript "Dialectic/RecordingDeviceMenuState.gek")
 SetEventHandler "MCMExtUpdate" (CompileScript "Dialectic/MCMSettingsUpdated.gek")
 SetEventHandlerAlt "ShowOff:OnPCMiscStatChange" (CompileScript "Dialectic/FalloutStatChanged.gek")
+SetOnMenuClickEventHandler (CompileScript "Dialectic/TextInputCloseClick.txt") 1 "TextEditMenu/NOGLOW_BRANCH/DialecticCloseButton"
 
 if IsComponentLoaded "HUDMainMenu\DialecticPassiveSubtitle"
     UnloadUIComponent "HUDMainMenu\DialecticPassiveSubtitle"

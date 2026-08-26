@@ -1,0 +1,15 @@
+; Completes Close-button cancellation after the originating UI click has returned.
+begin function {}
+    if eval !(IsComponentLoaded "TextEditMenu/NOGLOW_BRANCH/TEM_OKButton")
+        return
+    endif
+
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp" 0 "closed=1\n"
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp" 0 "%e"
+
+    ; JIP only tears the text input menu down through button id 1, so clear the buffer
+    ; first and then route through TEM_OKButton. The ShowTextInputMenu callback receives
+    ; an empty string and treats that as a cancel, which keeps JIP's own cleanup intact.
+    SetTextInputString "%e"
+    ClickMenuButton "TextEditMenu/NOGLOW_BRANCH/TEM_OKButton"
+end

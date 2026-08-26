@@ -101,6 +101,16 @@ bool LooksHuman(const std::string& text) {
     return ContainsAny(text, kTerms);
 }
 
+// Some voiced story characters use TESCreature records despite being conversational NPCs.
+bool LooksNamedStoryCharacter(const std::string& text) {
+    static constexpr std::array<const char*, 3> kTerms = {
+        "mr. house",
+        "mr house",
+        "mrhouse"
+    };
+    return ContainsAny(text, kTerms);
+}
+
 bool HasExplicitCreatureBlock(const std::string& text, std::string* reason) {
     static constexpr std::array<const char*, 26> kTerms = {
         "feral",
@@ -155,7 +165,8 @@ bool HasAllowedConversationalCategory(const ActorEligibilityFNV::Metadata& metad
     return LooksHuman(text) ||
         LooksNonFeralGhoul(text) ||
         LooksSuperMutant(text) ||
-        LooksRobot(text);
+        LooksRobot(text) ||
+        LooksNamedStoryCharacter(text);
 }
 
 } // namespace

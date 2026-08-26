@@ -66,7 +66,7 @@
           "title": "DIALECTIC Control",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for opening chat mode, LLM model, and dynamic profile settings. Unbound by default.",
+          "mouse": "Keyboard key for opening chat mode, LLM model, dynamic profile, and targeted NPC controls. Unbound by default.",
           "vars": [
             {
               "configINI": "Hotkeys:DialecticControl",
@@ -636,22 +636,6 @@
             {
               "configINI": "Audio:Enable3DPlayback",
               "default": 1
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "19": {
-          "title": "Camera Based Audio",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Use the camera direction for 3D voice panning instead of the player actor heading.",
-          "vars": [
-            {
-              "configINI": "Audio:CameraBasedAudio",
-              "default": 0
             }
           ],
           "call": {

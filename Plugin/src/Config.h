@@ -23,7 +23,6 @@ namespace Config {
     extern float voiceVolume;
     extern float headVoiceVolume;
     extern bool audio3DPlaybackEnabled;
-    extern bool audioCameraBased;
     extern float audio3DPanStrength;
     extern bool audioInvertHeading;
     extern float audioDistanceScale;

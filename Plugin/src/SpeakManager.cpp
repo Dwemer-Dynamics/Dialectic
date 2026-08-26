@@ -1,8 +1,8 @@
 #include "SpeakManager.h"
-#include "ActionManager.h"
 #include "AudioManager.h"
 #include "AgentManager.h"
 #include "ActorEligibilityFNV.h"
+#include "ActivityStatusFNV.h"
 #include "ActorPositionResolverFNV.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
@@ -193,6 +193,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static PendingRechatRetry g_pendingRechatRetry;
     static std::string g_lastRechatter;
     static bool g_rechatChainClosed = false;
+    static bool g_rechatChainAutonomous = false;
     static std::string g_rechatChainId;
     static std::chrono::steady_clock::time_point g_rechatCooldownUntil = {};
     static ScriptLine g_pendingRechatLaunchLine;
@@ -963,6 +964,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (reason) {
                 *reason = "actor is currently controlled by a scene/dialogue package";
             }
+            return false;
+        }
+
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, reason)) {
             return false;
         }
 
@@ -2700,20 +2705,22 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
-        AudioManager::Vector3 listenerForward = { 0.0f, 1.0f, 0.0f };
-        float listenerYaw = listener.yawResolved ? listener.yaw : 0.0f;
+        AudioManager::Vector3 listenerForward = {};
+        XNVSEAdapter::CaptureNativeCameraForward(
+            listenerForward.x,
+            listenerForward.y,
+            listenerForward.z);
         if (Config::audioInvertHeading) {
-            listenerYaw += 3.14159265f;
+            listenerForward.x = -listenerForward.x;
+            listenerForward.y = -listenerForward.y;
         }
 
         AudioManager::Set3DPlaybackEnabled(Config::audio3DPlaybackEnabled);
-        AudioManager::SetCameraBasedAudio(Config::audioCameraBased);
         AudioManager::Set3DPlaybackStrength(Config::audio3DPanStrength);
         AudioManager::Update(
             ToAudioVector(speaker.position),
             ToAudioVector(listener.position),
-            listenerForward,
-            listenerYaw);
+            listenerForward);
 
         AudioManager::SetVolume(CalculatePlaybackVolume(speaker, listener, spatial));
     }
@@ -2835,6 +2842,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_rechatInFlight = false;
         g_rechatInFlightSpeaker.clear();
         g_rechatChainClosed = false;
+        g_rechatChainAutonomous = false;
         g_rechatChainId.clear();
         g_lastRechatter.clear();
         g_pendingRechatRetry = PendingRechatRetry{};
@@ -2846,6 +2854,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void StartRechatChainForAutonomousEvent() {
         ResetRechatChainState();
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            g_rechatChainAutonomous = true;
+        }
         Log("SpeakManager: Opened a fresh rechat chain from autonomous event");
     }
 
@@ -3242,8 +3254,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         ClearFaceTargetBridge();
         ClearSubtitleBridge();
         ClearDialogueGuardBridge();
-        ActionManager::ClearPostDialogueActions();
-
         std::vector<ScriptLine> abortedLines;
         {
             std::lock_guard<std::mutex> lock(g_queueMutex);
@@ -3268,6 +3278,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};
@@ -4184,13 +4195,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return false;
         }
         const uint32_t speakerFormId = ResolveSpeakerFormId(finishedLine);
-        if (ActionManager::HasPendingPostDialogueActionForSpeaker(speaker, speakerFormId)) {
-            Log("SpeakManager: Rechat skipped for %s trigger=%s because a post-dialogue action is pending",
-                speaker.c_str(), trigger);
-            WriteRechatStatus("skipped", speaker, trigger, "post_dialogue_action_pending");
-            return false;
-        }
-
         const HTTPManager::QueueStatus httpStatus = HTTPManager::GetQueueStatus();
         const bool httpQueueDrained = !httpStatus.streamInProgress && httpStatus.httpResponsesQueued == 0;
         const int queuedLines = CountItems();
@@ -4529,41 +4533,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             AudioManager::SetVolume(GetBaseVoiceVolume());
             ClearSubtitleBridge();
             ClearDialogueGuardBridge();
-            const HTTPManager::QueueStatus httpStatusForActions = HTTPManager::GetQueueStatus();
-            const bool responseStreamDrainedForActions =
-                !httpStatusForActions.streamInProgress &&
-                httpStatusForActions.httpResponsesQueued == 0 &&
-                httpStatusForActions.pendingHttpTasks == 0 &&
-                httpStatusForActions.activeHttpTasks == 0;
-            const int queuedLinesForActions = CountItems();
-            const int pendingAudioForActions = PendingAudioWorkCount();
-            const bool speechQueueDrainedForActions =
-                queuedLinesForActions == 0 &&
-                pendingAudioForActions == 0;
-            const bool flushedPostDialogueActions =
-                finishedLine.isFinalResponseLine &&
-                responseStreamDrainedForActions &&
-                speechQueueDrainedForActions &&
-                ActionManager::FlushPostDialogueActionsForSpeaker(finishedLine.actor,
-                                                                  finishedLine.actorFormId,
-                                                                  "SpeakManager");
-            if (finishedLine.isFinalResponseLine &&
-                (!responseStreamDrainedForActions || !speechQueueDrainedForActions) &&
-                ActionManager::HasPendingPostDialogueActionForSpeaker(finishedLine.actor,
-                                                                      finishedLine.actorFormId)) {
-                Log("SpeakManager: Holding post-dialogue action for %s because response/speech queue is not drained "
-                    "(http_stream=%d http_tasks=%zu/%zu http_queued=%zu dialogue=%d pendingAudio=%d)",
-                    finishedLine.actor.c_str(),
-                    httpStatusForActions.streamInProgress ? 1 : 0,
-                    httpStatusForActions.activeHttpTasks,
-                    httpStatusForActions.pendingHttpTasks,
-                    httpStatusForActions.httpResponsesQueued,
-                    queuedLinesForActions,
-                    pendingAudioForActions);
-            }
             if (!finishedLine.textOnlyFallback &&
-                !rechatAlreadyLaunched &&
-                !flushedPostDialogueActions) {
+                !rechatAlreadyLaunched) {
                 MaybeLaunchRechatAfterPlayback(finishedLine);
             }
         }
@@ -4873,6 +4844,23 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
+        bool autonomousResponse = false;
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            autonomousResponse = g_rechatChainAutonomous;
+        }
+        if (autonomousResponse && line.actorFormId != 0) {
+            std::string activityReason;
+            if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(line.actorFormId, &activityReason)) {
+                Log("SpeakManager: Dropping stale autonomous response for %s (0x%08X): %s",
+                    line.actor.c_str(), line.actorFormId, activityReason.c_str());
+                std::lock_guard<std::mutex> lock(g_rechatMutex);
+                g_rechatChainClosed = true;
+                g_pendingRechatRetry = PendingRechatRetry{};
+                return;
+            }
+        }
+
         InsertInQueue(line);
     }
 
@@ -4959,13 +4947,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::SetVolume(GetBaseVoiceVolume());
         ClearSubtitleBridge();
         ClearPlayerInputTtsGate("stop_speaking");
-        ActionManager::ClearPostDialogueActions();
-
         {
             std::lock_guard<std::mutex> rechatLock(g_rechatMutex);
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};

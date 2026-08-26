@@ -6,10 +6,12 @@
 #include "nvse/PluginAPI.h"
 #include "nvse/GameAPI.h"
 #include "nvse/GameData.h"
+#include "nvse/GameExtraData.h"
 #include "nvse/GameForms.h"
 #include "nvse/GameObjects.h"
 #include "nvse/GameProcess.h"
 #include "nvse/GameUI.h"
+#include "nvse/NiObjects.h"
 
 #include <algorithm>
 #include <cctype>
@@ -46,8 +48,8 @@ Tile* g_passiveSubtitleTile = nullptr;
 Tile* g_passiveSubtitleTextTile = nullptr;
 Script* g_faceTargetFunction = nullptr;
 Script* g_stopLookFunction = nullptr;
-Script* g_dialecticControlMenuFunction = nullptr;
-Script* g_modeMenuFunction = nullptr;
+std::unordered_map<std::string, Script*> g_dialecticControlMenuFunctions;
+std::unordered_map<std::string, Script*> g_modeMenuFunctions;
 Script* g_llmModelMenuFunction = nullptr;
 Script* g_dynamicProfileMenuFunction = nullptr;
 Script* g_pipVisionToggleMenusFunction = nullptr;
@@ -67,6 +69,7 @@ Script* g_teleportActorFunction = nullptr;
 Script* g_killActorFunction = nullptr;
 Script* g_pickupTransferFunction = nullptr;
 Script* g_openTeammateContainerFunction = nullptr;
+Script* g_cccStopFollowingFunction = nullptr;
 Script* g_stopFollowingFunction = nullptr;
 Script* g_queryMerchantContainerFunction = nullptr;
 Script* g_queryOffersServicesFunction = nullptr;
@@ -99,6 +102,57 @@ struct MapMarkerCaptureState {
 };
 MapMarkerCaptureState g_mapMarkerCapture;
 std::mutex g_mapMarkerMutex;
+
+// Resolve inherited base factions and per-reference rank changes into the actor's effective memberships.
+void CaptureActorFactions(Actor* actor, TESActorBase* actorBase,
+    std::vector<std::pair<std::uint32_t, int>>& factions) {
+    factions.clear();
+    if (!actor || !actorBase) {
+        return;
+    }
+
+    TESActorBase* factionBase = actorBase;
+    std::unordered_set<std::uint32_t> visitedTemplates;
+    while (factionBase->baseData.templateActor &&
+           (factionBase->baseData.templateFlags & TESActorBaseData::kTemplateFlag_UseFactions) != 0) {
+        TESForm* templateForm = factionBase->baseData.templateActor;
+        if (!templateForm ||
+            (templateForm->typeID != kFormType_TESNPC && templateForm->typeID != kFormType_TESCreature) ||
+            !visitedTemplates.insert(templateForm->refID).second) {
+            break;
+        }
+        factionBase = static_cast<TESActorBase*>(templateForm);
+    }
+
+    std::unordered_map<std::uint32_t, int> ranks;
+    for (auto iterator = factionBase->baseData.factionList.Begin(); !iterator.End(); ++iterator) {
+        TESActorBaseData::FactionListData* entry = iterator.Get();
+        if (!entry || !entry->faction || entry->faction->refID == 0) {
+            continue;
+        }
+        ranks[entry->faction->refID] = static_cast<int>(entry->rank);
+    }
+
+    auto* factionChanges = static_cast<ExtraFactionChanges*>(
+        actor->extraDataList.GetByType(kExtraData_FactionChanges));
+    ExtraFactionChanges::FactionListEntry* changes = factionChanges ? factionChanges->data : nullptr;
+    if (changes) {
+        for (auto iterator = changes->Begin(); !iterator.End(); ++iterator) {
+            ExtraFactionChanges::FactionListData* entry = iterator.Get();
+            if (!entry || !entry->faction || entry->faction->refID == 0) {
+                continue;
+            }
+            ranks[entry->faction->refID] = static_cast<std::int8_t>(entry->rank);
+        }
+    }
+
+    factions.reserve(ranks.size());
+    for (const auto& [formId, rank] : ranks) {
+        factions.emplace_back(formId, rank);
+    }
+    std::sort(factions.begin(), factions.end(),
+        [](const auto& left, const auto& right) { return left.first < right.first; });
+}
 
 std::mutex g_callbackMutex;
 MessageCallback g_callback;
@@ -1005,8 +1059,8 @@ void Shutdown() {
     g_eventManager = nullptr;
     g_faceTargetFunction = nullptr;
     g_stopLookFunction = nullptr;
-    g_dialecticControlMenuFunction = nullptr;
-    g_modeMenuFunction = nullptr;
+    g_dialecticControlMenuFunctions.clear();
+    g_modeMenuFunctions.clear();
     g_llmModelMenuFunction = nullptr;
     g_dynamicProfileMenuFunction = nullptr;
     g_pipVisionToggleMenusFunction = nullptr;
@@ -1128,6 +1182,53 @@ bool CaptureNativeGameState(NativeGameState& state) {
     return true;
 }
 
+bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ) {
+    forwardX = 0.0f;
+    forwardY = 0.0f;
+    forwardZ = 0.0f;
+
+    auto* interfaceManager = *reinterpret_cast<InterfaceManager**>(kInterfaceManagerAddress);
+    if (!interfaceManager) {
+        return false;
+    }
+
+    SceneGraph* sceneGraphs[] = {
+        interfaceManager->sceneGraph004,
+        interfaceManager->sceneGraph008,
+    };
+    for (SceneGraph* sceneGraph : sceneGraphs) {
+        if (!sceneGraph) {
+            continue;
+        }
+
+        // xNVSE exposes SceneGraph as an incomplete type; its documented camera pointer is at 0xDC.
+        auto* camera = *reinterpret_cast<NiAVObject**>(
+            reinterpret_cast<std::uintptr_t>(sceneGraph) + 0xDC);
+        if (!camera) {
+            continue;
+        }
+
+        const float* rotation = camera->dat0064.rotate.data;
+        const float candidateX = rotation[0];
+        const float candidateY = rotation[3];
+        const float candidateZ = rotation[6];
+        const float length = std::sqrt(
+            (candidateX * candidateX) +
+            (candidateY * candidateY) +
+            (candidateZ * candidateZ));
+        if (!std::isfinite(length) || length <= 0.001f) {
+            continue;
+        }
+
+        forwardX = candidateX / length;
+        forwardY = candidateY / length;
+        forwardZ = candidateZ / length;
+        return true;
+    }
+
+    return false;
+}
+
 bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection) {
     inspection = {};
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
@@ -1246,6 +1347,7 @@ bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEqui
                     state.raceName = CopyGameString(race->fullName.name);
                 }
             }
+            CaptureActorFactions(actor, actorBase, state.factions);
         }
         state.inCombat = actor->IsInCombat();
         Actor* combatTarget = actor->GetCombatTarget();
@@ -2040,7 +2142,26 @@ end
     return g_scriptInterface->CallFunctionAlt(g_stopLookFunction, speaker, 0);
 }
 
-bool OpenNativeToolMenu(NativeToolMenu menu) {
+namespace {
+
+// The menu title is embedded in a compiled script string literal and MessageBoxExAlt
+// treats ^ and | as field separators, so drop anything that could break either parse.
+std::string SanitizeMenuTitle(const char* requested, const char* fallback) {
+    std::string title;
+    for (const char* cursor = requested; cursor && *cursor; ++cursor) {
+        const unsigned char character = static_cast<unsigned char>(*cursor);
+        if (character < 0x20 || character > 0x7E) continue;
+        if (character == '^' || character == '|' || character == '"') continue;
+        title.push_back(static_cast<char>(character));
+    }
+    return title.empty() ? std::string(fallback) : title;
+}
+
+}  // namespace
+
+bool OpenNativeToolMenu(NativeToolMenu menu,
+                        const char* titleOverride,
+                        const NativeToolMenuStatus* status) {
     if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
         !g_scriptInterface->CallFunctionAlt) {
         return false;
@@ -2049,25 +2170,41 @@ bool OpenNativeToolMenu(NativeToolMenu menu) {
     Script** function = nullptr;
     const char* source = nullptr;
     const char* name = "unknown";
+    std::string dynamicSource;
     switch (menu) {
-        case NativeToolMenu::DialecticControl:
-            function = &g_dialecticControlMenuFunction;
+        case NativeToolMenu::DialecticControl: {
             name = "dialectic_control";
-            source = R"(
+            // The first two buttons advertise the live modes, so cache one compiled
+            // function per label pair instead of recompiling on every open.
+            const std::string chatLabel =
+                SanitizeMenuTitle(status ? status->chatMode.c_str() : nullptr, "STANDARD");
+            const std::string llmLabel =
+                SanitizeMenuTitle(status ? status->llmMode.c_str() : nullptr, "STANDARD");
+            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel];
+            dynamicSource = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting:|Chat Modes|LLM Model|Dynamic Profiles|Close Menu"
+    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Mode: [)" +
+                chatLabel + R"(]|LLM Mode: [)" + llmLabel +
+                R"(]|Dynamic Profiles|Wait Here|Close Menu"
 end
 )";
+            source = dynamicSource.c_str();
             break;
-        case NativeToolMenu::Mode:
-            function = &g_modeMenuFunction;
+        }
+        case NativeToolMenu::Mode: {
             name = "mode";
-            source = R"(
+            // The title advertises the active mode, so cache one compiled function per title.
+            const std::string title = SanitizeMenuTitle(titleOverride, "DIALECTIC Chat Modes");
+            function = &g_modeMenuFunctions[title];
+            dynamicSource = R"(
 begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^DIALECTIC Chat Modes^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
+    MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^)" + title +
+                R"(^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
 end
 )";
+            source = dynamicSource.c_str();
             break;
+        }
         case NativeToolMenu::LlmModel:
             function = &g_llmModelMenuFunction;
             name = "llm_model";
@@ -2477,8 +2614,14 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
     SetWeaponOut 0
     EvaluatePackage
 
-    if eval iActionCode == 4 || iActionCode == 5
+    if eval iActionCode == 4
         SetPlayerTeammate 1
+        AddToFaction DialecticFollowFaction 0
+        SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
+        SetPackageTargetDistance DialecticFollowTargetPackage 192
+        AddScriptPackage DialecticFollowTargetPackage
+    elseif eval iActionCode == 5
+        SetPlayerTeammate 0
         AddToFaction DialecticFollowFaction 0
         SetPackageTargetReference DialecticFollowTargetPackage PlayerRef
         SetPackageTargetDistance DialecticFollowTargetPackage 192
@@ -2823,12 +2966,22 @@ end
     alignas(NVSEArrayVarInterface::Element)
         unsigned char managedStorage[sizeof(NVSEArrayVarInterface::Element)]{};
     auto* managedResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(managedStorage);
-    if (!g_scriptInterface->CallFunction(g_cccManagedQueryFunction, actor, nullptr, managedResult,
-            1, static_cast<UInt32>(actionCode)) ||
-        managedResult->GetNumber() == 0.0) {
-        if (actionCode == 4) {
+    const auto callManagedQuery = [&](bool recruitIfMissing) {
+        return g_scriptInterface->CallFunction(
+                   g_cccManagedQueryFunction, actor, nullptr, managedResult,
+                   1, recruitIfMissing ? static_cast<UInt32>(4) : static_cast<UInt32>(0)) &&
+               managedResult->GetNumber() != 0.0;
+    };
+    bool managed = callManagedQuery(false);
+    if (actionCode == 4 && !managed) {
+        if (!callManagedQuery(true)) {
             Logger::LogWarning("[NATIVE_ACTION] JIP CCC failed to add companion actor=0x%08X", actorFormId);
+            return false;
         }
+        managed = true;
+        Logger::LogInfo("[NATIVE_ACTION] JIP CCC added companion actor=0x%08X", actorFormId);
+    }
+    if (!managed) {
         return false;
     }
     handled = true;
@@ -2837,19 +2990,12 @@ end
     if (!g_cccCompanionCommandFunction) {
         g_cccCompanionCommandFunction = g_scriptInterface->CompileScript(R"(
 int iActionCode
-int iSlot
-int iTask
 ref rSelf
 begin function {iActionCode}
     let rSelf := GetSelf
     if eval CCCInFaction JIPCCCIsHired == 0
         SetFunctionValue 0
         return
-    endif
-    let iSlot := rSelf.Call JIPCCCGetSlot
-    if eval iSlot != -1
-        let iTask := JIPCCCActiveTasks.aTaskData[iSlot][0]
-        Call JIPCCCAbortTask iSlot, iTask, rSelf, 3
     endif
     RemoveScriptPackage
     SetRestrained 0
@@ -2864,9 +3010,18 @@ begin function {iActionCode}
         AddScriptPackage JIPCCCRelax
     elseif eval iActionCode == 4 || iActionCode == 5
         RemoveFromFaction JIPCCCCurrentTask
+        SetPlayerTeammate 1
         SetFactionRank JIPCCCFollowState 1
         CCCSetFollowState 1
         rSelf.Call JIPCCCAddPackages
+        if eval GetPlayerTeammate == 0
+            SetFunctionValue 0
+            return
+        endif
+        if eval CCCInFaction JIPCCCFollowState != 1
+            SetFunctionValue 0
+            return
+        endif
     else
         SetFunctionValue 0
         return
@@ -2886,9 +3041,16 @@ end
     auto* commandResult = reinterpret_cast<NVSEArrayVarInterface::Element*>(commandStorage);
     if (!g_scriptInterface->CallFunction(g_cccCompanionCommandFunction, actor, nullptr,
             commandResult, 1, static_cast<UInt32>(actionCode))) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion command call failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
         return false;
     }
-    return commandResult->GetNumber() != 0.0;
+    const bool succeeded = commandResult->GetNumber() != 0.0;
+    if (!succeeded) {
+        Logger::LogWarning("[NATIVE_ACTION] JIP CCC companion state verification failed actor=0x%08X action=%d",
+            actorFormId, actionCode);
+    }
+    return succeeded;
 }
 
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
@@ -3163,6 +3325,53 @@ bool ExecuteNativeStopFollowing(std::uint32_t actorFormId) {
     if (!actor) {
         return false;
     }
+
+    bool cccRemovalScheduled = false;
+    std::vector<NativeLoadedPlugin> plugins;
+    const bool capturedPlugins = CaptureNativeLoadedPlugins(plugins);
+    const bool cccLoaded = capturedPlugins && std::any_of(
+        plugins.begin(), plugins.end(), [](const NativeLoadedPlugin& plugin) {
+            std::string name = plugin.name;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return name == "jip companions command & control.esp";
+        });
+    if (cccLoaded && g_scriptInterface->CallFunction) {
+        if (!g_cccStopFollowingFunction) {
+            g_cccStopFollowingFunction = g_scriptInterface->CompileScript(R"(
+ref rSelf
+begin function {}
+    let rSelf := GetSelf
+    if eval CCCInFaction JIPCCCIsHired
+        AddFormToFormList JIPCCCRemovedList rSelf
+        set JIPCCCMain.iRefreshHired to 0
+        if eval ListGetFormIndex JIPCCCRemovedList rSelf != -1
+            SetFunctionValue 1
+        else
+            SetFunctionValue 0
+        endif
+    else
+        SetFunctionValue 0
+    endif
+end
+)");
+        }
+        if (!g_cccStopFollowingFunction) {
+            Logger::LogWarning("[NATIVE_ACTION] JIP CCC detected but stop-following function did not compile");
+        } else {
+            alignas(NVSEArrayVarInterface::Element)
+                unsigned char resultStorage[sizeof(NVSEArrayVarInterface::Element)]{};
+            auto* result = reinterpret_cast<NVSEArrayVarInterface::Element*>(resultStorage);
+            cccRemovalScheduled = g_scriptInterface->CallFunction(
+                g_cccStopFollowingFunction, actor, nullptr, result, 0) &&
+                result->GetNumber() != 0.0;
+            if (cccRemovalScheduled) {
+                Logger::LogInfo("[NATIVE_ACTION] JIP CCC removal scheduled actor=0x%08X", actorFormId);
+            }
+        }
+    }
+
     if (!g_stopFollowingFunction) {
         static constexpr const char* kStopFollowingSource = R"(
 int iActorMod
@@ -3277,8 +3486,11 @@ end
     }
     const UInt32 actorMod = (actorFormId >> 24) & 0xFF;
     const UInt32 actorLocal = actorFormId & 0x00FFFFFF;
-    return g_scriptInterface->CallFunctionAlt(g_stopFollowingFunction, actor, 2,
-        actorMod, actorLocal);
+    const bool vanillaStopped = g_scriptInterface->CallFunctionAlt(
+        g_stopFollowingFunction, actor, 2, actorMod, actorLocal);
+    Logger::LogInfo("[NATIVE_ACTION] stop-following cleanup actor=0x%08X jip_ccc=%d vanilla=%d",
+        actorFormId, cccRemovalScheduled ? 1 : 0, vanillaStopped ? 1 : 0);
+    return cccRemovalScheduled || vanillaStopped;
 }
 
 bool ResolveNativeTradeMenu(std::uint32_t actorFormId,

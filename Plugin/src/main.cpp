@@ -61,7 +61,7 @@
 #include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.8.1"
+#define DIALECTIC_VERSION "0.8.5"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
@@ -293,7 +293,6 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "animationresolution") { outValue = Config::animationResolution; return true; }
         if (k == "animationintensity") { outValue = Config::animationIntensity; return true; }
         if (k == "enable3dplayback" || k == "playback3d") { outValue = Config::audio3DPlaybackEnabled ? 1.0 : 0.0; return true; }
-        if (k == "camerabasedaudio" || k == "camerabased") { outValue = Config::audioCameraBased ? 1.0 : 0.0; return true; }
         if (k == "panstrength" || k == "3dpanstrength") { outValue = Config::audio3DPanStrength; return true; }
         if (k == "invertheading") { outValue = Config::audioInvertHeading ? 1.0 : 0.0; return true; }
         if (k == "distancescale" || k == "voicedistancescale") { outValue = Config::audioDistanceScale; return true; }
@@ -409,7 +408,6 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
         else if (k == "animationresolution") { Config::animationResolution = static_cast<int>(value); changed = true; }
         else if (k == "animationintensity") { Config::animationIntensity = static_cast<float>(value); changed = true; }
         else if (k == "enable3dplayback" || k == "playback3d") { Config::audio3DPlaybackEnabled = enabled; changed = true; }
-        else if (k == "camerabasedaudio" || k == "camerabased") { Config::audioCameraBased = enabled; changed = true; }
         else if (k == "playback2d" || k == "force2d") { Config::audio3DPlaybackEnabled = !enabled; changed = true; }
         else if (k == "panstrength" || k == "3dpanstrength") { Config::audio3DPanStrength = static_cast<float>(value); changed = true; }
         else if (k == "invertheading") { Config::audioInvertHeading = enabled; changed = true; }
@@ -526,7 +524,6 @@ static bool ResolveDialecticSettingId(int settingId, DialecticSettingRef& outSet
         case 50: outSetting = { "Audio", "VoiceVolume" }; return true;
         case 51: outSetting = { "Audio", "PanStrength" }; return true;
         case 52: outSetting = { "Audio", "DistanceScale" }; return true;
-        case 53: outSetting = { "Audio", "CameraBasedAudio" }; return true;
         case 60: outSetting = { "Distance", "ActivatingNpcInterior" }; return true;
         case 61: outSetting = { "Distance", "ActivatingNpcExterior" }; return true;
         case 62: outSetting = { "SpatialAudio", "InteriorHearingDistance" }; return true;
@@ -704,6 +701,22 @@ static std::string NormalizeBridgeValue(std::string value) {
 }
 
 static std::string EscapeBridgeJson(const std::string& input);
+
+// Mirror LLM slot picks locally so DIALECTIC Control can advertise the effective model.
+static void CaptureSetConfSideEffects(const std::string& payload) {
+    const size_t atPos = payload.find('@');
+    if (atPos == std::string::npos) {
+        return;
+    }
+    if (TrimBridgeValue(payload.substr(0, atPos)) != "dialectic_profile_model") {
+        return;
+    }
+    try {
+        GameLoop::NoteProfileModelSelection(std::stoi(TrimBridgeValue(payload.substr(atPos + 1))));
+    } catch (...) {
+        Logger::LogWarning("DialecticSendSetConf: unreadable LLM model slot in payload");
+    }
+}
 
 static std::string NormalizeSetConfPayload(std::string payload) {
     payload = NormalizeBridgeValue(std::move(payload));
@@ -1122,11 +1135,14 @@ static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
         return true;
     }
 
-    std::string payload = NormalizeSetConfPayload(payloadBuffer);
+    const std::string rawPayload = NormalizeBridgeValue(payloadBuffer);
+    std::string payload = NormalizeSetConfPayload(rawPayload);
     if (payload.empty()) {
         Logger::LogWarning("DialecticSendSetConf called with empty payload");
         return true;
     }
+
+    CaptureSetConfSideEffects(rawPayload);
 
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
@@ -1192,6 +1208,15 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
         InitializeSubsystems();
     }
     GameLoop::RequestDynamicProfileMenuOpen();
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticWaitHereTarget_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    GameLoop::RequestControlMenuWaitHere();
     *result = 1;
     return true;
 }
@@ -1405,6 +1430,11 @@ static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticWaitHereTarget = {
+    "DialecticWaitHereTarget", "", 0, "Applies Wait Here to the NPC captured by DIALECTIC Control.", 0, 0,
+    nullptr, Cmd_DialecticWaitHereTarget_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
     "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
     kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
@@ -1514,7 +1544,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticSetRecordingDevice,
         &kCommandInfo_DialecticUpdateFalloutStat,
         &kCommandInfo_DialecticHandleHotkeyUp,
-        &kCommandInfo_DialecticInitialize
+        &kCommandInfo_DialecticInitialize,
+        &kCommandInfo_DialecticWaitHereTarget
     };
 
     for (CommandInfo* command : commands) {

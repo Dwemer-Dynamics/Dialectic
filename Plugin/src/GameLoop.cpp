@@ -66,7 +66,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.8.1"
+#define DIALECTIC_VERSION "0.8.5"
 #endif
 
 // Forward declarations
@@ -137,6 +137,8 @@ static std::chrono::steady_clock::time_point g_lastRuntimeConfigFallbackPoll;
 static std::chrono::steady_clock::time_point g_lastRpgEventPoll;
 static std::atomic<bool> g_runtimeConfigDirty(false);
 static std::atomic<DWORD> g_runtimeConfigDirtyTick(0);
+static uint32_t g_dialecticControlTargetFormId = 0;
+static std::string g_dialecticControlTargetName;
 
 static std::mutex g_runtimeStatusMutex;
 static bool g_runtimeStatusPending = false;
@@ -1075,6 +1077,16 @@ static const char* ModeLabelFromIndex(int modeIndex) {
     }
 }
 
+static const char* ModeTitleNameFromIndex(int modeIndex) {
+    // Keep titles aligned with the user-facing menu labels instead of internal mode names.
+    switch (modeIndex) {
+        case 6: return "INJECT EVENT";
+        case 7: return "INJECT & CHAT";
+        case 8: return "CHEAT";
+        default: return ModeNameFromIndex(modeIndex);
+    }
+}
+
 static int ModeIndexFromName(const std::string& rawMode) {
     const std::string mode = ToUpperCopy(TrimInput(rawMode));
     for (int i = 0; i <= 8; ++i) {
@@ -1120,6 +1132,18 @@ static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
                 << "}";
         HTTPManager::SendEvent("setconf", payload.str());
     }
+}
+
+void NoteProfileModelSelection(int slot) {
+    const int modelSlot = std::clamp(slot, 1, 4);
+    if (modelSlot == Config::currentProfileModelSlot) {
+        return;
+    }
+    Logger::LogInfo("GameLoop: LLM model slot selection %d -> %d (%s)",
+        Config::currentProfileModelSlot,
+        modelSlot,
+        ProfileModelLabelFromSlot(modelSlot));
+    Config::currentProfileModelSlot = modelSlot;
 }
 
 static void PollModeSelection() {
@@ -1173,11 +1197,48 @@ void RequestDialecticControlMenuOpen() {
         Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
         return;
     }
-    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DialecticControl)) {
+
+    NPCDetector::NPCInfo waitTarget = NPCDetector::GetCrosshairNPC();
+    if (!waitTarget.isValid || waitTarget.isDead || waitTarget.formId == 0x00000014) {
+        waitTarget = NPCDetector::GetClosestNPC();
+    }
+    if (waitTarget.isValid && !waitTarget.isDead && waitTarget.formId != 0x00000014) {
+        g_dialecticControlTargetFormId = waitTarget.formId;
+        g_dialecticControlTargetName = waitTarget.name;
+        Logger::LogInfo("GameLoop: DIALECTIC Control captured Wait Here target %s (0x%08X) at %.1f units",
+            waitTarget.name.c_str(), waitTarget.formId, waitTarget.distance);
+    } else {
+        g_dialecticControlTargetFormId = 0;
+        g_dialecticControlTargetName.clear();
+        Logger::LogInfo("GameLoop: DIALECTIC Control found no living NPC for Wait Here");
+    }
+
+    // Re-read the live mode state on every open so the buttons advertise current values.
+    XNVSEAdapter::NativeToolMenuStatus status;
+    status.chatMode = ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8));
+    status.llmMode = ToUpperCopy(ProfileModelLabelFromSlot(Config::currentProfileModelSlot));
+
+    if (XNVSEAdapter::OpenNativeToolMenu(
+            XNVSEAdapter::NativeToolMenu::DialecticControl, nullptr, &status)) {
         Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
         return;
     }
     Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
+}
+
+void RequestControlMenuWaitHere() {
+    const uint32_t actorFormId = g_dialecticControlTargetFormId;
+    const std::string actorName = g_dialecticControlTargetName;
+    g_dialecticControlTargetFormId = 0;
+    g_dialecticControlTargetName.clear();
+
+    if (actorFormId == 0) {
+        Console::Print("[DIALECTIC] Look at an NPC or stand near one before choosing Wait Here");
+        Logger::LogInfo("GameLoop: DIALECTIC Control Wait Here selected without an NPC target");
+        return;
+    }
+
+    ActionManager::RequestWaitHere(actorFormId, actorName, "DialecticControl");
 }
 
 void RequestModeMenuOpen() {
@@ -1186,7 +1247,9 @@ void RequestModeMenuOpen() {
         Logger::LogInfo("GameLoop: Ignoring mode selector while a blocking menu is open");
         return;
     }
-    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode)) {
+    const std::string modeMenuTitle = std::string("Mode: [") +
+        ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8)) + "]";
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode, modeMenuTitle.c_str())) {
         Logger::LogInfo("GameLoop: Opened mode selector through native UI adapter");
         return;
     }
@@ -1577,6 +1640,10 @@ static bool IsBoredEventBlocked(std::string& reason) {
         reason = "paused";
         return true;
     }
+    if (Config::boredAvoidInMenu && IsTextInputMenuActiveOrRecentlyClosed()) {
+        reason = "text input active";
+        return true;
+    }
     if (Config::boredAvoidInMenu && g_gameState.isInMenu) {
         reason = "menu open";
         return true;
@@ -1726,6 +1793,13 @@ static std::vector<std::pair<uint32_t, std::string>> BuildFreshBoredCandidates(f
             ? spatial.airDistance
             : DistanceBetween(player.position, position.position);
         if (maxDistance > 0.0f && distance > maxDistance) {
+            continue;
+        }
+
+        std::string activityReason;
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, &activityReason)) {
+            Logger::LogDebug("GameLoop: Bored candidate %s (0x%08X) skipped: %s",
+                position.actorName.c_str(), position.formId, activityReason.c_str());
             continue;
         }
 
@@ -4163,6 +4237,9 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("PollModeSelection", []() { PollModeSelection(); });
     }
     if (ShouldPoll(g_lastLegacyToolPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("MaybeSyncRuntimeStateFromServer", []() {
+            MaybeSyncRuntimeStateFromServer(false);
+        });
         ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
         ProfileUpdateSubsystem("PollLegacyDynamicProfileToolRequests", []() { PollLegacyDynamicProfileToolRequests(); });
     }

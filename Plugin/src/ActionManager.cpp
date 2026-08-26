@@ -13,7 +13,6 @@
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
-#include "SpeakManager.h"
 #include "TargetManager.h"
 #include "TradeManager.h"
 #include "WorldContextFNV.h"
@@ -48,8 +47,6 @@ constexpr const char* kNearbyItemsPath = "Data\\NVSE\\Plugins\\dialectic_nearby_
 constexpr const char* kNearbyPoiPath = "Data\\NVSE\\Plugins\\dialectic_nearby_pois.tmp";
 constexpr const char* kNearbyFurniturePath = "Data\\NVSE\\Plugins\\dialectic_nearby_furniture.tmp";
 constexpr int kInventoryOpenCooldownMs = 2500;
-constexpr auto kPostDialogueActionNoSpeechDelay = std::chrono::milliseconds(1200);
-constexpr auto kPostDialogueActionTimeout = std::chrono::seconds(30);
 constexpr auto kActorInspectionTimeout = std::chrono::milliseconds(850);
 
 std::atomic<uint64_t> g_requestCounter{0};
@@ -72,12 +69,6 @@ struct ActionRequest {
     int itemInventoryType = 0;
     uint64_t runtimeGeneration = 0;
     bool narratorAuthority = false;
-};
-
-struct PostDialogueAction {
-    ActionRequest request;
-    std::chrono::steady_clock::time_point createdAt;
-    std::string source;
 };
 
 struct NativePackageState {
@@ -107,8 +98,6 @@ struct NativePickupState {
 std::mutex g_actionGateMutex;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastInventoryOpenByActor;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastActionBridgeRequestByKey;
-std::mutex g_postDialogueActionMutex;
-std::vector<PostDialogueAction> g_postDialogueActions;
 std::mutex g_nativePackageMutex;
 std::unordered_map<std::uint32_t, NativePackageState> g_nativePackageStates;
 std::set<std::uint32_t> g_pendingNativeCleanupRefs;
@@ -191,7 +180,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"equip", "EquipItem"},
         {"equipitem", "EquipItem"},
         {"follow", "Follow"},
-        {"followplayer", "FollowPlayer"},
+        {"followplayer", "Follow"},
         {"stopfollow", "StopFollowing"},
         {"stopfollowing", "StopFollowing"},
         {"stopfollowingplayer", "StopFollowing"},
@@ -204,9 +193,9 @@ std::string ResolveCompactActionName(const std::string& actionName) {
         {"increasewalkspeed", "IncreaseWalkSpeed"},
         {"inspect", "Inspect"},
         {"inspectsurroundings", "InspectSurroundings"},
-        {"makefollower", "MakeFollower"},
-        {"joinplayerparty", "MakeFollower"},
-        {"jointoplayersquad", "MakeFollower"},
+        {"makefollower", "Follow"},
+        {"joinplayerparty", "Follow"},
+        {"jointoplayersquad", "Follow"},
         {"moveto", "MoveTo"},
         {"barter", "Barter"},
         {"showbartermenu", "Barter"},
@@ -254,7 +243,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
 
     if (!playerKey.empty()) {
         if (key == "follow" + playerKey) {
-            return "FollowPlayer";
+            return "Follow";
         }
         if (key == "stopfollowing" + playerKey || key == "stopfollow" + playerKey ||
             key == "dismiss" + playerKey || key == "dismiss" + playerKey + "fromparty" ||
@@ -262,7 +251,7 @@ std::string ResolveCompactActionName(const std::string& actionName) {
             return "StopFollowing";
         }
         if (key == "join" + playerKey + "party" || key == "jointo" + playerKey + "squad") {
-            return "MakeFollower";
+            return "Follow";
         }
         if (key == "takecapsfrom" + playerKey || key == "takegoldfrom" + playerKey) {
             return "TakeCapsFromPlayer";
@@ -513,13 +502,11 @@ const std::set<std::string>& CanonicalActions() {
         "EndConversation",
         "EquipItem",
         "Follow",
-        "FollowPlayer",
         "GiveCapsTo",
         "GiveItemTo",
         "IncreaseWalkSpeed",
         "Inspect",
         "InspectSurroundings",
-        "MakeFollower",
         "MoveTo",
         "Barter",
         "OpenInventory",
@@ -548,11 +535,9 @@ int ActionCodeForAction(const std::string& action) {
     if (action == "Attack") return 1;
     if (action == "OpenInventory") return 2;
     if (action == "Barter") return 3;
-    if (action == "MakeFollower") return 4;
-    if (action == "FollowPlayer") return 5;
+    if (action == "Follow") return 4;
     if (action == "ComeCloser") return 6;
     if (action == "MoveTo") return 7;
-    if (action == "Follow") return 8;
     if (action == "GiveCapsTo") return 9;
     if (action == "TakeCapsFromPlayer") return 10;
     if (action == "GiveItemTo") return 11;
@@ -2569,22 +2554,6 @@ void ApplyStructuredCommandArgs(ActionRequest& request, const std::vector<std::s
     }
 }
 
-bool IsPostDialogueActionName(const std::string& actionName) {
-    const std::string normalized = NormalizeActionName(actionName);
-    return normalized == "OpenInventory" ||
-           normalized == "Barter" ||
-           normalized == "ComeCloser" ||
-           normalized == "Follow" ||
-           normalized == "FollowPlayer" ||
-           normalized == "MakeFollower" ||
-           normalized == "MoveTo" ||
-           normalized == "TravelTo" ||
-           normalized == "SpawnCaps" ||
-           normalized == "SpawnItem" ||
-           normalized == "TeleportActor" ||
-           normalized == "KillTarget";
-}
-
 bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
                                            const char* source,
                                            ActionRequest& request,
@@ -2717,12 +2686,6 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
 
     if (request.action == "TravelTo" && request.targetFormId == 0) {
         ResolveNearbyPoi(request);
-    }
-
-    if (request.action == "Follow" && IsPlayerTargetName(request.target)) {
-        request.action = "FollowPlayer";
-        request.target = PlayerDisplayNameForAction();
-        request.targetFormId = Misc::GetPlayerFormId() != 0 ? Misc::GetPlayerFormId() : 0x00000014;
     }
 
     if (request.action == "PickupItem" &&
@@ -3020,13 +2983,10 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
                         Console::Print("[DIALECTIC] Action: %s", request.action.c_str());
                         Logger::LogInfo("[NATIVE_ACTION] companion state action=%s speaker=0x%08X adapter=%s",
                             request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
-                    } else {
-                        SendFuncretResult(request, request.action + " failed because companion_adapter_rejected.");
-                        Console::Print("[DIALECTIC] Action failed: %s", request.action.c_str());
-                        Logger::LogWarning("[NATIVE_ACTION] companion adapter rejected action=%s speaker=0x%08X adapter=%s",
-                            request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
+                        return;
                     }
-                    return;
+                    Logger::LogWarning("[NATIVE_ACTION] companion adapter rejected action=%s speaker=0x%08X adapter=%s; trying permanent vanilla fallback",
+                        request.action.c_str(), request.speakerFormId, usedCcc ? "jip_ccc" : "dialectic");
                 }
             }
             if (packageNativeAction && XNVSEAdapter::ExecuteNativePackageAction(
@@ -3058,88 +3018,59 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
         });
 }
 
-bool ActionMatchesSpeaker(const ActionRequest& request, const std::string& speaker, uint32_t actorFormId) {
-    if (actorFormId != 0 && request.speakerFormId == actorFormId) {
-        return true;
-    }
-    if (!speaker.empty() && !request.speaker.empty() && EqualsIgnoreCase(speaker, request.speaker)) {
-        return true;
-    }
-    return actorFormId == 0 && speaker.empty();
-}
-
-void ExpirePostDialogueActions() {
-    std::vector<PostDialogueAction> expired;
-    const auto now = std::chrono::steady_clock::now();
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        for (auto it = g_postDialogueActions.begin(); it != g_postDialogueActions.end();) {
-            if (now - it->createdAt > kPostDialogueActionTimeout) {
-                expired.push_back(*it);
-                it = g_postDialogueActions.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    for (const PostDialogueAction& action : expired) {
-        Logger::LogWarning("ActionManager: Dropped delayed %s for %s after dialogue playback did not complete",
-            action.request.action.c_str(),
-            action.request.speaker.c_str());
-    }
-}
-
-bool HasActiveDialoguePlaybackOrQueue() {
-    const SpeakManager::QueueStatus status = SpeakManager::GetQueueStatus();
-    const HTTPManager::QueueStatus httpStatus = HTTPManager::GetQueueStatus();
-    return status.dialogueLinesQueued > 0 ||
-           status.ttsDownloadsInProgress > 0 ||
-           status.ttsTasksPending > 0 ||
-           status.ttsTasksActive > 0 ||
-           status.preparedAudioCount > 0 ||
-           status.currentPlaybackLineActive ||
-           status.isProcessing ||
-           status.isPlaying ||
-           httpStatus.streamInProgress ||
-           httpStatus.activeStreamTasks > 0 ||
-           httpStatus.pendingHttpTasks > 0 ||
-           httpStatus.activeHttpTasks > 0 ||
-           httpStatus.httpResponsesQueued > 0;
-}
-
-void FlushPostDialogueActionsWithoutSpeech() {
-    if (HasActiveDialoguePlaybackOrQueue()) {
-        return;
-    }
-
-    std::vector<PostDialogueAction> ready;
-    const auto now = std::chrono::steady_clock::now();
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        for (auto it = g_postDialogueActions.begin(); it != g_postDialogueActions.end();) {
-            if (now - it->createdAt >= kPostDialogueActionNoSpeechDelay) {
-                ready.push_back(*it);
-                it = g_postDialogueActions.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    for (PostDialogueAction& action : ready) {
-        Logger::LogInfo("ActionManager: Flushing delayed %s action for %s after no dialogue arrived",
-            action.request.action.c_str(),
-            action.request.speaker.c_str());
-        ExecuteActionRequest(action.request, action.source.c_str());
-    }
-}
-
 } // namespace
 
 bool IsActionCommand(const std::string& actionName) {
     const std::string normalized = NormalizeActionName(actionName);
     return CanonicalActions().find(normalized) != CanonicalActions().end();
+}
+
+bool RequestWaitHere(uint32_t actorFormId,
+                     const std::string& actorName,
+                     const char* source) {
+    const char* sourceName = source ? source : "ActionManager";
+    RuntimeSnapshot::GameState gameState;
+    RuntimeSnapshot::ActorState actor;
+    if (actorFormId == 0 ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
+        Logger::LogWarning("%s: Wait Here rejected by native scene gate actor=0x%08X",
+            sourceName, actorFormId);
+        Console::Print("[DIALECTIC] Wait Here failed: NPC is no longer available");
+        return false;
+    }
+
+    ActionRequest request;
+    request.action = "WaitHere";
+    request.speaker = actor.name.empty() ? actorName : actor.name;
+    request.target = request.speaker;
+    request.speakerFormId = actorFormId;
+    request.targetFormId = actorFormId;
+    request.runtimeGeneration = RuntimeGeneration::Current();
+
+    const std::string commandKey = request.action + ":" + FormatRefId(actorFormId);
+    const bool queued = GameThreadDispatcher::Enqueue("action", commandKey, request.runtimeGeneration,
+        [request, sourceName = std::string(sourceName)]() {
+            if (XNVSEAdapter::ExecuteNativePackageAction(
+                    request.speakerFormId, request.targetFormId, 18)) {
+                TrackNativePackageAction(request);
+                Console::Print("[DIALECTIC] %s will wait here", request.speaker.c_str());
+                Logger::LogInfo("[NATIVE_ACTION] control menu started WaitHere actor=0x%08X source=%s",
+                    request.speakerFormId, sourceName.c_str());
+                return;
+            }
+
+            Console::Print("[DIALECTIC] Wait Here failed for %s", request.speaker.c_str());
+            Logger::LogWarning("[NATIVE_ACTION] control menu WaitHere failed actor=0x%08X source=%s",
+                request.speakerFormId, sourceName.c_str());
+        });
+    if (!queued) {
+        Console::Print("[DIALECTIC] Wait Here could not be queued");
+        Logger::LogWarning("%s: Failed to queue Wait Here actor=0x%08X", sourceName, actorFormId);
+    }
+    return queued;
 }
 
 bool HandleRoleCommandJson(const std::string& lineObject,
@@ -3199,131 +3130,11 @@ bool HandleRoleCommandJson(const std::string& lineObject,
     return ExecuteActionRequest(request, source);
 }
 
-bool ShouldDelayUntilAfterDialogue(const std::string& actionName) {
-    return IsPostDialogueActionName(actionName);
-}
-
-bool QueuePostDialogueActionJson(const std::string& lineObject,
-                                 const char* source,
-                                 uint64_t runtimeGeneration) {
-    ActionRequest request;
-    if (!BuildActionRequestFromRoleCommandJson(lineObject, source, request, false)) {
-        return false;
-    }
-    if (!IsPostDialogueActionName(request.action)) {
-        return false;
-    }
-    request.runtimeGeneration = runtimeGeneration != 0
-        ? runtimeGeneration
-        : RuntimeGeneration::Current();
-
-    PostDialogueAction delayed;
-    delayed.request = request;
-    delayed.createdAt = std::chrono::steady_clock::now();
-    delayed.source = source ? source : "ActionManager";
-
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        g_postDialogueActions.push_back(delayed);
-    }
-
-    Logger::LogInfo("%s: Delaying %s action for %s until dialogue playback completes",
-        source ? source : "ActionManager",
-        request.action.c_str(),
-        request.speaker.c_str());
-    return true;
-}
-
-bool HasPendingPostDialogueActionForSpeaker(const std::string& speaker,
-                                            uint32_t actorFormId) {
-    std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-    for (const auto& action : g_postDialogueActions) {
-        if (ActionMatchesSpeaker(action.request, speaker, actorFormId)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool FlushPostDialogueActionsForSpeaker(const std::string& speaker,
-                                        uint32_t actorFormId,
-                                        const char* source) {
-    std::vector<PostDialogueAction> ready;
-    bool hasMatchingAction = false;
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        for (const auto& action : g_postDialogueActions) {
-            if (ActionMatchesSpeaker(action.request, speaker, actorFormId)) {
-                hasMatchingAction = true;
-                break;
-            }
-        }
-    }
-
-    if (hasMatchingAction && HasActiveDialoguePlaybackOrQueue()) {
-        const SpeakManager::QueueStatus speech = SpeakManager::GetQueueStatus();
-        const HTTPManager::QueueStatus http = HTTPManager::GetQueueStatus();
-        Logger::LogInfo(
-            "%s: Deferring post-dialogue action for %s until full response queue drains "
-            "(dialogue=%d tts=%d tts_tasks=%d/%d prepared=%d playing=%d current=%d http_stream=%d http_active=%d http_tasks=%zu/%zu http_queued=%zu)",
-            source ? source : "ActionManager",
-            speaker.c_str(),
-            speech.dialogueLinesQueued,
-            speech.ttsDownloadsInProgress,
-            speech.ttsTasksActive,
-            speech.ttsTasksPending,
-            speech.preparedAudioCount,
-            speech.isPlaying ? 1 : 0,
-            speech.currentPlaybackLineActive ? 1 : 0,
-            http.streamInProgress ? 1 : 0,
-            http.activeStreamTasks,
-            http.activeHttpTasks,
-            http.pendingHttpTasks,
-            http.httpResponsesQueued);
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        for (auto it = g_postDialogueActions.begin(); it != g_postDialogueActions.end();) {
-            if (ActionMatchesSpeaker(it->request, speaker, actorFormId)) {
-                ready.push_back(*it);
-                it = g_postDialogueActions.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    for (PostDialogueAction& action : ready) {
-        Logger::LogInfo("%s: Flushing delayed %s action for %s after dialogue playback",
-            source ? source : "ActionManager",
-            action.request.action.c_str(),
-            action.request.speaker.c_str());
-        ExecuteActionRequest(action.request, source ? source : action.source.c_str());
-    }
-
-    return !ready.empty();
-}
-
-void ClearPostDialogueActions() {
-    size_t cleared = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        cleared = g_postDialogueActions.size();
-        g_postDialogueActions.clear();
-    }
-    if (cleared > 0) {
-        Logger::LogInfo("ActionManager: Cleared %zu delayed post-dialogue action(s)", cleared);
-    }
-}
-
 int HaltAIActions(const char* source) {
     const std::vector<std::pair<uint32_t, std::string>> targets = BuildHaltTargetSnapshot();
     ClearAllNativePackageStates();
     RequestNativeAttackCleanup("halt_ai_actions");
     CancelNativePickups("halt_ai_actions");
-    ClearPostDialogueActions();
     TradeManager::CancelAll("halt_ai_actions");
     GameThreadDispatcher::CancelByType("action", "halt_ai_actions");
     GameThreadDispatcher::CancelByType("action_native", "halt_ai_actions");
@@ -3627,12 +3438,6 @@ void UpdateNativePackageStates() {
 
 static bool HasActiveWork() {
     {
-        std::lock_guard<std::mutex> lock(g_postDialogueActionMutex);
-        if (!g_postDialogueActions.empty()) {
-            return true;
-        }
-    }
-    {
         std::lock_guard<std::mutex> lock(g_nativePackageMutex);
         if (!g_nativePackageStates.empty() || !g_pendingNativeCleanupRefs.empty()) {
             return true;
@@ -3667,8 +3472,6 @@ void Update() {
     UpdateNativeAttackStates();
     UpdateNativePickupStates();
     UpdateNativePackageStates();
-    FlushPostDialogueActionsWithoutSpeech();
-    ExpirePostDialogueActions();
 }
 
 } // namespace ActionManager

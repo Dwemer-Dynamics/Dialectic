@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace XNVSEAdapter {
@@ -33,6 +34,12 @@ enum class NativeToolMenu {
     Mode,
     LlmModel,
     DynamicProfile
+};
+
+// Live runtime values advertised directly on tool menu buttons.
+struct NativeToolMenuStatus {
+    std::string chatMode;
+    std::string llmMode;
 };
 
 struct Message {
@@ -139,6 +146,7 @@ struct NativeActorState {
     float y{0.0f};
     float z{0.0f};
     float yaw{0.0f};
+    std::vector<std::pair<std::uint32_t, int>> factions;
     std::vector<NativeEquipmentItem> equipment;
 };
 
@@ -292,6 +300,8 @@ bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
+// Read the active world camera's normalized forward vector for listener-relative audio.
+bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ);
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
 bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection);
 bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
@@ -318,7 +328,9 @@ void InvalidateNativePresentation();
 void InvalidateNativeObjectCache();
 bool ApplyNativeFacing(std::uint32_t speakerFormId, std::uint32_t targetFormId, float yawDegrees);
 bool ClearNativeFacing(std::uint32_t speakerFormId);
-bool OpenNativeToolMenu(NativeToolMenu menu);
+bool OpenNativeToolMenu(NativeToolMenu menu,
+                        const char* titleOverride = nullptr,
+                        const NativeToolMenuStatus* status = nullptr);
 bool ToggleNativePipVisionMenus();
 bool CaptureNativePipVisionScreenshot();
 bool ApplyNativeMfg(std::uint32_t actorFormId, int phoneme, int intensity, bool reset);

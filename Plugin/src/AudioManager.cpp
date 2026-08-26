@@ -38,7 +38,6 @@ namespace AudioManager {
     static double g_totalPausedTime = 0.0;
     static float g_volume = 1.0f;
     static bool g_3DPlaybackEnabled = true;
-    static bool g_cameraBasedAudio = false;
     static float g_3DPanStrength = 1.0f;
     static float g_lastAppliedPan = 99.0f;
 
@@ -377,7 +376,7 @@ namespace AudioManager {
     }
 
     void Update(const Vector3& sourcePos, const Vector3& listenerPos,
-                const Vector3& listenerForward, float listenerYaw) {
+                const Vector3& listenerForward) {
         if (!g_pSourceVoice) {
             return;
         }
@@ -395,17 +394,17 @@ namespace AudioManager {
             return;
         }
 
-        float rightX = std::cos(listenerYaw);
-        float rightY = -std::sin(listenerYaw);
-        if (g_cameraBasedAudio) {
-            const float forwardLength = std::sqrt((listenerForward.x * listenerForward.x) + (listenerForward.y * listenerForward.y));
-            if (forwardLength > 0.001f) {
-                const float forwardX = listenerForward.x / forwardLength;
-                const float forwardY = listenerForward.y / forwardLength;
-                rightX = forwardY;
-                rightY = -forwardX;
-            }
+        const float forwardLength = std::sqrt(
+            (listenerForward.x * listenerForward.x) +
+            (listenerForward.y * listenerForward.y));
+        if (forwardLength <= 0.001f) {
+            ApplyPannedOutputMatrix(0.0f);
+            return;
         }
+        const float forwardX = listenerForward.x / forwardLength;
+        const float forwardY = listenerForward.y / forwardLength;
+        const float rightX = forwardY;
+        const float rightY = -forwardX;
         const float rightComponent = (dx * rightX + dy * rightY) / horizontalDistance;
         constexpr float kMaxEarPan = 0.75f;
         const float pan = Clamp(rightComponent * g_3DPanStrength, -kMaxEarPan, kMaxEarPan);
@@ -426,15 +425,6 @@ namespace AudioManager {
         } else {
             g_lastAppliedPan = 99.0f;
         }
-    }
-
-    void SetCameraBasedAudio(bool enabled) {
-        if (g_cameraBasedAudio == enabled) {
-            return;
-        }
-
-        g_cameraBasedAudio = enabled;
-        g_lastAppliedPan = 99.0f;
     }
 
     void Set3DPlaybackStrength(float strength) {

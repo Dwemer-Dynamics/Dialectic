@@ -162,7 +162,7 @@ Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voices synce
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
 Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'
 Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'DIALECTIC initialized\.' 'final initialization notice'
-Require-Text (Join-Path $sourceRoot 'IngameNotifier.cpp') 'level == Level::Success \? 0U' 'happy Pip-Boy icon for successful initialization notices'
+Require-Text (Join-Path $sourceRoot 'IngameNotifier.cpp') 'level == Level::Warning \? 1U : 0U' 'happy Pip-Boy icon for informational and successful notices'
 Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'std::chrono::seconds\(5\)' 'five-second initialization progress interval'
 Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'BuildProgressMessage\(\)' 'initialization progress notice builder'
 Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
