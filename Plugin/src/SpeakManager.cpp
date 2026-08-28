@@ -195,6 +195,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static bool g_rechatChainClosed = false;
     static bool g_rechatChainAutonomous = false;
     static std::string g_rechatChainId;
+    static std::vector<std::string> g_playerTurnAudience;
     static std::chrono::steady_clock::time_point g_rechatCooldownUntil = {};
     static ScriptLine g_pendingRechatLaunchLine;
     static bool g_pendingRechatLaunchActive = false;
@@ -2844,12 +2845,26 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_rechatChainClosed = false;
         g_rechatChainAutonomous = false;
         g_rechatChainId.clear();
+        g_playerTurnAudience.clear();
         g_lastRechatter.clear();
         g_pendingRechatRetry = PendingRechatRetry{};
         g_pendingRechatLaunchLine = ScriptLine{};
         g_pendingRechatLaunchActive = false;
         g_pendingRechatLaunchUntil = {};
         g_pendingRechatNextCheck = {};
+    }
+
+    void SetPlayerTurnAudience(const std::string& peoplePipe) {
+        std::vector<std::string> names;
+        std::set<std::string> seen;
+        std::istringstream stream(peoplePipe);
+        std::string name;
+        while (std::getline(stream, name, '|')) {
+            AppendUniqueAudienceName(names, seen, name);
+        }
+
+        std::lock_guard<std::mutex> lock(g_rechatMutex);
+        g_playerTurnAudience = std::move(names);
     }
 
     void StartRechatChainForAutonomousEvent() {
@@ -2913,8 +2928,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WriteRechatStatus("skipped", cleanSpeaker, "request", "plugin_rechat_disabled", cleanTarget);
             return 0;
         }
-        if (EqualsIgnoreCase(Config::currentMode, "WHISPER") ||
-            EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+        if (EqualsIgnoreCase(Config::currentMode, "WHISPER")) {
             Log("SpeakManager: Rechat skipped for %s because %s mode is private",
                 cleanSpeaker.c_str(), Config::currentMode.c_str());
             WriteRechatStatus("skipped", cleanSpeaker, "request", "private_mode", cleanTarget);
@@ -3012,8 +3026,14 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         const std::string chainId = EnsureRechatChainId(cleanSpeaker, cleanListener, cleanTarget);
         const std::string resolvedTarget = cleanTarget.empty() ? cleanListener : cleanTarget;
-        const std::vector<std::string> audienceNames =
-            BuildRechatAudienceNames(cleanSpeaker, cleanListener, cleanTarget, speakerFormId);
+        std::vector<std::string> audienceNames;
+        if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            audienceNames = g_playerTurnAudience;
+        } else {
+            audienceNames = BuildRechatAudienceNames(
+                cleanSpeaker, cleanListener, cleanTarget, speakerFormId);
+        }
         const std::string audienceJson = JsonStringArray(audienceNames);
         const std::string audiencePipe = AudiencePeoplePipe(audienceNames);
 
