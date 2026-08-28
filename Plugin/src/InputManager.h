@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include "ChatHotkeyGesture.h"
 
 namespace InputManager {
 
@@ -24,6 +25,10 @@ void Shutdown();
 
 // Clears queued/held input when Fallout loses focus or enters blocking UI.
 void Update();
+
+// Chat keys are recognized from their original press/release timestamps, without debounce loss.
+std::uint8_t ConsumeChatGestures(HotkeyAction action);
+void ResetChatGestures();
 
 bool IsGameForeground();
 bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs = 250);

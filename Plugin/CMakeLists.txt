@@ -102,6 +102,10 @@ if(MSVC)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(DialecticChatHotkeyGestureTests tests/ChatHotkeyGestureTests.cpp)
+    target_include_directories(DialecticChatHotkeyGestureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME DialecticChatHotkeyGestureTests COMMAND DialecticChatHotkeyGestureTests)
+
     add_executable(DialecticTaskManagerTests
         tests/TaskManagerTests.cpp
         src/TaskManager.cpp
