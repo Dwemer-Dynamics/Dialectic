@@ -494,6 +494,7 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
 }
 
 static float GetPlayerSpeechDistanceMultiplier();
+static float GetConversationTargetRadius();
 static bool IsStealthPlayerInputActive();
 static bool EqualsIgnoreCase(const std::string& left, const std::string& right);
 
@@ -506,6 +507,8 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     std::vector<std::string> names;
     std::set<std::string> seen;
     const float playerSpeechDistanceMultiplier = GetPlayerSpeechDistanceMultiplier();
+    const bool closeMode = EqualsIgnoreCase(Config::currentMode, "CLOSE");
+    const float closeRadius = closeMode ? GetConversationTargetRadius() : 0.0f;
 
     AppendConversationPartnerAudienceName(names, seen);
     AppendUniqueAudienceName(names, seen, Config::playerName.empty() ? "Player" : Config::playerName);
@@ -532,9 +535,11 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
             }
 
             const auto spatial = SpatialAwarenessFNV::Evaluate(player, position);
-            const float effectiveMaxDistance = spatial.maxDistance > 0.0f
-                ? spatial.maxDistance * playerSpeechDistanceMultiplier
-                : 0.0f;
+            const float effectiveMaxDistance = closeMode
+                ? closeRadius
+                : (spatial.maxDistance > 0.0f
+                    ? spatial.maxDistance * playerSpeechDistanceMultiplier
+                    : 0.0f);
             bool canHearPlayer = spatial.canCommunicate;
             if (!canHearPlayer &&
                 playerSpeechDistanceMultiplier > 1.0f &&
@@ -551,7 +556,10 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
                 spatial.airDistance <= nearbyMaxDistance;
             const bool managedActor = AgentManager::IsManuallyActivated(position.formId) ||
                 AgentManager::IsAutoManaged(position.formId);
-            if (!withinSpeechRange && !withinNearbyRange && !managedActor) {
+            const bool includeInAudience = closeMode
+                ? withinSpeechRange
+                : (withinSpeechRange || withinNearbyRange || managedActor);
+            if (!includeInAudience) {
                 continue;
             }
 
@@ -794,7 +802,7 @@ static float GetConversationTargetRadius() {
     return kDefaultTargetRadius * GetPlayerSpeechDistanceMultiplier();
 }
 
-// Private speech modes require the selected listener to remain within their request-local radius.
+// Whisper and Close require the selected listener to remain within their request-local radius.
 static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::string& name, bool notify) {
     if (!IsPrivateConversationMode() || formId == 0) {
         return true;
@@ -4625,11 +4633,14 @@ void SendPlayerMessage(const std::string& message) {
     const char* playerInputEventType = g_conversationIsNarrator
         ? "narrator_inputtext"
         : (stealthPlayerInput ? "inputtext_s" : "inputtext");
+    const bool targetOnlyConversationMode =
+        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "WHISPER");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
-        : ((injectionMode || privateConversationMode)
+        : ((injectionMode || targetOnlyConversationMode)
             ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
-            : BuildAudienceSnapshotJson());
+            : BuildAudienceSnapshotJson(EqualsIgnoreCase(Config::currentMode, "CLOSE") ? "player_close" : ""));
+    SpeakManager::SetPlayerTurnAudience(ExtractPeopleFromAudienceSnapshotJson(audienceSnapshot));
     Log("GameLoop: Audience snapshot for player input type=%s stealth=%d distanceMultiplier=%.3f: %s",
         playerInputEventType,
         stealthPlayerInput ? 1 : 0,
