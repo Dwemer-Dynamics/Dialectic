@@ -1241,6 +1241,16 @@ void RequestControlMenuWaitHere() {
     ActionManager::RequestWaitHere(actorFormId, actorName, "DialecticControl");
 }
 
+// Chat shortcuts deliberately omit the Control menu's nearest-NPC fallback.
+static void RequestChatHotkeyWaitHere() {
+    const NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
+    if (!npc.isValid || npc.isDead || npc.formId == 0x00000014) {
+        Console::Print("[DIALECTIC] Look at a living NPC to make them wait here");
+        return;
+    }
+    ActionManager::RequestWaitHere(npc.formId, npc.name, "ChatHotkey");
+}
+
 void RequestModeMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
@@ -3971,6 +3981,7 @@ static void UpdateOpenMicMonitoringState() {
 
 static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue) {
+    InputManager::ResetChatGestures();
     const bool hadConversation = g_conversationActive;
     const std::string previousPartner = g_conversationPartner;
     const char* resetReason = reason ? reason : "runtime reset";
@@ -4265,8 +4276,12 @@ void Update(float deltaTime) {
 
     ProfileUpdateSubsystem("ActivationManager::Update", []() { ActivationManager::Update(); });
 
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::TalkToNPC)) {
-        Logger::LogInfo("GameLoop: Chatbox hotkey pressed");
+    const auto textGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::TalkToNPC);
+    if ((textGestures & InputManager::Hold) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    if ((textGestures & InputManager::Tap) != 0) {
+        Logger::LogInfo("GameLoop: Chatbox hotkey tapped");
         RequestTextInputMenuOpen();
     }
 
@@ -4295,8 +4310,19 @@ void Update(float deltaTime) {
         Console::Print(Config::openMicMuted ? "[DIALECTIC] Open mic muted" : "[DIALECTIC] Open mic unmuted");
     }
     
-    // Voice input handling (hold-to-talk)
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
+    const auto voiceGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::ToggleVoice);
+    if ((voiceGestures & InputManager::Tap) != 0) {
+        // Clear speech and late replies, not NPC packages, dialogue history or the selected partner.
+        SpeakManager::CancelDialogueTurn("voice_hotkey_tap", false, true);
+        ResetBoredEventTimer("voice hotkey tap");
+        Console::Print("[DIALECTIC] Stopped all dialogue");
+    }
+    if ((voiceGestures & InputManager::DoubleTap) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    // A release processed after a slow frame may identify a hold, but must not start a late recording.
+    if ((voiceGestures & InputManager::Hold) != 0 &&
+        InputManager::IsActionHeld(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
             Console::Print("[DIALECTIC] Recording...");
         } else {

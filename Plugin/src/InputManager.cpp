@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 
 void Log(const char* fmt, ...);
 
@@ -26,6 +27,9 @@ std::array<ULONGLONG, kActionCount> g_lastActionClaims{};
 std::atomic<uint32_t> g_pendingActions{0};
 std::atomic<uint32_t> g_releasedActions{0};
 std::atomic<uint32_t> g_heldActions{0};
+std::mutex g_chatGestureMutex;
+ChatHotkeyGesture g_textGesture{700};
+ChatHotkeyGesture g_voiceGesture{350, 350};
 
 constexpr std::size_t ActionIndex(HotkeyAction action) {
     return static_cast<std::size_t>(action);
@@ -99,6 +103,7 @@ void Initialize() {
 }
 
 void Shutdown() {
+    ResetChatGestures();
     Log("InputManager: Shutting down");
     for (auto& binding : g_hotkeyBindings) binding.store(0, std::memory_order_relaxed);
     g_pendingActions.store(0, std::memory_order_relaxed);
@@ -118,6 +123,7 @@ bool IsGameForeground() {
 void Update() {
     if (IsRuntimeInputAllowed()) return;
 
+    ResetChatGestures();
     g_pendingActions.store(0, std::memory_order_release);
     g_releasedActions.store(0, std::memory_order_release);
     g_heldActions.store(0, std::memory_order_release);
@@ -130,10 +136,15 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
     if (!pressed) {
         g_heldActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
         g_releasedActions.fetch_or(matchedActions, std::memory_order_acq_rel);
+        std::lock_guard<std::mutex> lock(g_chatGestureMutex);
+        const auto now = GetTickCount64();
+        if ((matchedActions & ActionBit(HotkeyAction::TalkToNPC)) != 0) g_textGesture.Release(now);
+        if ((matchedActions & ActionBit(HotkeyAction::ToggleVoice)) != 0) g_voiceGesture.Release(now);
         return true;
     }
 
     if (!IsRuntimeInputAllowed()) {
+        ResetChatGestures();
         g_heldActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
         Log("InputManager: ignored scan code %d while runtime input is blocked", scanCode);
         return false;
@@ -142,6 +153,13 @@ bool HandleScanCodeEvent(int scanCode, bool pressed) {
     g_heldActions.fetch_or(matchedActions, std::memory_order_acq_rel);
     g_releasedActions.fetch_and(~matchedActions, std::memory_order_acq_rel);
     g_pendingActions.fetch_or(matchedActions, std::memory_order_acq_rel);
+
+    {
+        std::lock_guard<std::mutex> lock(g_chatGestureMutex);
+        const auto now = GetTickCount64();
+        if ((matchedActions & ActionBit(HotkeyAction::TalkToNPC)) != 0) g_textGesture.Press(now);
+        if ((matchedActions & ActionBit(HotkeyAction::ToggleVoice)) != 0) g_voiceGesture.Press(now);
+    }
 
     for (std::size_t i = 0; i < kActionCount; ++i) {
         if ((matchedActions & (uint32_t{1} << i)) != 0) {
@@ -156,6 +174,26 @@ bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs) {
     const uint32_t bit = ActionBit(action);
     const uint32_t previous = g_pendingActions.fetch_and(~bit, std::memory_order_acq_rel);
     return (previous & bit) != 0 && TryClaimAction(action, debounceMs);
+}
+
+std::uint8_t ConsumeChatGestures(HotkeyAction action) {
+    if (!IsRuntimeInputAllowed()) {
+        ResetChatGestures();
+        return NoGesture;
+    }
+    g_pendingActions.fetch_and(~ActionBit(action), std::memory_order_acq_rel);
+    g_releasedActions.fetch_and(~ActionBit(action), std::memory_order_acq_rel);
+    std::lock_guard<std::mutex> lock(g_chatGestureMutex);
+    const auto now = GetTickCount64();
+    if (action == HotkeyAction::TalkToNPC) return g_textGesture.Consume(now);
+    if (action == HotkeyAction::ToggleVoice) return g_voiceGesture.Consume(now);
+    return NoGesture;
+}
+
+void ResetChatGestures() {
+    std::lock_guard<std::mutex> lock(g_chatGestureMutex);
+    g_textGesture.Cancel();
+    g_voiceGesture.Cancel();
 }
 
 bool IsActionReleased(HotkeyAction action) {
@@ -189,8 +227,17 @@ bool IsScanCodeHeld(int scanCode) {
 }
 
 void SetHotkey(HotkeyAction action, int scanCode) {
+    const int previous = GetHotkey(action);
     g_hotkeyBindings[ActionIndex(action)].store(scanCode > 0 ? scanCode : 0,
                                                 std::memory_order_release);
+    if ((action == HotkeyAction::TalkToNPC || action == HotkeyAction::ToggleVoice) &&
+        previous != GetHotkey(action)) {
+        ResetChatGestures();
+        const auto mask = ~ActionBit(action);
+        g_heldActions.fetch_and(mask, std::memory_order_acq_rel);
+        g_pendingActions.fetch_and(mask, std::memory_order_acq_rel);
+        g_releasedActions.fetch_and(mask, std::memory_order_acq_rel);
+    }
 }
 
 int GetHotkey(HotkeyAction action) {
@@ -198,6 +245,7 @@ int GetHotkey(HotkeyAction action) {
 }
 
 void LoadConfig() {
+    ResetChatGestures();
     SetHotkey(HotkeyAction::TalkToNPC, Config::ReadINIInt("Hotkeys", "TalkToNPC", 0));
     SetHotkey(HotkeyAction::StopTalking, Config::ReadINIInt("Hotkeys", "StopTalking", 0));
     SetHotkey(HotkeyAction::ToggleVoice, Config::ReadINIInt("Hotkeys", "ToggleVoice", 0));
