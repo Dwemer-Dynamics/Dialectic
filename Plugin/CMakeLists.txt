@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Dialectic VERSION 0.8.5)
+project(Dialectic VERSION 1.0.0)
 
 math(EXPR DIALECTIC_PLUGIN_INFO_VERSION
     "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
@@ -102,6 +102,10 @@ if(MSVC)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(DialecticChatHotkeyGestureTests tests/ChatHotkeyGestureTests.cpp)
+    target_include_directories(DialecticChatHotkeyGestureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME DialecticChatHotkeyGestureTests COMMAND DialecticChatHotkeyGestureTests)
+
     add_executable(DialecticTaskManagerTests
         tests/TaskManagerTests.cpp
         src/TaskManager.cpp

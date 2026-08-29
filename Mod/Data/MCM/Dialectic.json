@@ -28,7 +28,7 @@
           "title": "Chatbox",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for opening the text chatbox to type messages to the targeted NPC. Unbound by default.",
+          "mouse": "Tap to open the text chatbox. Hold to make the NPC in your crosshair wait here. Unbound by default.",
           "vars": [
             {
               "configINI": "Hotkeys:TalkToNPC",
@@ -47,7 +47,7 @@
           "title": "Voice Chat",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for push-to-talk voice input. Unbound by default.",
+          "mouse": "Hold to talk. Tap to stop current and queued dialogue, or double-tap to make the NPC in your crosshair wait here. Unbound by default.",
           "vars": [
             {
               "configINI": "Hotkeys:ToggleVoice",

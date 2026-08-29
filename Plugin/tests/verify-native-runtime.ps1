@@ -72,6 +72,8 @@ Reject-Text $cppPaths 'aiagent_textinput\.tmp' 'legacy text-input bridge'
 Reject-Text $cppPaths 'rolecommand\|' 'delimiter rolecommand parser'
 Reject-Text $cppPaths 'RegisterFrameCallback|RegisterHooks|IsGamePaused' 'retired no-op plugin API'
 Require-Text (Join-Path $sourceRoot 'ActionManager.cpp') 'ExtractJsonStringArrayValue\(lineObject, "command_args"\)' 'structured action arguments'
+Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'BuildAudienceSnapshotJson\(EqualsIgnoreCase\(Config::currentMode, "CLOSE"\) \? "player_close"' 'Close player-centered audience snapshot'
+Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'audienceNames = g_playerTurnAudience' 'Close rechat audience preservation'
 
 $sdkIncludeOwners = @('main.cpp', 'XNVSEAdapter.cpp')
 $unexpectedSdkIncludes = $cppFiles |

@@ -66,7 +66,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.8.5"
+#define DIALECTIC_VERSION "1.0.0"
 #endif
 
 // Forward declarations
@@ -494,6 +494,7 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
 }
 
 static float GetPlayerSpeechDistanceMultiplier();
+static float GetConversationTargetRadius();
 static bool IsStealthPlayerInputActive();
 static bool EqualsIgnoreCase(const std::string& left, const std::string& right);
 
@@ -506,6 +507,8 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     std::vector<std::string> names;
     std::set<std::string> seen;
     const float playerSpeechDistanceMultiplier = GetPlayerSpeechDistanceMultiplier();
+    const bool closeMode = EqualsIgnoreCase(Config::currentMode, "CLOSE");
+    const float closeRadius = closeMode ? GetConversationTargetRadius() : 0.0f;
 
     AppendConversationPartnerAudienceName(names, seen);
     AppendUniqueAudienceName(names, seen, Config::playerName.empty() ? "Player" : Config::playerName);
@@ -532,9 +535,11 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
             }
 
             const auto spatial = SpatialAwarenessFNV::Evaluate(player, position);
-            const float effectiveMaxDistance = spatial.maxDistance > 0.0f
-                ? spatial.maxDistance * playerSpeechDistanceMultiplier
-                : 0.0f;
+            const float effectiveMaxDistance = closeMode
+                ? closeRadius
+                : (spatial.maxDistance > 0.0f
+                    ? spatial.maxDistance * playerSpeechDistanceMultiplier
+                    : 0.0f);
             bool canHearPlayer = spatial.canCommunicate;
             if (!canHearPlayer &&
                 playerSpeechDistanceMultiplier > 1.0f &&
@@ -551,7 +556,10 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
                 spatial.airDistance <= nearbyMaxDistance;
             const bool managedActor = AgentManager::IsManuallyActivated(position.formId) ||
                 AgentManager::IsAutoManaged(position.formId);
-            if (!withinSpeechRange && !withinNearbyRange && !managedActor) {
+            const bool includeInAudience = closeMode
+                ? withinSpeechRange
+                : (withinSpeechRange || withinNearbyRange || managedActor);
+            if (!includeInAudience) {
                 continue;
             }
 
@@ -794,7 +802,7 @@ static float GetConversationTargetRadius() {
     return kDefaultTargetRadius * GetPlayerSpeechDistanceMultiplier();
 }
 
-// Private speech modes require the selected listener to remain within their request-local radius.
+// Whisper and Close require the selected listener to remain within their request-local radius.
 static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::string& name, bool notify) {
     if (!IsPrivateConversationMode() || formId == 0) {
         return true;
@@ -1239,6 +1247,16 @@ void RequestControlMenuWaitHere() {
     }
 
     ActionManager::RequestWaitHere(actorFormId, actorName, "DialecticControl");
+}
+
+// Chat shortcuts deliberately omit the Control menu's nearest-NPC fallback.
+static void RequestChatHotkeyWaitHere() {
+    const NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
+    if (!npc.isValid || npc.isDead || npc.formId == 0x00000014) {
+        Console::Print("[DIALECTIC] Look at a living NPC to make them wait here");
+        return;
+    }
+    ActionManager::RequestWaitHere(npc.formId, npc.name, "ChatHotkey");
 }
 
 void RequestModeMenuOpen() {
@@ -3971,6 +3989,7 @@ static void UpdateOpenMicMonitoringState() {
 
 static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue) {
+    InputManager::ResetChatGestures();
     const bool hadConversation = g_conversationActive;
     const std::string previousPartner = g_conversationPartner;
     const char* resetReason = reason ? reason : "runtime reset";
@@ -4265,8 +4284,12 @@ void Update(float deltaTime) {
 
     ProfileUpdateSubsystem("ActivationManager::Update", []() { ActivationManager::Update(); });
 
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::TalkToNPC)) {
-        Logger::LogInfo("GameLoop: Chatbox hotkey pressed");
+    const auto textGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::TalkToNPC);
+    if ((textGestures & InputManager::Hold) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    if ((textGestures & InputManager::Tap) != 0) {
+        Logger::LogInfo("GameLoop: Chatbox hotkey tapped");
         RequestTextInputMenuOpen();
     }
 
@@ -4295,8 +4318,19 @@ void Update(float deltaTime) {
         Console::Print(Config::openMicMuted ? "[DIALECTIC] Open mic muted" : "[DIALECTIC] Open mic unmuted");
     }
     
-    // Voice input handling (hold-to-talk)
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
+    const auto voiceGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::ToggleVoice);
+    if ((voiceGestures & InputManager::Tap) != 0) {
+        // Clear speech and late replies, not NPC packages, dialogue history or the selected partner.
+        SpeakManager::CancelDialogueTurn("voice_hotkey_tap", false, true);
+        ResetBoredEventTimer("voice hotkey tap");
+        Console::Print("[DIALECTIC] Stopped all dialogue");
+    }
+    if ((voiceGestures & InputManager::DoubleTap) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    // A release processed after a slow frame may identify a hold, but must not start a late recording.
+    if ((voiceGestures & InputManager::Hold) != 0 &&
+        InputManager::IsActionHeld(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
             Console::Print("[DIALECTIC] Recording...");
         } else {
@@ -4599,11 +4633,14 @@ void SendPlayerMessage(const std::string& message) {
     const char* playerInputEventType = g_conversationIsNarrator
         ? "narrator_inputtext"
         : (stealthPlayerInput ? "inputtext_s" : "inputtext");
+    const bool targetOnlyConversationMode =
+        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "WHISPER");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
-        : ((injectionMode || privateConversationMode)
+        : ((injectionMode || targetOnlyConversationMode)
             ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
-            : BuildAudienceSnapshotJson());
+            : BuildAudienceSnapshotJson(EqualsIgnoreCase(Config::currentMode, "CLOSE") ? "player_close" : ""));
+    SpeakManager::SetPlayerTurnAudience(ExtractPeopleFromAudienceSnapshotJson(audienceSnapshot));
     Log("GameLoop: Audience snapshot for player input type=%s stealth=%d distanceMultiplier=%.3f: %s",
         playerInputEventType,
         stealthPlayerInput ? 1 : 0,
