@@ -19,6 +19,7 @@ int iLookingAt
 int iLocked
 
 begin function {}
+    DialecticDiagnosticBridgeTick 12
     if MenuMode
         CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
         return

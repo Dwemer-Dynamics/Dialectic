@@ -1,0 +1,13 @@
+ref rSleepWaitHandler
+
+begin function {}
+    let rSleepWaitHandler := CompileScript "Dialectic/SleepWaitEventHandler.txt"
+    if eval !rSleepWaitHandler
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_sleep_wait_status.txt" 0 "registered=0 reason=missing_handler\n"
+        return
+    endif
+
+    SetJohnnyOnSleepWaitEventHandler 0 rSleepWaitHandler 0 0
+    SetJohnnyOnSleepWaitEventHandler 1 rSleepWaitHandler 0 0
+    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_sleep_wait_status.txt" 0 "registered=1 source=johnnyguitar\n"
+end

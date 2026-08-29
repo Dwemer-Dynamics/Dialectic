@@ -3,6 +3,7 @@
 #include "VoiceRecorder.h"
 #include "HTTPManager.h"
 #include "Config.h"
+#include "InputManager.h"
 #include "GameThreadDispatcher.h"
 #include "Misc.h"
 #include "RuntimeGeneration.h"
@@ -11,7 +12,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <audioclient.h>
+#include <mmdeviceapi.h>
 #include <mmsystem.h>
+#include <Functiondiscoverykeys_devpkey.h>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -20,13 +24,20 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <fstream>
+#include <memory>
 
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "ole32.lib")
 
 // Forward declare Log
 void Log(const char* fmt, ...);
 
 namespace VoiceRecorder {
+
+static bool IsBoundKeyDown(int scanCode) {
+    return InputManager::IsScanCodeHeld(scanCode);
+}
 
 // Recording state
 static std::atomic<bool> g_isRecording(false);
@@ -93,47 +104,116 @@ static std::string ToLower(std::string value) {
     return value;
 }
 
-static UINT_PTR ResolveConfiguredDeviceId() {
-    if (Config::voiceRecordingDeviceId >= 0) {
-        return static_cast<UINT_PTR>(Config::voiceRecordingDeviceId);
+static UINT_PTR ResolveCaptureDeviceId() {
+    std::string wanted = Config::voiceRecordingPreferredDeviceName;
+    const std::string displayPrefix = "Current Device: ";
+    if (wanted.rfind(displayPrefix, 0) == 0) {
+        wanted.erase(0, displayPrefix.size());
     }
 
-    const std::string wantedName = ToLower(Config::voiceRecordingDeviceName);
-    if (!wantedName.empty()) {
-        const UINT count = waveInGetNumDevs();
-        for (UINT i = 0; i < count; ++i) {
-            WAVEINCAPSA caps = {};
-            if (waveInGetDevCapsA(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR) {
-                const std::string candidate = ToLower(caps.szPname);
-                if (candidate.find(wantedName) != std::string::npos) {
-                    Log("VoiceRecorder: Matched configured capture device name '%s' to id %u (%s)",
-                        Config::voiceRecordingDeviceName.c_str(), i, caps.szPname);
-                    return static_cast<UINT_PTR>(i);
-                }
-            }
+    const std::string wantedLower = ToLower(wanted);
+    if (wantedLower.empty() || wantedLower == "windows default") {
+        return WAVE_MAPPER;
+    }
+
+    const UINT count = waveInGetNumDevs();
+    for (UINT i = 0; i < count; ++i) {
+        WAVEINCAPSA caps = {};
+        if (waveInGetDevCapsA(i, &caps, sizeof(caps)) != MMSYSERR_NOERROR || !caps.szPname[0]) {
+            continue;
         }
-        Log("VoiceRecorder: Configured capture device name '%s' was not found, using mapper",
-            Config::voiceRecordingDeviceName.c_str());
+        const std::string candidateLower = ToLower(caps.szPname);
+        if (candidateLower.find(wantedLower) != std::string::npos ||
+            wantedLower.find(candidateLower) != std::string::npos) {
+            Log("VoiceRecorder: Automatically matched preferred capture device '%s' to id %u (%s)",
+                wanted.c_str(), i, caps.szPname);
+            return static_cast<UINT_PTR>(i);
+        }
     }
 
+    Log("VoiceRecorder: Preferred capture device '%s' was unavailable; using Windows default",
+        wanted.c_str());
     return WAVE_MAPPER;
 }
 
-static MMRESULT OpenConfiguredWaveInput(HWAVEIN* hWaveIn, const WAVEFORMATEX* wfx) {
-    const UINT_PTR deviceId = ResolveConfiguredDeviceId();
-    MMRESULT result = waveInOpen(hWaveIn, deviceId, wfx, 0, 0, CALLBACK_NULL | WAVE_FORMAT_DIRECT);
+static MMRESULT OpenCaptureInput(HWAVEIN* hWaveIn, const WAVEFORMATEX* wfx) {
+    const UINT_PTR deviceId = ResolveCaptureDeviceId();
+    // Let Windows convert the default endpoint's native format to 16 kHz mono.
+    // Some USB headset drivers accept a direct 16 kHz stream but return silence.
+    MMRESULT result = waveInOpen(hWaveIn, deviceId, wfx, 0, 0, CALLBACK_NULL);
     if (result != MMSYSERR_NOERROR) {
-        result = waveInOpen(hWaveIn, deviceId, wfx, 0, 0, CALLBACK_NULL);
+        Log("VoiceRecorder: Converted capture open failed for device %u (error: %d), trying direct mode",
+            static_cast<unsigned int>(deviceId), result);
+        result = waveInOpen(hWaveIn, deviceId, wfx, 0, 0, CALLBACK_NULL | WAVE_FORMAT_DIRECT);
     }
     if (result != MMSYSERR_NOERROR && deviceId != WAVE_MAPPER) {
-        Log("VoiceRecorder: Configured capture device %u failed to open (error: %d), trying mapper",
-            static_cast<unsigned int>(deviceId), result);
-        result = waveInOpen(hWaveIn, WAVE_MAPPER, wfx, 0, 0, CALLBACK_NULL | WAVE_FORMAT_DIRECT);
-        if (result != MMSYSERR_NOERROR) {
-            result = waveInOpen(hWaveIn, WAVE_MAPPER, wfx, 0, 0, CALLBACK_NULL);
-        }
+        Log("VoiceRecorder: Preferred capture device %u failed to open; falling back to Windows default",
+            static_cast<unsigned int>(deviceId));
+        result = waveInOpen(hWaveIn, WAVE_MAPPER, wfx, 0, 0, CALLBACK_NULL);
     }
     return result;
+}
+
+static void CloseWaveInputSafely(HWAVEIN& hWaveIn, WAVEHDR* headers, std::size_t headerCount,
+                                 const char* context) {
+    if (!hWaveIn) {
+        return;
+    }
+
+    MMRESULT result = waveInStop(hWaveIn);
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: %s waveInStop failed (error: %d)", context, result);
+    }
+
+    // waveInStop can leave buffers queued. Reset synchronously returns every
+    // queued buffer before their stack-backed storage is released.
+    result = waveInReset(hWaveIn);
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: %s waveInReset failed (error: %d)", context, result);
+    }
+
+    for (std::size_t i = 0; i < headerCount; ++i) {
+        WAVEHDR& header = headers[i];
+        if (!(header.dwFlags & WHDR_PREPARED)) {
+            continue;
+        }
+
+        MMRESULT unprepareResult = waveInUnprepareHeader(hWaveIn, &header, sizeof(header));
+        for (int retry = 0; unprepareResult == WAVERR_STILLPLAYING && retry < 5; ++retry) {
+            waveInReset(hWaveIn);
+            Sleep(1);
+            unprepareResult = waveInUnprepareHeader(hWaveIn, &header, sizeof(header));
+        }
+        if (unprepareResult != MMSYSERR_NOERROR) {
+            Log("VoiceRecorder: %s buffer %zu unprepare failed (error: %d)",
+                context, i, unprepareResult);
+        }
+    }
+
+    result = waveInClose(hWaveIn);
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: %s waveInClose failed (error: %d)", context, result);
+    }
+    hWaveIn = nullptr;
+}
+
+static bool PrepareCaptureBuffer(HWAVEIN hWaveIn, WAVEHDR& header, char* buffer,
+                                 DWORD bufferSize, std::size_t index, const char* context) {
+    header.lpData = buffer;
+    header.dwBufferLength = bufferSize;
+
+    MMRESULT result = waveInPrepareHeader(hWaveIn, &header, sizeof(header));
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: %s buffer %zu prepare failed (error: %d)", context, index, result);
+        return false;
+    }
+
+    result = waveInAddBuffer(hWaveIn, &header, sizeof(header));
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: %s buffer %zu queue failed (error: %d)", context, index, result);
+        return false;
+    }
+    return true;
 }
 
 static std::string TrimText(const std::string& value) {
@@ -146,33 +226,375 @@ static std::string TrimText(const std::string& value) {
     return value.substr(start, end - start + 1);
 }
 
-std::string GetCurrentRecordingDeviceName() {
+static std::string WideToUtf8(const wchar_t* value) {
+    if (!value || !value[0]) return "";
+    const int required = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1) return "";
+    std::string converted(static_cast<std::size_t>(required), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value, -1, converted.data(), required, nullptr, nullptr);
+    converted.resize(static_cast<std::size_t>(required - 1));
+    return converted;
+}
+
+static std::string GetEndpointFriendlyName(IMMDevice* endpoint) {
+    if (!endpoint) return "Unavailable";
+    IPropertyStore* properties = nullptr;
+    PROPVARIANT friendlyName;
+    PropVariantInit(&friendlyName);
+    std::string result = "Unavailable";
+    if (SUCCEEDED(endpoint->OpenPropertyStore(STGM_READ, &properties)) && properties &&
+        SUCCEEDED(properties->GetValue(PKEY_Device_FriendlyName, &friendlyName)) &&
+        friendlyName.vt == VT_LPWSTR) {
+        const std::string converted = WideToUtf8(friendlyName.pwszVal);
+        if (!converted.empty()) result = converted;
+    }
+    PropVariantClear(&friendlyName);
+    if (properties) properties->Release();
+    return result;
+}
+
+static std::string GetEndpointId(IMMDevice* endpoint) {
+    if (!endpoint) return "";
+    LPWSTR endpointId = nullptr;
+    if (FAILED(endpoint->GetId(&endpointId)) || !endpointId) return "";
+    const std::string result = WideToUtf8(endpointId);
+    CoTaskMemFree(endpointId);
+    return result;
+}
+
+static std::wstring Utf8ToWide(const std::string& value) {
+    if (value.empty()) return {};
+    const int required = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    if (required <= 1) return {};
+    std::wstring converted(static_cast<std::size_t>(required), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, converted.data(), required);
+    converted.resize(static_cast<std::size_t>(required - 1));
+    return converted;
+}
+
+struct WasapiEndpointCandidate {
+    IMMDevice* endpoint{nullptr};
+    std::string id;
+    std::string name;
+    int priority{3};
+};
+
+struct WasapiCaptureSession {
+    IAudioClient* audioClient{nullptr};
+    IAudioCaptureClient* captureClient{nullptr};
+    std::string id;
+    std::string name;
+    std::vector<short> audio;
+    bool started{false};
+};
+
+static void CloseWasapiSession(WasapiCaptureSession& session) {
+    if (session.started && session.audioClient) session.audioClient->Stop();
+    if (session.captureClient) session.captureClient->Release();
+    if (session.audioClient) session.audioClient->Release();
+    session.captureClient = nullptr;
+    session.audioClient = nullptr;
+    session.started = false;
+}
+
+static std::vector<WasapiEndpointCandidate> EnumerateWasapiCaptureEndpoints(
+    IMMDeviceEnumerator* enumerator) {
+    std::vector<WasapiEndpointCandidate> candidates;
+    if (!enumerator) return candidates;
+
+    std::string defaultId;
+    IMMDevice* defaultEndpoint = nullptr;
+    if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eCapture, eMultimedia, &defaultEndpoint)) &&
+        defaultEndpoint) {
+        defaultId = GetEndpointId(defaultEndpoint);
+        defaultEndpoint->Release();
+    }
+
+    std::string preferredName = Config::voiceRecordingPreferredDeviceName;
+    const std::string displayPrefix = "Current Device: ";
+    if (preferredName.rfind(displayPrefix, 0) == 0) {
+        preferredName.erase(0, displayPrefix.size());
+    }
+    const std::string preferredLower = ToLower(preferredName);
+    const std::string detectedId = Config::voiceRecordingDetectedEndpointId;
+
+    IMMDeviceCollection* collection = nullptr;
+    if (FAILED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection)) ||
+        !collection) {
+        return candidates;
+    }
+
+    UINT count = 0;
+    collection->GetCount(&count);
+    candidates.reserve(count);
+    for (UINT i = 0; i < count; ++i) {
+        IMMDevice* endpoint = nullptr;
+        if (FAILED(collection->Item(i, &endpoint)) || !endpoint) continue;
+
+        WasapiEndpointCandidate candidate;
+        candidate.endpoint = endpoint;
+        candidate.id = GetEndpointId(endpoint);
+        candidate.name = GetEndpointFriendlyName(endpoint);
+        const std::string candidateLower = ToLower(candidate.name);
+        if (!detectedId.empty() && candidate.id == detectedId) {
+            candidate.priority = 0;
+        } else if (!preferredLower.empty() && preferredLower != "windows default" &&
+                   (candidateLower.find(preferredLower) != std::string::npos ||
+                    preferredLower.find(candidateLower) != std::string::npos)) {
+            candidate.priority = 1;
+        } else if (!defaultId.empty() && candidate.id == defaultId) {
+            candidate.priority = 2;
+        }
+        candidates.push_back(std::move(candidate));
+    }
+    collection->Release();
+
+    std::stable_sort(candidates.begin(), candidates.end(),
+        [](const WasapiEndpointCandidate& left, const WasapiEndpointCandidate& right) {
+            return left.priority < right.priority;
+        });
+    return candidates;
+}
+
+static bool CaptureWithWasapi(int boundKey, int silenceThreshold, int silenceStopMs,
+                              int maxRecordingMs, std::vector<short>& audioData,
+                              std::string& selectedEndpointId,
+                              std::string& selectedEndpointName,
+                              bool& forgetSavedEndpoint) {
+    forgetSavedEndpoint = false;
+    const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitialize = SUCCEEDED(initResult);
+    if (FAILED(initResult) && initResult != RPC_E_CHANGED_MODE) {
+        Log("VoiceRecorder: WASAPI COM initialization failed (error: 0x%08lx)",
+            static_cast<unsigned long>(initResult));
+        return false;
+    }
+
+    IMMDeviceEnumerator* enumerator = nullptr;
+    HRESULT result = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                      IID_PPV_ARGS(&enumerator));
+    if (FAILED(result) || !enumerator) {
+        Log("VoiceRecorder: WASAPI endpoint enumerator failed (error: 0x%08lx); using WinMM fallback",
+            static_cast<unsigned long>(result));
+        if (shouldUninitialize) CoUninitialize();
+        return false;
+    }
+
+    std::vector<WasapiEndpointCandidate> candidates = EnumerateWasapiCaptureEndpoints(enumerator);
+    std::vector<std::unique_ptr<WasapiCaptureSession>> sessions;
+    constexpr std::size_t kMaxDiscoveryEndpoints = 12;
+    const bool savedEndpointAvailable =
+        !Config::voiceRecordingDetectedEndpointId.empty() &&
+        !candidates.empty() && candidates.front().priority == 0;
+    std::size_t maxCaptureEndpoints = savedEndpointAvailable ? 1 : kMaxDiscoveryEndpoints;
     WAVEFORMATEX wfx = CreateRecordingWaveFormat();
-    HWAVEIN hWaveIn = nullptr;
+    constexpr DWORD streamFlags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                                  AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    constexpr REFERENCE_TIME bufferDuration = 10000000;
 
-    MMRESULT result = OpenConfiguredWaveInput(&hWaveIn, &wfx);
-    if (result != MMSYSERR_NOERROR) {
-        Log("VoiceRecorder: Failed to open capture device for device-name lookup (error: %d)", result);
-        return "Unavailable";
+    for (std::size_t i = 0; i < candidates.size() && sessions.size() < maxCaptureEndpoints; ++i) {
+        WasapiEndpointCandidate& candidate = candidates[i];
+        auto session = std::make_unique<WasapiCaptureSession>();
+        session->id = candidate.id;
+        session->name = candidate.name;
+
+        result = candidate.endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                              reinterpret_cast<void**>(&session->audioClient));
+        if (SUCCEEDED(result)) {
+            result = session->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags,
+                                                       bufferDuration, 0, &wfx, nullptr);
+        }
+        if (SUCCEEDED(result)) {
+            result = session->audioClient->GetService(
+                __uuidof(IAudioCaptureClient),
+                reinterpret_cast<void**>(&session->captureClient));
+        }
+        if (SUCCEEDED(result)) result = session->audioClient->Start();
+        if (FAILED(result)) {
+            Log("VoiceRecorder: Skipping capture endpoint '%s' (error: 0x%08lx)",
+                candidate.name.c_str(), static_cast<unsigned long>(result));
+            CloseWasapiSession(*session);
+            if (candidate.priority == 0) maxCaptureEndpoints = kMaxDiscoveryEndpoints;
+            continue;
+        }
+
+        session->started = true;
+        sessions.push_back(std::move(session));
     }
 
-    UINT deviceId = 0;
-    result = waveInGetID(hWaveIn, &deviceId);
-    if (result != MMSYSERR_NOERROR) {
-        Log("VoiceRecorder: Failed to resolve wave input device id (error: %d)", result);
-        waveInClose(hWaveIn);
-        return "Unavailable";
+    for (auto& candidate : candidates) {
+        if (candidate.endpoint) candidate.endpoint->Release();
+        candidate.endpoint = nullptr;
+    }
+    enumerator->Release();
+    enumerator = nullptr;
+
+    if (sessions.empty()) {
+        Log("VoiceRecorder: No active WASAPI capture endpoint could be opened; using WinMM fallback");
+        if (shouldUninitialize) CoUninitialize();
+        return false;
     }
 
-    WAVEINCAPSA caps = {};
-    result = waveInGetDevCapsA(deviceId, &caps, sizeof(caps));
-    waveInClose(hWaveIn);
-    if (result != MMSYSERR_NOERROR) {
-        Log("VoiceRecorder: Failed to query wave input device caps for id %u (error: %d)", deviceId, result);
-        return "Unavailable";
+    const bool usingSavedEndpoint =
+        sessions.size() == 1 &&
+        !Config::voiceRecordingDetectedEndpointId.empty() &&
+        sessions.front()->id == Config::voiceRecordingDetectedEndpointId;
+    if (usingSavedEndpoint) {
+        Log("VoiceRecorder: WASAPI recording started on saved endpoint '%s'",
+            sessions.front()->name.c_str());
+    } else {
+        Log("VoiceRecorder: WASAPI discovery recording started across %zu active endpoint(s)",
+            sessions.size());
+    }
+    const DWORD startTime = timeGetTime();
+    DWORD lastSignalTime = startTime;
+    const bool wasInitiallyPressed = IsBoundKeyDown(boundKey);
+    Sleep(50);
+
+    while ((timeGetTime() - startTime) < static_cast<DWORD>(maxRecordingMs) && g_isRecording) {
+        RecordServiceHeartbeat();
+        if (!InputManager::IsGameForeground()) {
+            Log("VoiceRecorder: Fallout lost focus, stopping WASAPI recording");
+            break;
+        }
+        if (wasInitiallyPressed && !IsBoundKeyDown(boundKey)) {
+            Sleep(10);
+            if (!IsBoundKeyDown(boundKey)) {
+                Log("VoiceRecorder: Key released, stopping WASAPI recording");
+                break;
+            }
+        }
+
+        bool signalThisCycle = false;
+        for (auto& sessionPtr : sessions) {
+            WasapiCaptureSession& session = *sessionPtr;
+            UINT32 packetFrames = 0;
+            HRESULT packetResult = session.captureClient->GetNextPacketSize(&packetFrames);
+            while (SUCCEEDED(packetResult) && packetFrames > 0) {
+                BYTE* packetData = nullptr;
+                UINT32 frames = 0;
+                DWORD flags = 0;
+                packetResult = session.captureClient->GetBuffer(
+                    &packetData, &frames, &flags, nullptr, nullptr);
+                if (FAILED(packetResult)) break;
+
+                if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !packetData) {
+                    session.audio.insert(session.audio.end(), frames, 0);
+                } else {
+                    const short* samples = reinterpret_cast<const short*>(packetData);
+                    session.audio.insert(session.audio.end(), samples, samples + frames);
+                    for (UINT32 sampleIndex = 0; sampleIndex < frames; ++sampleIndex) {
+                        if (std::abs(static_cast<int>(samples[sampleIndex])) > silenceThreshold) {
+                            signalThisCycle = true;
+                            break;
+                        }
+                    }
+                }
+                session.captureClient->ReleaseBuffer(frames);
+                packetResult = session.captureClient->GetNextPacketSize(&packetFrames);
+            }
+            if (FAILED(packetResult)) {
+                Log("VoiceRecorder: Capture endpoint '%s' stopped returning packets (error: 0x%08lx)",
+                    session.name.c_str(), static_cast<unsigned long>(packetResult));
+            }
+        }
+
+        const DWORD now = timeGetTime();
+        if (signalThisCycle) lastSignalTime = now;
+        if ((now - startTime) >= 500 && (now - lastSignalTime) >= static_cast<DWORD>(silenceStopMs)) {
+            Log("VoiceRecorder: Silence timeout reached during WASAPI recording");
+            break;
+        }
+        Sleep(5);
     }
 
-    return caps.szPname[0] ? std::string(caps.szPname) : "Unavailable";
+    for (auto& session : sessions) CloseWasapiSession(*session);
+
+    const int signalFloor = std::max(64, std::min(250, silenceThreshold / 2));
+    WasapiCaptureSession* winner = nullptr;
+    double winnerScore = -1.0;
+    for (auto& sessionPtr : sessions) {
+        WasapiCaptureSession& session = *sessionPtr;
+        int peak = 0;
+        double sumSquares = 0.0;
+        std::size_t signalSamples = 0;
+        for (short sample : session.audio) {
+            const int amplitude = std::abs(static_cast<int>(sample));
+            peak = std::max(peak, amplitude);
+            sumSquares += static_cast<double>(sample) * static_cast<double>(sample);
+            if (amplitude >= signalFloor) ++signalSamples;
+        }
+        const double rms = session.audio.empty()
+            ? 0.0
+            : std::sqrt(sumSquares / static_cast<double>(session.audio.size()));
+        const double signalPercent = session.audio.empty()
+            ? 0.0
+            : (100.0 * static_cast<double>(signalSamples) /
+               static_cast<double>(session.audio.size()));
+        const bool validSignal = session.audio.size() >= 8000 && peak >= signalFloor && rms >= 2.0;
+        const double score = rms + (static_cast<double>(peak) * 0.02);
+        Log("VoiceRecorder: Endpoint candidate '%s' samples=%zu peak=%d rms=%.1f signal=%.2f%% valid=%d",
+            session.name.c_str(), session.audio.size(), peak, rms, signalPercent,
+            validSignal ? 1 : 0);
+        if (validSignal && score > winnerScore) {
+            winner = &session;
+            winnerScore = score;
+        }
+    }
+
+    if (winner) {
+        selectedEndpointId = winner->id;
+        selectedEndpointName = winner->name;
+        audioData = std::move(winner->audio);
+        Log("VoiceRecorder: Automatically selected recording endpoint '%s'",
+            selectedEndpointName.c_str());
+    } else {
+        Log("VoiceRecorder: All active capture endpoints returned digital silence");
+        forgetSavedEndpoint = usingSavedEndpoint;
+        audioData.clear();
+    }
+
+    if (shouldUninitialize) CoUninitialize();
+    return true;
+}
+
+std::string GetCurrentRecordingDeviceName() {
+    HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitialize = SUCCEEDED(initResult);
+    if (FAILED(initResult) && initResult != RPC_E_CHANGED_MODE) {
+        Log("VoiceRecorder: Failed to initialize COM for capture endpoint lookup (error: 0x%08lx)",
+            static_cast<unsigned long>(initResult));
+        return "Windows default";
+    }
+
+    IMMDeviceEnumerator* enumerator = nullptr;
+    IMMDevice* endpoint = nullptr;
+    std::string deviceName = "Windows default";
+
+    HRESULT result = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                      IID_PPV_ARGS(&enumerator));
+    if (SUCCEEDED(result) && !Config::voiceRecordingDetectedEndpointId.empty()) {
+        const std::wstring endpointId = Utf8ToWide(Config::voiceRecordingDetectedEndpointId);
+        if (!endpointId.empty()) result = enumerator->GetDevice(endpointId.c_str(), &endpoint);
+    }
+    if (!endpoint && enumerator) {
+        result = enumerator->GetDefaultAudioEndpoint(eCapture, eMultimedia, &endpoint);
+    }
+    if (endpoint) {
+        deviceName = GetEndpointFriendlyName(endpoint);
+    } else {
+        Log("VoiceRecorder: Failed to resolve default capture endpoint name (error: 0x%08lx)",
+            static_cast<unsigned long>(result));
+    }
+
+    if (endpoint) endpoint->Release();
+    if (enumerator) enumerator->Release();
+    if (shouldUninitialize) CoUninitialize();
+    return deviceName;
+}
+
+std::string GetCurrentRecordingDeviceDisplayName() {
+    return "Current Device: " + GetCurrentRecordingDeviceName();
 }
 
 static void FinishWithCallback(const STTCallback& callback, const std::string& text,
@@ -227,116 +649,161 @@ static void RecordingThreadFunc(int boundKey, STTCallback callback, int requeste
     Log("VoiceRecorder: Capture device: %s", GetCurrentRecordingDeviceName().c_str());
     Log("VoiceRecorder: Settings threshold=%d maxRecording=%dms silenceStop=%dms", silenceThreshold, maxRecordingMs, silenceStopMs);
 
-    // Open the 'waveIn' recording device
-    HWAVEIN hWaveIn = nullptr;
-    MMRESULT result = OpenConfiguredWaveInput(&hWaveIn, &wfx);
-    if (result != MMSYSERR_NOERROR) {
-        Log("VoiceRecorder: Failed to open wave input device (error: %d)", result);
+    std::vector<short> audioData;
+    std::string selectedEndpointId;
+    std::string selectedEndpointName;
+    bool forgetSavedEndpoint = false;
+    const bool usedWasapi = CaptureWithWasapi(
+        boundKey,
+        silenceThreshold,
+        silenceStopMs,
+        maxRecordingMs,
+        audioData,
+        selectedEndpointId,
+        selectedEndpointName,
+        forgetSavedEndpoint);
+    if (!usedWasapi) {
+        // Legacy WinMM remains as a fallback for systems where WASAPI cannot initialize.
+        HWAVEIN hWaveIn = nullptr;
+        MMRESULT result = OpenCaptureInput(&hWaveIn, &wfx);
+        if (result != MMSYSERR_NOERROR) {
+            Log("VoiceRecorder: Failed to open wave input device (error: %d)", result);
+            FinishWithCallback(callback, "", generation);
+            return;
+        }
+
+        // Use eight 250ms-ish buffers at 16kHz/16-bit mono.
+        const int BUFFER_SIZE = 16000 * 2 * 2 / 8;
+        const int bufferDurationMs = (BUFFER_SIZE * 1000) / wfx.nAvgBytesPerSec;
+        char buffers[8][BUFFER_SIZE] = {};
+        WAVEHDR headers[8] = {};
+
+        for (std::size_t i = 0; i < 8; ++i) {
+            if (!PrepareCaptureBuffer(hWaveIn, headers[i], buffers[i], BUFFER_SIZE, i, "push-to-talk")) {
+                CloseWaveInputSafely(hWaveIn, headers, 8, "push-to-talk setup failure");
+                FinishWithCallback(callback, "", generation);
+                return;
+            }
+        }
+
+        result = waveInStart(hWaveIn);
+        if (result != MMSYSERR_NOERROR) {
+            Log("VoiceRecorder: push-to-talk waveInStart failed (error: %d)", result);
+            CloseWaveInputSafely(hWaveIn, headers, 8, "push-to-talk start failure");
+            FinishWithCallback(callback, "", generation);
+            return;
+        }
+        Log("VoiceRecorder: WinMM fallback recording started (buffer=%d bytes, approx %dms)",
+            BUFFER_SIZE, bufferDurationMs);
+
+        const DWORD startTime = timeGetTime();
+        signed long silenceTime = -500;
+        const bool wasInitiallyPressed = IsBoundKeyDown(boundKey);
+        Sleep(50);
+
+        while (silenceTime < silenceStopMs &&
+               (timeGetTime() - startTime) < static_cast<DWORD>(maxRecordingMs) && g_isRecording) {
+            RecordServiceHeartbeat();
+            if (!InputManager::IsGameForeground()) {
+                Log("VoiceRecorder: Fallout lost focus, stopping WinMM recording");
+                break;
+            }
+            if (wasInitiallyPressed && !IsBoundKeyDown(boundKey)) {
+                Sleep(10);
+                if (!IsBoundKeyDown(boundKey)) {
+                    Log("VoiceRecorder: Key released, stopping WinMM fallback recording");
+                    break;
+                }
+            }
+
+            for (auto& header : headers) {
+                if (header.dwFlags & WHDR_DONE) {
+                    short* data = reinterpret_cast<short*>(header.lpData);
+                    const size_t numSamples = header.dwBytesRecorded / sizeof(short);
+                    audioData.insert(audioData.end(), data, data + numSamples);
+
+                    bool silent = true;
+                    for (size_t i = 0; i < numSamples; ++i) {
+                        if (std::abs(static_cast<int>(data[i])) > silenceThreshold) {
+                            silent = false;
+                            break;
+                        }
+                    }
+                    silenceTime = silent ? silenceTime + bufferDurationMs : 0;
+
+                    result = waveInAddBuffer(hWaveIn, &header, sizeof(header));
+                    if (result != MMSYSERR_NOERROR) {
+                        Log("VoiceRecorder: push-to-talk buffer requeue failed (error: %d)", result);
+                        g_isRecording = false;
+                        break;
+                    }
+                }
+            }
+            Sleep(10);
+        }
+
+        CloseWaveInputSafely(hWaveIn, headers, 8, "push-to-talk");
+    }
+
+    if (usedWasapi && !selectedEndpointId.empty() && !selectedEndpointName.empty()) {
+        GameThreadDispatcher::Enqueue(
+            "voice_input",
+            "persist_recording_endpoint",
+            generation,
+            [selectedEndpointId, selectedEndpointName]() {
+                const bool changed =
+                    Config::voiceRecordingDetectedEndpointId != selectedEndpointId ||
+                    Config::voiceRecordingPreferredDeviceName != selectedEndpointName;
+                Config::voiceRecordingDetectedEndpointId = selectedEndpointId;
+                Config::voiceRecordingPreferredDeviceName = selectedEndpointName;
+                if (!changed) return;
+
+                const bool savedId = Config::WriteCustomINIValue(
+                    "VoiceRecording", "DetectedEndpointId", selectedEndpointId.c_str());
+                const bool savedName = Config::WriteCustomINIValue(
+                    "VoiceRecording", "CurrentDevice", selectedEndpointName.c_str());
+                Log("VoiceRecorder: Persisted automatic endpoint selection id=%d name=%d",
+                    savedId ? 1 : 0, savedName ? 1 : 0);
+            });
+    } else if (forgetSavedEndpoint) {
+        GameThreadDispatcher::Enqueue(
+            "voice_input",
+            "forget_recording_endpoint",
+            generation,
+            []() {
+                Config::voiceRecordingDetectedEndpointId.clear();
+                const bool cleared = Config::WriteCustomINIValue(
+                    "VoiceRecording", "DetectedEndpointId", "");
+                Log("VoiceRecorder: Saved endpoint returned silence and was cleared for rediscovery (%d)",
+                    cleared ? 1 : 0);
+            });
+    }
+
+    Log("VoiceRecorder: Recording stopped, captured %zu samples", audioData.size());
+
+    if (audioData.empty()) {
+        Log("VoiceRecorder: No usable microphone signal was captured; skipping STT upload");
         FinishWithCallback(callback, "", generation);
         return;
     }
 
-    // Use eight 250ms-ish buffers at 16kHz/16-bit mono.
-    const int BUFFER_SIZE = 16000 * 2 * 2 / 8;
-    const int bufferDurationMs = (BUFFER_SIZE * 1000) / wfx.nAvgBytesPerSec;
-    char buffers[8][BUFFER_SIZE] = {};
-    WAVEHDR headers[8] = {};
-
-    // Initialize the headers and add them to the queue
-    for (int i = 0; i < 8; ++i) {
-        headers[i].lpData = buffers[i];
-        headers[i].dwBufferLength = BUFFER_SIZE;
-        waveInPrepareHeader(hWaveIn, &headers[i], sizeof(headers[i]));
-        waveInAddBuffer(hWaveIn, &headers[i], sizeof(headers[i]));
-    }
-
-    // Start recording
-    waveInStart(hWaveIn);
-    Log("VoiceRecorder: Recording started (buffer=%d bytes, approx %dms)", BUFFER_SIZE, bufferDurationMs);
-
-    // Accumulated audio data
-    std::vector<short> audioData;
-    DWORD startTime = timeGetTime();
-    signed long silenceTime = -500;  // Start with negative to allow initial silence
-
-    // Check if key was initially pressed
-    bool wasInitiallyPressed = (GetAsyncKeyState(boundKey) & 0x8000) != 0;
-    Log("VoiceRecorder: Key initially pressed: %d", wasInitiallyPressed);
-    
-    // Wait a bit to avoid false key release detection
-    Sleep(50);
-
-    // Recording loop - continue while:
-    // 1. Silence hasn't exceeded 4 seconds
-    // 2. Total recording time < configured limit
-    // 3. Recording hasn't been aborted
-    while ((silenceTime < silenceStopMs) && ((timeGetTime() - startTime) < static_cast<DWORD>(maxRecordingMs)) && g_isRecording) {
-        RecordServiceHeartbeat();
-        // Check if key was released (only if it was initially pressed)
-        // Check multiple times to avoid false positives
-        if (wasInitiallyPressed) {
-            bool isKeyDown = (GetAsyncKeyState(boundKey) & 0x8000) != 0;
-            if (!isKeyDown) {
-                // Key appears released, wait a bit and check again to confirm
-                Sleep(10);
-                bool stillReleased = !(GetAsyncKeyState(boundKey) & 0x8000);
-                if (stillReleased) {
-                    Log("VoiceRecorder: Key released, stopping recording");
-                    break;
-                }
-            }
+    int peak = 0;
+    double sumSquares = 0.0;
+    size_t nonSilentSamples = 0;
+    for (short sample : audioData) {
+        const int amplitude = std::abs(static_cast<int>(sample));
+        peak = std::max(peak, amplitude);
+        sumSquares += static_cast<double>(sample) * static_cast<double>(sample);
+        if (amplitude > silenceThreshold) {
+            ++nonSilentSamples;
         }
-
-        // Check if recording was externally stopped
-        if (!g_isRecording) {
-            Log("VoiceRecorder: Recording aborted externally");
-            break;
-        }
-
-        // Process completed buffers
-        for (auto& header : headers) {
-            if (header.dwFlags & WHDR_DONE) {
-                // Append the recorded audio data to the vector
-                short* data = reinterpret_cast<short*>(header.lpData);
-                size_t numSamples = header.dwBytesRecorded / sizeof(short);
-                
-                for (size_t i = 0; i < numSamples; ++i) {
-                    audioData.push_back(data[i]);
-                }
-
-                // Check for silence in this buffer
-                bool silent = true;
-                for (size_t i = 0; i < numSamples; ++i) {
-                    if (std::abs(data[i]) > silenceThreshold) {
-                        silent = false;
-                        break;
-                    }
-                }
-
-                if (silent) {
-                    silenceTime += bufferDurationMs;
-                } else {
-                    // Reset the silence timer if there is audio above the threshold
-                    silenceTime = 0;
-                }
-
-                // Re-add the already prepared buffer to the queue.
-                waveInAddBuffer(hWaveIn, &header, sizeof(header));
-            }
-        }
-
-        // Sleep briefly to avoid excessive CPU usage
-        Sleep(10);
     }
-
-    // Stop recording and clean up
-    waveInStop(hWaveIn);
-    for (auto& header : headers) {
-        waveInUnprepareHeader(hWaveIn, &header, sizeof(header));
-    }
-    waveInClose(hWaveIn);
-
-    Log("VoiceRecorder: Recording stopped, captured %zu samples", audioData.size());
+    const double rms = audioData.empty() ? 0.0 : std::sqrt(sumSquares / static_cast<double>(audioData.size()));
+    const double nonSilentPercent = audioData.empty()
+        ? 0.0
+        : (100.0 * static_cast<double>(nonSilentSamples) / static_cast<double>(audioData.size()));
+    Log("VoiceRecorder: Signal peak=%d rms=%.1f non_silent=%.2f%% threshold=%d",
+        peak, rms, nonSilentPercent, silenceThreshold);
 
     // Build WAV file in memory
     std::stringstream wavStream;
@@ -401,6 +868,16 @@ static void RecordingThreadFunc(int boundKey, STTCallback callback, int requeste
     }
 
     std::string wavData = wavStream.str();
+    if (Config::voiceRecordingSaveLastWav) {
+        const char* debugPath = "Data\\NVSE\\Plugins\\dialectic_last_stt.wav";
+        std::ofstream debugFile(debugPath, std::ios::binary | std::ios::trunc);
+        if (debugFile.is_open()) {
+            debugFile.write(wavData.data(), static_cast<std::streamsize>(wavData.size()));
+            Log("VoiceRecorder: Saved diagnostic STT WAV to %s", debugPath);
+        } else {
+            Log("VoiceRecorder: Could not save diagnostic STT WAV to %s", debugPath);
+        }
+    }
     Log("VoiceRecorder: WAV file built in memory; submitting managed STT task");
     SubmitSttUpload(std::move(wavData), std::move(callback), generation);
     Log("VoiceRecorder: Recording thread ended after STT submission");
@@ -413,7 +890,7 @@ static void OpenMicMonitoringThreadFunc(OpenMicCallback onVoiceDetected) {
 
     WAVEFORMATEX wfx = CreateRecordingWaveFormat();
     HWAVEIN hWaveIn = nullptr;
-    MMRESULT result = OpenConfiguredWaveInput(&hWaveIn, &wfx);
+    MMRESULT result = OpenCaptureInput(&hWaveIn, &wfx);
     if (result != MMSYSERR_NOERROR) {
         Log("VoiceRecorder: Failed to open wave input for open mic monitoring (error: %d)", result);
         g_openMicMonitoringActive = false;
@@ -424,14 +901,21 @@ static void OpenMicMonitoringThreadFunc(OpenMicCallback onVoiceDetected) {
     char buffers[4][bufferSize] = {};
     WAVEHDR headers[4] = {};
 
-    for (int i = 0; i < 4; ++i) {
-        headers[i].lpData = buffers[i];
-        headers[i].dwBufferLength = bufferSize;
-        waveInPrepareHeader(hWaveIn, &headers[i], sizeof(headers[i]));
-        waveInAddBuffer(hWaveIn, &headers[i], sizeof(headers[i]));
+    for (std::size_t i = 0; i < 4; ++i) {
+        if (!PrepareCaptureBuffer(hWaveIn, headers[i], buffers[i], bufferSize, i, "open mic")) {
+            CloseWaveInputSafely(hWaveIn, headers, 4, "open mic setup failure");
+            g_openMicMonitoringActive = false;
+            return;
+        }
     }
 
-    waveInStart(hWaveIn);
+    result = waveInStart(hWaveIn);
+    if (result != MMSYSERR_NOERROR) {
+        Log("VoiceRecorder: open mic waveInStart failed (error: %d)", result);
+        CloseWaveInputSafely(hWaveIn, headers, 4, "open mic start failure");
+        g_openMicMonitoringActive = false;
+        return;
+    }
     Log("VoiceRecorder: Open mic monitoring started on device: %s", GetCurrentRecordingDeviceName().c_str());
 
     bool voiceDetected = false;
@@ -496,17 +980,18 @@ static void OpenMicMonitoringThreadFunc(OpenMicCallback onVoiceDetected) {
                 }
             }
 
-            waveInAddBuffer(hWaveIn, &header, sizeof(header));
+            result = waveInAddBuffer(hWaveIn, &header, sizeof(header));
+            if (result != MMSYSERR_NOERROR) {
+                Log("VoiceRecorder: open mic buffer requeue failed (error: %d)", result);
+                g_openMicMonitoringActive = false;
+                break;
+            }
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    waveInStop(hWaveIn);
-    for (auto& header : headers) {
-        waveInUnprepareHeader(hWaveIn, &header, sizeof(header));
-    }
-    waveInClose(hWaveIn);
+    CloseWaveInputSafely(hWaveIn, headers, 4, "open mic");
 
     if (voiceDetected && onVoiceDetected) {
         GameThreadDispatcher::Enqueue("voice_input", "open_mic_detected", generation,

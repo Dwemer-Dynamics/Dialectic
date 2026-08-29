@@ -2,6 +2,8 @@ float fInitialized
 float fPreviousLevel
 float fPreviousCombat
 float fPreviousSleeping
+float fPendingSleepWaitMode
+float fSleepWaitCompletionDelay
 float fCombatBarkCooldown
 float fCombatBarksEnabled
 float fCombatBarkPeriodSeconds
@@ -11,6 +13,7 @@ float fSleeping
 string_var sPlayerName
 
 begin function {}
+    DialecticDiagnosticBridgeTick 16
     let fLevel := PlayerRef.GetLevel
     let fCombat := PlayerRef.IsInCombat
     let fSleeping := PlayerRef.GetSleeping
@@ -65,8 +68,22 @@ begin function {}
         let fCombatBarkCooldown := 0
     endif
 
-    if eval fPreviousSleeping > 0 && fSleeping <= 0
-        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "goodmorning|%z wakes up from sleeping\n" sPlayerName
+    set fPendingSleepWaitMode to GetINIFloat_Cached "SleepWaitState:PendingMode" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+    set fSleepWaitCompletionDelay to GetINIFloat_Cached "SleepWaitState:CompletionDelay" "Data\\NVSE\\Plugins\\dialectic_custom.ini" 0
+
+    if eval fPendingSleepWaitMode > 0 && !(MenuMode 1012)
+        if eval fSleepWaitCompletionDelay > 0
+            let fSleepWaitCompletionDelay -= 1
+            SetINIIntC "SleepWaitState:CompletionDelay" fSleepWaitCompletionDelay "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        else
+            if eval fPendingSleepWaitMode == 1
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "waitstop|%z stops waiting after time has advanced\n" sPlayerName
+            elseif eval fPendingSleepWaitMode == 2
+                WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "goodmorning|%z wakes up from sleeping\n" sPlayerName
+            endif
+            SetINIIntC "SleepWaitState:PendingMode" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+            SetINIIntC "SleepWaitState:CompletionDelay" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        endif
     endif
 
     SetINIIntC "RpgEventsState:LastLevel" fLevel "Data\\NVSE\\Plugins\\dialectic_custom.ini"

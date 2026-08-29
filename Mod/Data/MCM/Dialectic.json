@@ -1,7 +1,7 @@
 {
   "modName": "Dialectic",
-  "displayName": "Dialectic",
-  "description": "Configure Dialectic AI dialogue, activation, sound, hotkeys, and behavior settings.",
+  "displayName": "DIALECTIC",
+  "description": "Configure DIALECTIC AI dialogue, activation, sound, hotkeys, and behavior settings.",
   "saveFile": "../NVSE/Plugins/dialectic_custom.ini",
   "minMCMVersion": 1,
   "minModVersion": 1,
@@ -25,15 +25,10 @@
       "enable": 1,
       "options": {
         "1": {
-          "title": "Conversation",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
           "title": "Chatbox",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for opening the text chatbox to type messages to the targeted NPC. Unbound by default.",
+          "mouse": "Tap to open the text chatbox. Hold to make the NPC in your crosshair wait here. Unbound by default.",
           "vars": [
             {
               "configINI": "Hotkeys:TalkToNPC",
@@ -48,14 +43,33 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "3": {
+        "2": {
           "title": "Voice Chat",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for push-to-talk voice input. Unbound by default.",
+          "mouse": "Hold to talk. Tap to stop current and queued dialogue, or double-tap to make the NPC in your crosshair wait here. Unbound by default.",
           "vars": [
             {
               "configINI": "Hotkeys:ToggleVoice",
+              "default": 0
+            }
+          ],
+          "keybind": {
+            "type": 0
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
+        "3": {
+          "title": "DIALECTIC Control",
+          "type": 3,
+          "enable": 1,
+          "mouse": "Keyboard key for opening chat mode, LLM model, dynamic profile, and targeted NPC controls. Unbound by default.",
+          "vars": [
+            {
+              "configINI": "Hotkeys:DialecticControl",
               "default": 0
             }
           ],
@@ -87,44 +101,6 @@
           }
         },
         "5": {
-          "title": "Toggle Modes",
-          "type": 3,
-          "enable": 1,
-          "mouse": "Keyboard key for opening the Dialectic mode selector.",
-          "vars": [
-            {
-              "configINI": "Hotkeys:ToggleModes",
-              "default": 0
-            }
-          ],
-          "keybind": {
-            "type": 0
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "6": {
-          "title": "Toggle LLM Model",
-          "type": 3,
-          "enable": 1,
-          "mouse": "Keyboard key for opening the Standard/Fast/Powerful/Experimental LLM model selector.",
-          "vars": [
-            {
-              "configINI": "Hotkeys:ToggleLLMModel",
-              "default": 0
-            }
-          ],
-          "keybind": {
-            "type": 0
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "7": {
           "title": "Halt AI Actions",
           "type": 3,
           "enable": 1,
@@ -143,19 +119,14 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "8": {
-          "title": "Dynamic Profiles",
-          "enable": 1,
-          "type": 0
-        },
-        "9": {
-          "title": "Dynamic Profile Menu",
+        "6": {
+          "title": "Use PipVision",
           "type": 3,
           "enable": 1,
-          "mouse": "Keyboard key for choosing target, nearby, or narrator dynamic profile updates from one menu.",
+          "mouse": "Press once: capture the scene. Press twice: set the targeted NPC portrait. Hold: have the nearest NPC describe the scene. Requires SUP NVSE 8.55 or newer.",
           "vars": [
             {
-              "configINI": "Hotkeys:DynamicProfileMenu",
+              "configINI": "Hotkeys:PipVision",
               "default": 0
             }
           ],
@@ -185,7 +156,7 @@
           "title": "Enable Auto Activate",
           "type": 5,
           "enable": 1,
-          "mouse": "Automatically activates nearby eligible NPCs as Dialectic AI agents.",
+          "mouse": "Automatically activates nearby eligible NPCs as DIALECTIC AI agents.",
           "vars": [
             {
               "configINI": "AutoActivate:Enabled",
@@ -259,7 +230,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:InteriorHearingDistance",
-              "default": 750
+              "default": 1050
             }
           ],
           "scale": {
@@ -283,7 +254,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:ExteriorHearingDistance",
-              "default": 1250
+              "default": 1750
             }
           ],
           "scale": {
@@ -307,7 +278,7 @@
           "vars": [
             {
               "configINI": "SpatialAudio:AutoHearingDistance",
-              "default": 560
+              "default": 784
             }
           ],
           "scale": {
@@ -576,7 +547,7 @@
           "type": 2,
           "enable": 1,
           "suffix": "s",
-          "mouse": "Seconds of quiet time before Dialectic may ask a nearby managed NPC for an idle comment.",
+          "mouse": "Seconds of quiet time before DIALECTIC may ask a nearby managed NPC for an idle comment.",
           "vars": [
             {
               "configINI": "BoredEvents:TimerSeconds",
@@ -632,6 +603,30 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
+        "20": {
+          "title": "Narrator / Player TTS Volume (%)",
+          "type": 2,
+          "enable": 1,
+          "suffix": "%",
+          "mouse": "Adjust narrator and player TTS playback relative to AI Voice Volume. 100% keeps the current level; 0% mutes both in-head voices only.",
+          "vars": [
+            {
+              "configINI": "Audio:HeadVoiceVolume",
+              "default": 100
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 5,
+            "valueMin": 0,
+            "valueMax": 200,
+            "suffix": "%"
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
+          }
+        },
         "3": {
           "title": "Enable 3D Audio Playback",
           "type": 5,
@@ -641,22 +636,6 @@
             {
               "configINI": "Audio:Enable3DPlayback",
               "default": 1
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "19": {
-          "title": "Camera Based Audio",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Use the camera direction for 3D voice panning instead of the player actor heading.",
-          "vars": [
-            {
-              "configINI": "Audio:CameraBasedAudio",
-              "default": 0
             }
           ],
           "call": {
@@ -757,23 +736,17 @@
           "enable": 1,
           "type": 0
         },
-        "20": {
-          "title": "Current Device",
-          "type": 1,
+        "22": {
+          "title": "Current Device: Detecting automatically",
+          "type": 0,
           "enable": 1,
-          "mouse": "Current Windows recording device resolved by Dialectic.",
-          "vars": [
-            {
-              "configINI": "VoiceRecording:CurrentDevice",
-              "default": "Windows default"
-            }
-          ]
+          "mouse": "Read-only microphone selected automatically from the first in-game recording that contains speech."
         },
         "9": {
           "title": "Enable Open Mic",
           "type": 5,
           "enable": 1,
-          "mouse": "Starts voice activity detection during active conversations.",
+          "mouse": "Listens for speech during normal gameplay and starts voice input for the current NPC target.",
           "vars": [
             {
               "configINI": "OpenMic:Enabled",
@@ -969,119 +942,27 @@
         }
       }
     },
-    "6": {
+    "5": {
       "listTitle": "Tools",
       "pageTitle": "Tools",
       "columns": 1,
       "enable": 1,
       "options": {
         "1": {
-          "title": "World Data",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
-          "title": "Send Faction and Location Info",
+          "title": "Initialize DIALECTIC",
           "type": 5,
           "enable": 1,
-          "mouse": "Sends Fallout factions and map marker locations to the Dialectic server.",
+          "mouse": "Sends Fallout voice samples, factions, and locations to the DIALECTIC server in the background.",
           "vars": [
             {
-              "configINI": "Tools:SendWorldData",
+              "configINI": "Tools:InitializeDialectic",
               "default": 0
             }
           ],
           "call": {
             "type": "file",
-            "value": "Dialectic/SyncWorldData.gek"
+            "value": "Dialectic/InitializeDialectic.gek"
           }
-        },
-        "3": {
-          "title": "Voice Samples",
-          "enable": 1,
-          "type": 0
-        },
-        "4": {
-          "title": "Send All Voice Samples",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Uploads every configured Fallout voice sample from Data/Dialectic/*_voices.csv to the Dialectic server.",
-          "vars": [
-            {
-              "configINI": "Tools:SendVoiceSamples",
-              "default": 0
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/SendVoiceSamples.gek"
-          }
-        }
-      }
-    },
-    "5": {
-      "listTitle": "AI Agents",
-      "pageTitle": "AI Agents",
-      "columns": 1,
-      "enable": 1,
-      "options": {
-        "1": {
-          "title": "Agent Management",
-          "enable": 1,
-          "type": 0
-        },
-        "2": {
-          "title": "Add Targeted NPC",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Manually activates the NPC under the crosshair as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddTarget", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "3": {
-          "title": "Add All Nearby NPCs",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Manually activates every eligible nearby NPC as a Dialectic AI agent.",
-          "vars": [{ "configINI": "Tools:AgentAddNearby", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "4": {
-          "title": "Remove Targeted AI Agent",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Removes the targeted NPC from the active Dialectic AI agent registry.",
-          "vars": [{ "configINI": "Tools:AgentRemoveTarget", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "5": {
-          "title": "Remove All AI Agents",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Removes every NPC from the active Dialectic AI agent registry. Auto Activate can add eligible NPCs again.",
-          "vars": [{ "configINI": "Tools:AgentRemoveAll", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "6": {
-          "title": "Lists",
-          "enable": 1,
-          "type": 0
-        },
-        "7": {
-          "title": "List Active AI Agents",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Displays the currently active Dialectic AI agents in the in-game notification area and plugin log.",
-          "vars": [{ "configINI": "Tools:AgentListActive", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
-        },
-        "8": {
-          "title": "Refresh Nearby NPCs",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Scans and displays nearby NPCs that can be manually added as AI agents.",
-          "vars": [{ "configINI": "Tools:AgentListNearby", "default": 0 }],
-          "call": { "type": "file", "value": "Dialectic/AgentManagementAction.gek" }
         }
       }
     }

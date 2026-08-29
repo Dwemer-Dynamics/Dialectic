@@ -4,6 +4,7 @@ string_var sIcon
 string_var sMessage
 
 begin function {}
+    DialecticDiagnosticBridgeTick 5
     if eval !(FileExists "NVSE\\Plugins\\dialectic_notification.tmp")
         CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
         return
@@ -34,7 +35,7 @@ begin function {}
         if sIcon
             sv_Destruct sIcon
         endif
-        let sIcon := sv_Construct "#3"
+        let sIcon := sv_Construct "#4"
     endif
 
     MessageExAlt 4 "%z|%z" sIcon sMessage

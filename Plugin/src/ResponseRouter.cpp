@@ -5,6 +5,7 @@
 #include "AgentManager.h"
 #include "Config.h"
 #include "Console.h"
+#include "GameLoop.h"
 #include "Logger.h"
 #include "Misc.h"
 #include "ResponseQueueFNV.h"
@@ -435,13 +436,26 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
         return 0;
     }
 
-    uint32_t agentFormId = AgentManager::FindAgentFormIdByName(speaker);
-    if (agentFormId != 0) {
-        return agentFormId;
+    if (GameLoop::IsConversationActive()) {
+        const uint32_t conversationFormId = GameLoop::GetConversationPartnerFormId();
+        const std::string registeredName = AgentManager::GetAgentName(conversationFormId);
+        const auto conversationPosition = ActorPositionResolverFNV::ResolveActor(conversationFormId);
+        if (conversationFormId != 0 &&
+            (EqualsIgnoreCase(registeredName, speaker) ||
+             (conversationPosition.resolved &&
+              EqualsIgnoreCase(conversationPosition.actorName, speaker)))) {
+            Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from active conversation as 0x%08X",
+                speaker.c_str(),
+                conversationFormId);
+            return conversationFormId;
+        }
     }
 
     const auto& target = TargetManager::GetCurrentTarget();
     if (target.formId != 0 && EqualsIgnoreCase(target.name, speaker)) {
+        Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from current target as 0x%08X",
+            speaker.c_str(),
+            target.formId);
         return target.formId;
     }
 
@@ -450,12 +464,25 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
     for (const auto& position : positions) {
         if (position.resolved &&
             position.formId != 0 &&
-            EqualsIgnoreCase(position.actorName, speaker)) {
+            EqualsIgnoreCase(position.actorName, speaker) &&
+            ActorPositionResolverFNV::IsPositionInPlayerScene(position) &&
+            ActorPositionResolverFNV::IsActorPositionFresh(position.formId, 8000) &&
+            ActorPositionResolverFNV::IsActorInLatestScan(position.formId, 8000) &&
+            !(position.disabledKnown && position.isDisabled) &&
+            !(position.deadKnown && position.isDead)) {
             Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from spatial cache as 0x%08X",
                 speaker.c_str(),
                 position.formId);
             return position.formId;
         }
+    }
+
+    const uint32_t agentFormId = AgentManager::FindAgentFormIdByName(speaker);
+    if (agentFormId != 0) {
+        Logger::LogInfo("ResponseRouter: Resolved response speaker [%s] from agent registry fallback as 0x%08X",
+            speaker.c_str(),
+            agentFormId);
+        return agentFormId;
     }
 
     return 0;
@@ -477,6 +504,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
 
     struct QueuedDialogueLine {
         std::string speaker;
+        std::string displayName;
         std::string action;
         std::string message;
         std::string ttsCacheKey;
@@ -504,6 +532,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
     for (size_t lineIndex = 0; lineIndex < responseLines.size(); ++lineIndex) {
         const std::string& lineObject = responseLines[lineIndex];
         std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
+        std::string displayName = Trim(ExtractJsonStringValue(lineObject, "display_name"));
         std::string action = Trim(ExtractJsonStringValue(lineObject, "action"));
         std::string message = Trim(ExtractJsonStringValue(lineObject, "text"));
         if (message.empty()) {
@@ -550,6 +579,9 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
 
         if (action.empty() || action == "say") {
             const std::string queuedSpeaker = NormalizePlayerSpeakerForDisplay(speaker);
+            if (displayName.empty()) {
+                displayName = queuedSpeaker;
+            }
             if (IsRecentDuplicateDialogueLine(requestId, utteranceId, queuedSpeaker, message)) {
                 Logger::LogInfo("%s: Skipping duplicate dialogue line speaker=[%s] utterance=[%s] request=[%s]",
                     source ? source : "ResponseRouter",
@@ -560,6 +592,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
             }
             dialogueLines.push_back({
                 queuedSpeaker,
+                displayName,
                 action.empty() ? "say" : action,
                 message,
                 ttsCacheKey,
@@ -574,7 +607,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
             });
 
             if (!isPlayerTextOnly) {
-                const std::string subtitle = "[" + queuedSpeaker + "] " + message;
+                const std::string subtitle = "[" + displayName + "] " + message;
                 Console::Print(subtitle.c_str());
             }
         } else if (isActionCommand) {
@@ -594,6 +627,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
         ResponseQueueFNV::DialogueLine queuedLine;
         queuedLine.text = dialogueLines[i].message;
         queuedLine.speaker = dialogueLines[i].speaker;
+        queuedLine.displayName = dialogueLines[i].displayName;
         queuedLine.actorFormId = dialogueLines[i].actorFormId;
         queuedLine.isFinalResponseLine = isFinalResponseLine;
         queuedLine.listenerHint = listenerHint;

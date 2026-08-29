@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Dialectic VERSION 0.5.0)
+project(Dialectic VERSION 1.0.0)
 
 math(EXPR DIALECTIC_PLUGIN_INFO_VERSION
     "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
@@ -40,11 +40,18 @@ add_library(${PROJECT_NAME} SHARED
     src/NearbyItemsFNV.cpp
     src/NearbyPoiFNV.cpp
     src/QuestJournalFNV.cpp
+    src/PlayerInventoryManagerFNV.cpp
+    src/PlayerSurvivalManagerFNV.cpp
+    src/FalloutStatsManagerFNV.cpp
+    src/PipVisionManager.cpp
     src/LoadedPluginsFNV.cpp
     src/WorldDataSyncFNV.cpp
     src/ImportDataSyncFNV.cpp
+    src/ServerPluginSync.cpp
     src/VoiceSampleOverridesFNV.cpp
+    src/VoiceSampleResolverFNV.cpp
     src/VoiceSampleBatchUploadFNV.cpp
+    src/BsaArchiveReader.cpp
     src/XNVSEAdapter.cpp
     src/FNVRuntime.cpp
     src/RuntimeGeneration.cpp
@@ -61,6 +68,7 @@ add_library(${PROJECT_NAME} SHARED
     src/GameLoop.cpp
     src/Console.cpp
     src/IngameNotifier.cpp
+    src/DialecticInitialization.cpp
     src/VersionCheck.cpp
     src/NPCDetector.cpp
     src/VoiceRecorder.cpp
@@ -94,6 +102,10 @@ if(MSVC)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(DialecticChatHotkeyGestureTests tests/ChatHotkeyGestureTests.cpp)
+    target_include_directories(DialecticChatHotkeyGestureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME DialecticChatHotkeyGestureTests COMMAND DialecticChatHotkeyGestureTests)
+
     add_executable(DialecticTaskManagerTests
         tests/TaskManagerTests.cpp
         src/TaskManager.cpp
@@ -127,6 +139,26 @@ if(BUILD_TESTING)
         target_compile_options(DialecticTaskPipelineIntegrationTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
     endif()
     add_test(NAME DialecticTaskPipelineIntegrationTests COMMAND DialecticTaskPipelineIntegrationTests)
+
+    add_executable(DialecticBsaArchiveReaderTests
+        tests/BsaArchiveReaderTests.cpp
+        src/BsaArchiveReader.cpp
+    )
+    target_include_directories(DialecticBsaArchiveReaderTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_definitions(DialecticBsaArchiveReaderTests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(MSVC)
+        target_compile_options(DialecticBsaArchiveReaderTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
+    endif()
+    add_test(NAME DialecticBsaArchiveReaderTests COMMAND DialecticBsaArchiveReaderTests)
+
+    add_executable(DialecticHeadVoiceVolumeTests
+        tests/HeadVoiceVolumeUtilsTests.cpp
+    )
+    target_include_directories(DialecticHeadVoiceVolumeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(DialecticHeadVoiceVolumeTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
+    endif()
+    add_test(NAME DialecticHeadVoiceVolumeTests COMMAND DialecticHeadVoiceVolumeTests)
 endif()
 
 # Link against Windows libraries
@@ -135,8 +167,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     winhttp     # WinHTTP
     winmm       # Windows Multimedia (audio)
     xaudio2     # XAudio2 playback
+    psapi       # Process memory diagnostics
     ole32       # COM
     oleaut32    # COM automation
+    shell32     # Known user folders for reliable logging
 )
 
 # Set output name to match NVSE plugin naming convention

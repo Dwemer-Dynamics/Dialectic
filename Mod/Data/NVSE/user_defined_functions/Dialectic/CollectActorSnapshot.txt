@@ -73,6 +73,7 @@ int iRequestedLocal
 int iScanCount
 
 begin function {}
+    DialecticDiagnosticBridgeTick 17
     if FileExists "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp"
         let sRequestedRefID := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 1 1
         let sRequestedName := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_request.tmp" 2 1
@@ -454,7 +455,7 @@ begin function {}
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "equipment=%g\n" iWroteEquippedItem
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_actor_snapshot_status.txt" 1 "inventory=%g\n" iWroteInventoryItem
 
-    PrintC "[Dialectic] Captured actor snapshot for %z (%z)." sName sRefID
+    PrintC "[DIALECTIC] Captured actor snapshot for %z (%z)." sName sRefID
 
     sv_Destruct sPath
     sv_Destruct sName

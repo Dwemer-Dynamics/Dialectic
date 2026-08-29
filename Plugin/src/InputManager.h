@@ -1,68 +1,48 @@
-// InputManager.h - Handles hotkey input for Dialectic
+// InputManager.h - Handles event-driven hotkey input for Dialectic
 
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
 #include <cstdint>
-#include <functional>
+#include "ChatHotkeyGesture.h"
 
 namespace InputManager {
 
-// Key states
-enum class KeyState {
-    None,
-    JustPressed,
-    Held,
-    JustReleased
-};
-
-// Hotkey actions
 enum class HotkeyAction {
-    TalkToNPC,      // Start talking to targeted NPC
-        StopTalking,    // Halt AI dialogue/actions killswitch
-    ToggleVoice,    // Toggle voice input
-    OpenMicMute,    // Toggle open mic mute
-    ManualActivateNPC, // Manually activate targeted NPC as an AI agent
-    OpenMenu,       // Open AI agent menu
-    QuickCommand,   // Quick command mode
-    DynamicProfileMenu,    // Open dynamic profile action selector
-    ToggleModes,           // Open mode selector
-    ToggleLLMModel         // Open LLM connector slot selector
+    TalkToNPC,
+    StopTalking,
+    ToggleVoice,
+    OpenMicMute,
+    ManualActivateNPC,
+    OpenMenu,
+    QuickCommand,
+    DialecticControl,
+    PipVision,
+    Count
 };
 
-// Initialize the input manager
 void Initialize();
-
-// Shutdown and cleanup
 void Shutdown();
 
-// Update input state - call this each frame
+// Clears queued/held input when Fallout loses focus or enters blocking UI.
 void Update();
 
-// Check if a hotkey action was triggered this frame
-bool IsActionTriggered(HotkeyAction action);
+// Chat keys are recognized from their original press/release timestamps, without debounce loss.
+std::uint8_t ConsumeChatGestures(HotkeyAction action);
+void ResetChatGestures();
 
-// Check if a key is currently held
-bool IsKeyHeld(int virtualKey);
+bool IsGameForeground();
+bool IsActionTriggered(HotkeyAction action, uint32_t debounceMs = 250);
+bool IsActionReleased(HotkeyAction action);
+bool IsActionHeld(HotkeyAction action);
+bool TryClaimAction(HotkeyAction action, uint32_t debounceMs = 250);
 
-// Get the current state of a key
-KeyState GetKeyState(int virtualKey);
+// Called by the JIP LN key event bridge with Fallout DirectInput scan codes.
+bool HandleScanCodeEvent(int scanCode, bool pressed);
+bool IsScanCodeHeld(int scanCode);
 
-// Set hotkey binding
-void SetHotkey(HotkeyAction action, int virtualKey);
-
-// Get current hotkey for action
+void SetHotkey(HotkeyAction action, int scanCode);
 int GetHotkey(HotkeyAction action);
-
-// Load hotkey configuration from INI
 void LoadConfig();
-
-// Save hotkey configuration to INI
 void SaveConfig();
-
-// Convert Fallout scancode to Windows virtual key
-int ScancodeToVirtualKey(int scancode);
 
 } // namespace InputManager

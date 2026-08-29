@@ -40,9 +40,9 @@ namespace Config {
     int animationResolution = 500;
     float animationIntensity = 1.0f;
     float voiceVolume = 75.0f;
+    float headVoiceVolume = 100.0f;
     bool audio3DPlaybackEnabled = true;
-    bool audioCameraBased = false;
-    float audio3DPanStrength = 2.5f;
+    float audio3DPanStrength = 1.0f;
     bool audioInvertHeading = false;
     float audioDistanceScale = 2.0f;
     float audioPlaybackDropoffInteriorPercent = 70.0f;
@@ -69,8 +69,9 @@ namespace Config {
     // Voice recording configuration
     int silenceThreshold = 500;
     int maxRecordingSeconds = 60;
-    int voiceRecordingDeviceId = -1;
-    std::string voiceRecordingDeviceName = "";
+    std::string voiceRecordingPreferredDeviceName = "Windows default";
+    std::string voiceRecordingDetectedEndpointId;
+    bool voiceRecordingSaveLastWav = false;
     bool openMicEnabled = false;
     float openMicSensitivity = 1000.0f;
     float openMicEndDelaySeconds = 1.0f;
@@ -91,12 +92,12 @@ namespace Config {
 
     // Spatial audio configuration
     bool spatialAudioEnabled = true;
-    float spatialMaxAirDistance = 4000.0f;
-    float spatialImmediateDistance = 150.0f;
-    float spatialAutoHearingDistance = 560.0f;
+    float spatialMaxAirDistance = 5600.0f;
+    float spatialImmediateDistance = 210.0f;
+    float spatialAutoHearingDistance = 784.0f;
     float spatialDistanceScaler = 1.0f;
-    float spatialInteriorHearingDistance = 750.0f;
-    float spatialExteriorHearingDistance = 1250.0f;
+    float spatialInteriorHearingDistance = 1050.0f;
+    float spatialExteriorHearingDistance = 1750.0f;
     float spatialMinDistanceFactor = 0.1f;
     float spatialInteriorBaseModifier = 1.0f;
     float spatialExteriorBaseModifier = 0.7f;
@@ -265,10 +266,47 @@ namespace Config {
         }
 
         customFile
-            << "; Dialectic user overrides\n"
+            << "; DIALECTIC user overrides\n"
             << "; This file is created and maintained locally. Mod updates replace\n"
             << "; dialectic.ini defaults but must not replace this custom file.\n\n";
         Logger::LogInfo("Created user configuration: %s", GetCustomINIPath());
+    }
+
+    // Collapses the three retired selector bindings into the new control hotkey once.
+    static void MigrateDialecticControlHotkey() {
+        std::string configuredValue;
+        if (TryReadCustomINIValue("Hotkeys", "DialecticControl", configuredValue)) {
+            return;
+        }
+
+        static constexpr const char* kLegacyKeys[] = {
+            "ToggleModes",
+            "ToggleLLMModel",
+            "DynamicProfileMenu"
+        };
+
+        int migratedScanCode = 0;
+        const char* migratedFrom = nullptr;
+        for (const char* legacyKey : kLegacyKeys) {
+            const int scanCode = ReadINIInt("Hotkeys", legacyKey, 0);
+            if (scanCode > 0) {
+                migratedScanCode = scanCode;
+                migratedFrom = legacyKey;
+                break;
+            }
+        }
+
+        const std::string value = std::to_string(migratedScanCode);
+        if (!WriteCustomINIValue("Hotkeys", "DialecticControl", value.c_str())) {
+            Logger::LogWarning("Could not persist migrated Dialectic Control hotkey");
+            return;
+        }
+
+        if (migratedFrom) {
+            Logger::LogInfo("Migrated [Hotkeys] %s=%d to DialecticControl",
+                migratedFrom,
+                migratedScanCode);
+        }
     }
 
     static bool ParsePort(const std::string& rawPort, int& portOut, const char* source) {
@@ -590,10 +628,11 @@ namespace Config {
             serverPath.c_str());
     }
 
-    void Load() {
-        Logger::LogSection("LOADING CONFIGURATION");
+    static void LoadInternal(bool resolveConnection) {
+        Logger::LogSection(resolveConnection ? "LOADING CONFIGURATION" : "RELOADING RUNTIME SETTINGS");
         
         EnsureCustomINIExists();
+        MigrateDialecticControlHotkey();
         const std::string defaultIniPath = GetDefaultINIPath();
         const std::string customIniPath = GetCustomINIPath();
         Logger::LogDebug("Default INI path: %s", defaultIniPath.c_str());
@@ -630,7 +669,7 @@ namespace Config {
                 std::string key = Trim(line.substr(0, equalsPos));
                 std::string value = Trim(line.substr(equalsPos + 1));
                 
-                if (currentSection == "Server") {
+                if (currentSection == "Server" && resolveConnection) {
                     if (key == "Host") serverHost = value;
                     else if (key == "Port") ParsePort(value, serverPort, iniPath.c_str());
                     else if (key == "Path") serverPath = value;
@@ -645,8 +684,8 @@ namespace Config {
                 else if (key == "AnimationResolution") animationResolution = std::stoi(value);
                 else if (key == "AnimationIntensity") animationIntensity = std::stof(value);
                 else if (key == "VoiceVolume") voiceVolume = std::stof(value);
+                else if (key == "HeadVoiceVolume") headVoiceVolume = std::stof(value);
                 else if (key == "Enable3DPlayback" || key == "Playback3D") audio3DPlaybackEnabled = (value == "1" || value == "true");
-                else if (key == "CameraBasedAudio" || key == "CameraBased") audioCameraBased = (value == "1" || value == "true");
                 else if (key == "Playback2D" || key == "Force2D") audio3DPlaybackEnabled = !(value == "1" || value == "true");
                 else if (key == "PanStrength" || key == "3DPanStrength") audio3DPanStrength = std::stof(value);
                 else if (key == "InvertHeading") audioInvertHeading = (value == "1" || value == "true");
@@ -673,8 +712,9 @@ namespace Config {
             else if (currentSection == "VoiceRecording") {
                 if (key == "SilenceThreshold") silenceThreshold = std::stoi(value);
                 else if (key == "MaxRecordingSeconds") maxRecordingSeconds = std::stoi(value);
-                else if (key == "DeviceId") voiceRecordingDeviceId = std::stoi(value);
-                else if (key == "DeviceName") voiceRecordingDeviceName = value;
+                else if (key == "CurrentDevice") voiceRecordingPreferredDeviceName = value;
+                else if (key == "DetectedEndpointId") voiceRecordingDetectedEndpointId = value;
+                else if (key == "SaveLastRecording") voiceRecordingSaveLastWav = (value == "1" || value == "true");
             }
             else if (currentSection == "OpenMic") {
                 if (key == "Enabled") openMicEnabled = (value == "1" || value == "true");
@@ -698,7 +738,6 @@ namespace Config {
             else if (currentSection == "SpatialAudio") {
                 if (key == "Enabled") spatialAudioEnabled = (value == "1" || value == "true");
                 else if (key == "Enable3DPlayback" || key == "Playback3D") audio3DPlaybackEnabled = (value == "1" || value == "true");
-                else if (key == "CameraBasedAudio" || key == "CameraBased") audioCameraBased = (value == "1" || value == "true");
                 else if (key == "Playback2D" || key == "Force2D") audio3DPlaybackEnabled = !(value == "1" || value == "true");
                 else if (key == "PanStrength" || key == "3DPanStrength") audio3DPanStrength = std::stof(value);
                 else if (key == "InvertHeading") audioInvertHeading = (value == "1" || value == "true");
@@ -833,7 +872,9 @@ namespace Config {
             iniFile.close();
         }
 
-        ResolveServerConnection();
+        if (resolveConnection) {
+            ResolveServerConnection();
+        }
 
         // Always protect AI speech from overlapping vanilla/radiant dialogue.
         suppressVanillaDialogueDuringAI = true;
@@ -846,6 +887,7 @@ namespace Config {
         static const char* kModeNames[] = {
             "STANDARD",
             "WHISPER",
+            "CLOSE",
             "SHOUT",
             "NARRATOR",
             "DIRECTOR",
@@ -860,11 +902,21 @@ namespace Config {
         nearbyItemsEnabled = true;
         pointsOfInterestEnabled = true;
 
-        currentModeIndex = 0;
-        currentMode = kModeNames[0];
-        currentProfileModelSlot = 1;
-        narratorModeEnabled = false;
+        if (resolveConnection) {
+            currentModeIndex = 0;
+            currentMode = kModeNames[0];
+            currentProfileModelSlot = 1;
+            narratorModeEnabled = false;
+        }
 
+    }
+
+    void Load() {
+        LoadInternal(true);
+    }
+
+    void LoadRuntimeSettings() {
+        LoadInternal(false);
     }
 
     void Save() {
@@ -891,10 +943,9 @@ namespace Config {
         const int hotkeyManualActivate = ReadINIInt("Hotkeys", "ManualActivate", 0);
         const int hotkeyOpenMenu = ReadINIInt("Hotkeys", "OpenMenu", 0);
         const int hotkeyQuickCommand = ReadINIInt("Hotkeys", "QuickCommand", 0);
-        const int hotkeyDynamicProfileMenu = ReadINIInt("Hotkeys", "DynamicProfileMenu", 0);
-        const int hotkeyToggleModes = ReadINIInt("Hotkeys", "ToggleModes", 0);
-        const int hotkeyToggleLLMModel = ReadINIInt("Hotkeys", "ToggleLLMModel", 0);
+        const int hotkeyDialecticControl = ReadINIInt("Hotkeys", "DialecticControl", 0);
         const int hotkeyOpenMicMute = ReadINIInt("Hotkeys", "OpenMicMute", 0);
+        const int hotkeyPipVision = ReadINIInt("Hotkeys", "PipVision", 0);
 
         std::ofstream iniFile(iniPath);
         
@@ -902,7 +953,7 @@ namespace Config {
             return;
         }
 
-        iniFile << "; Dialectic user configuration\n";
+    iniFile << "; DIALECTIC user configuration\n";
         iniFile << "; This file overrides dialectic.ini and is preserved across mod updates.\n\n";
         
         if (hasCustomServerOverride || hasCustomSoundcachePath) {
@@ -919,30 +970,28 @@ namespace Config {
         }
         
         iniFile << "[Hotkeys]\n";
-        iniFile << "; V is reserved for the in-game JIP text input quest script.\n";
-        iniFile << "; Other DLL hotkeys are disabled by default. Set them in MCM to enable.\n";
+        iniFile << "; Hotkeys use Fallout DirectInput scan codes. Set them in MCM to enable.\n";
         iniFile << "TalkToNPC=" << hotkeyTalkToNPC << "\n";
         iniFile << "StopTalking=" << hotkeyStopTalking << "\n";
         iniFile << "ToggleVoice=" << hotkeyToggleVoice << "\n";
         iniFile << "ManualActivate=" << hotkeyManualActivate << "\n";
         iniFile << "OpenMenu=" << hotkeyOpenMenu << "\n";
         iniFile << "QuickCommand=" << hotkeyQuickCommand << "\n";
-        iniFile << "DynamicProfileMenu=" << hotkeyDynamicProfileMenu << "\n";
-        iniFile << "ToggleModes=" << hotkeyToggleModes << "\n";
-        iniFile << "ToggleLLMModel=" << hotkeyToggleLLMModel << "\n";
-        iniFile << "OpenMicMute=" << hotkeyOpenMicMute << "\n\n";
+        iniFile << "DialecticControl=" << hotkeyDialecticControl << "\n";
+        iniFile << "OpenMicMute=" << hotkeyOpenMicMute << "\n";
+        iniFile << "PipVision=" << hotkeyPipVision << "\n\n";
         
         iniFile << "[Audio]\n";
         iniFile << "; Player-heard AI voice playback settings.\n";
         iniFile << "VoiceVolume=" << voiceVolume << "\n";
+        iniFile << "; Narrator and player TTS volume relative to VoiceVolume. 100 keeps the current level.\n";
+        iniFile << "HeadVoiceVolume=" << headVoiceVolume << "\n";
         iniFile << "PreClipMs=" << preClipMs << "\n";
         iniFile << "PostClipMs=" << postClipMs << "\n";
         iniFile << "AnimationResolution=" << animationResolution << "\n";
         iniFile << "AnimationIntensity=" << animationIntensity << "\n";
         iniFile << "; Set 0 for flat 2D playback.\n";
         iniFile << "Enable3DPlayback=" << (audio3DPlaybackEnabled ? "1" : "0") << "\n";
-        iniFile << "; Use camera direction instead of player actor heading for 3D voice panning.\n";
-        iniFile << "CameraBasedAudio=" << (audioCameraBased ? "1" : "0") << "\n";
         iniFile << "; 1.0 is natural stereo separation; higher values make actor position more noticeable.\n";
         iniFile << "PanStrength=" << audio3DPanStrength << "\n";
         iniFile << "; Flip left/right heading if FNV orientation is reversed on your setup.\n";
@@ -979,13 +1028,12 @@ namespace Config {
         iniFile << "SilenceThreshold=" << silenceThreshold << "\n";
         iniFile << "; Maximum recording duration in seconds\n";
         iniFile << "MaxRecordingSeconds=" << maxRecordingSeconds << "\n";
-        iniFile << "; WinMM capture device. Set DeviceId=-1 to use Windows mapper/default.\n";
-        iniFile << "; Current dev machine examples: 2=Razer BlackShark, 4=HyperX QuadCast.\n";
-        iniFile << "DeviceId=" << voiceRecordingDeviceId << "\n";
-        iniFile << "; Optional substring match fallback when DeviceId is -1.\n";
-        iniFile << "DeviceName=" << voiceRecordingDeviceName << "\n";
-        iniFile << "; Display-only current Windows capture device for MCM.\n";
-        iniFile << "CurrentDevice=" << VoiceRecorder::GetCurrentRecordingDeviceName() << "\n\n";
+        iniFile << "; Keep the latest WAV submitted to STT for diagnostics.\n";
+        iniFile << "SaveLastRecording=" << (voiceRecordingSaveLastWav ? "1" : "0") << "\n";
+        iniFile << "; Preferred device retained automatically. Windows default follows the OS setting.\n";
+        iniFile << "CurrentDevice=" << voiceRecordingPreferredDeviceName << "\n";
+        iniFile << "; Stable Core Audio endpoint selected automatically from a recording with real signal.\n";
+        iniFile << "DetectedEndpointId=" << voiceRecordingDetectedEndpointId << "\n\n";
 
         iniFile << "[OpenMic]\n";
         iniFile << "; Open mic voice activity detection. Disabled by default.\n";
@@ -1016,7 +1064,7 @@ namespace Config {
         iniFile << "[SpatialAudio]\n";
         iniFile << "; Spatial awareness for NPC hearing, auto-activation, and listener selection. Player-heard playback is configured in [Audio].\n";
         iniFile << "Enabled=1\n";
-        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 8m at 70 FNV units/meter.\n";
+        iniFile << "; Spatial awareness guard rails. AutoHearingDistance defaults to 11.2m at 70 FNV units/meter.\n";
         iniFile << "MaxAirDistance=" << spatialMaxAirDistance << "\n";
         iniFile << "ImmediateDistance=" << spatialImmediateDistance << "\n";
         iniFile << "AutoHearingDistance=" << spatialAutoHearingDistance << "\n";
@@ -1123,15 +1171,12 @@ namespace Config {
         iniFile << "EndConversationCooldown=" << rechatEndConversationCooldown << "\n\n";
 
         iniFile << "[Tools]\n";
+        iniFile << "InitializeDialectic=0\n";
         iniFile << "SendWorldData=0\n";
         iniFile << "SendVoiceSamples=0\n";
         iniFile << "UpdateTargetProfile=0\n";
         iniFile << "UpdateNearbyProfiles=0\n";
-        iniFile << "UpdateNarratorProfile=0\n";
-        iniFile << "OpenModeMenu=0\n";
-        iniFile << "ModeChanged=0\n";
-        iniFile << "OpenLLMModelMenu=0\n";
-        iniFile << "OpenDynamicProfileMenu=0\n\n";
+        iniFile << "UpdateNarratorProfile=0\n\n";
         
         iniFile << "[ExcludedRaces]\n";
         iniFile << "; Races to exclude from AI agents (by name, one per line)\n";

@@ -17,6 +17,15 @@ std::string Lower(std::string value) {
     return value;
 }
 
+std::string TrimLower(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    value = value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
+    return Lower(value);
+}
+
 std::string CombinedText(const ActorEligibilityFNV::Metadata& metadata) {
     return Lower(metadata.name + " " +
         metadata.race + " " +
@@ -92,6 +101,16 @@ bool LooksHuman(const std::string& text) {
     return ContainsAny(text, kTerms);
 }
 
+// Some voiced story characters use TESCreature records despite being conversational NPCs.
+bool LooksNamedStoryCharacter(const std::string& text) {
+    static constexpr std::array<const char*, 3> kTerms = {
+        "mr. house",
+        "mr house",
+        "mrhouse"
+    };
+    return ContainsAny(text, kTerms);
+}
+
 bool HasExplicitCreatureBlock(const std::string& text, std::string* reason) {
     static constexpr std::array<const char*, 26> kTerms = {
         "feral",
@@ -146,12 +165,37 @@ bool HasAllowedConversationalCategory(const ActorEligibilityFNV::Metadata& metad
     return LooksHuman(text) ||
         LooksNonFeralGhoul(text) ||
         LooksSuperMutant(text) ||
-        LooksRobot(text);
+        LooksRobot(text) ||
+        LooksNamedStoryCharacter(text);
 }
 
 } // namespace
 
 namespace ActorEligibilityFNV {
+
+bool IsTargetableActorIdentity(const Metadata& metadata, std::string* reason) {
+    const std::string name = TrimLower(metadata.name);
+    if (name.empty() || name == "message" || name == "<no name>" ||
+        name == "none" || name == "null") {
+        if (reason) {
+            *reason = "form does not have a targetable actor identity";
+        }
+        return false;
+    }
+
+    if (metadata.baseTypeKnown && metadata.baseType != kFormTypeTesNpc &&
+        metadata.baseType != kFormTypeTesCreature) {
+        if (reason) {
+            *reason = "form type is not an NPC or creature";
+        }
+        return false;
+    }
+    return true;
+}
+
+bool IsManualActivationAllowed(const Metadata& metadata, std::string* reason) {
+    return IsTargetableActorIdentity(metadata, reason);
+}
 
 bool IsClearlyDisallowedCreature(const Metadata& metadata, std::string* reason) {
     const std::string text = CombinedText(metadata);
@@ -185,6 +229,9 @@ bool IsClearlyDisallowedCreature(const Metadata& metadata, std::string* reason) 
 }
 
 bool IsAutoActivationAllowed(const Metadata& metadata, std::string* reason) {
+    if (!IsTargetableActorIdentity(metadata, reason)) {
+        return false;
+    }
     const std::string text = CombinedText(metadata);
     if (HasExplicitCreatureBlock(text, reason)) {
         return false;
@@ -222,6 +269,9 @@ bool IsAutoActivationAllowed(const Metadata& metadata, std::string* reason) {
 }
 
 bool IsRechatAllowed(const Metadata& metadata, bool manuallyActivated, std::string* reason) {
+    if (!IsTargetableActorIdentity(metadata, reason)) {
+        return false;
+    }
     if (manuallyActivated) {
         return true;
     }

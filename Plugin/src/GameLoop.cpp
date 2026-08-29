@@ -26,9 +26,14 @@
 #include "NearbyItemsFNV.h"
 #include "NearbyPoiFNV.h"
 #include "QuestJournalFNV.h"
+#include "PlayerInventoryManagerFNV.h"
+#include "PlayerSurvivalManagerFNV.h"
+#include "FalloutStatsManagerFNV.h"
+#include "PipVisionManager.h"
 #include "ResponseQueueFNV.h"
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
+#include "DialecticInitialization.h"
 #include "TradeManager.h"
 #include "RuntimeSnapshot.h"
 #include "RuntimeGeneration.h"
@@ -55,9 +60,14 @@
 #include <climits>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <unordered_map>
+
+#ifndef DIALECTIC_VERSION
+#define DIALECTIC_VERSION "1.0.0"
+#endif
 
 // Forward declarations
 void Log(const char* fmt, ...);
@@ -77,7 +87,7 @@ static void TriggerDynamicProfileForCurrentTarget();
 static void TriggerDynamicProfilesForNearbyAgents();
 static void TriggerDynamicProfileForNarrator();
 static void UpdateBoredEventTimer();
-static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool showNotice,
+static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue = true);
 static void MaybeSendLoadedSaveInit();
 static void PrepareTextInputTargetHint();
@@ -88,10 +98,10 @@ static bool EnforceCombatDialogueGate(uint32_t actorFormId, const char* source, 
 static GameState g_gameState;
 
 // Conversation state
-static bool g_conversationActive = false;
+static std::atomic<bool> g_conversationActive{false};
 static bool g_conversationIsNarrator = false;
 static std::string g_conversationPartner;
-static uint32_t g_conversationPartnerFormId = 0;
+static std::atomic<uint32_t> g_conversationPartnerFormId{0};
 struct ConversationCooldownEntry {
     std::string name;
     std::chrono::steady_clock::time_point until;
@@ -101,9 +111,9 @@ static std::unordered_map<uint32_t, ConversationCooldownEntry> g_conversationCoo
 static std::unordered_map<std::string, ConversationCooldownEntry> g_conversationCooldownByName;
 static constexpr const char* kNarratorName = "The Narrator";
 static constexpr float kNarratorLookUpPitchDegrees = -85.0f;
-static constexpr const char* kGameStateBridgePath = "Data\\NVSE\\Plugins\\dialectic_game_state.tmp";
 static bool g_loadedSaveInitSent = false;
 static long long g_lastSeenGamets = 0;
+static bool g_loadedSaveInitBlocked = false;
 
 // Voice input state
 static std::atomic<bool> g_voiceInputActive(false);
@@ -119,6 +129,16 @@ static std::chrono::steady_clock::time_point g_lastDynamicProfileLoadDelayAt;
 static std::chrono::steady_clock::time_point g_lastBoredEventTimerUpdate;
 static std::chrono::steady_clock::time_point g_lastBoredBlockingActivityTime;
 static std::chrono::steady_clock::time_point g_lastVoiceSampleToolPoll;
+static std::chrono::steady_clock::time_point g_lastModeSelectionPoll;
+static std::chrono::steady_clock::time_point g_lastDynamicProfileSelectionPoll;
+static std::chrono::steady_clock::time_point g_lastLegacyToolPoll;
+static std::chrono::steady_clock::time_point g_lastTextInputPoll;
+static std::chrono::steady_clock::time_point g_lastRuntimeConfigFallbackPoll;
+static std::chrono::steady_clock::time_point g_lastRpgEventPoll;
+static std::atomic<bool> g_runtimeConfigDirty(false);
+static std::atomic<DWORD> g_runtimeConfigDirtyTick(0);
+static uint32_t g_dialecticControlTargetFormId = 0;
+static std::string g_dialecticControlTargetName;
 
 static std::mutex g_runtimeStatusMutex;
 static bool g_runtimeStatusPending = false;
@@ -129,33 +149,43 @@ static std::deque<std::string> g_nativeDialogueCaptures;
 
 struct PerfAggregate {
     long long calls = 0;
-    long long totalMs = 0;
-    long long maxMs = 0;
+    long long totalUs = 0;
+    long long maxUs = 0;
     long long slowCalls = 0;
 };
 
 static std::unordered_map<std::string, PerfAggregate> g_updatePerfAggregates;
 static std::chrono::steady_clock::time_point g_lastUpdatePerfSummaryTime;
 static uint64_t g_updatePerfTickCount = 0;
-static constexpr long long kPerfSlowSubsystemMs = 8;
-static constexpr long long kPerfSlowFrameMs = 25;
+static constexpr long long kPerfSlowSubsystemUs = 8000;
+static constexpr long long kPerfSlowFrameUs = 25000;
 static constexpr auto kPerfSummaryInterval = std::chrono::seconds(5);
 
-static long long ElapsedMsSince(const std::chrono::steady_clock::time_point& start) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
+static bool ShouldPoll(std::chrono::steady_clock::time_point& lastPoll,
+                       std::chrono::milliseconds interval) {
+    const auto now = std::chrono::steady_clock::now();
+    if (lastPoll.time_since_epoch().count() != 0 && now - lastPoll < interval) {
+        return false;
+    }
+    lastPoll = now;
+    return true;
+}
+
+static long long ElapsedUsSince(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start).count();
 }
 
-static void RecordUpdatePerf(const char* name, long long elapsedMs) {
+static void RecordUpdatePerf(const char* name, long long elapsedUs) {
     PerfAggregate& aggregate = g_updatePerfAggregates[name ? name : "unknown"];
     aggregate.calls += 1;
-    aggregate.totalMs += elapsedMs;
-    aggregate.maxMs = std::max(aggregate.maxMs, elapsedMs);
-    if (elapsedMs >= kPerfSlowSubsystemMs) {
+    aggregate.totalUs += elapsedUs;
+    aggregate.maxUs = std::max(aggregate.maxUs, elapsedUs);
+    if (elapsedUs >= kPerfSlowSubsystemUs) {
         aggregate.slowCalls += 1;
-        Logger::LogInfo("[PERF] GameLoop subsystem slow name=%s elapsed_ms=%lld",
+        Logger::LogInfo("[PERF] GameLoop subsystem slow name=%s elapsed_ms=%.3f",
             name ? name : "unknown",
-            elapsedMs);
+            static_cast<double>(elapsedUs) / 1000.0);
     }
 }
 
@@ -163,10 +193,10 @@ template <typename Fn>
 static void ProfileUpdateSubsystem(const char* name, Fn&& fn) {
     const auto start = std::chrono::steady_clock::now();
     fn();
-    RecordUpdatePerf(name, ElapsedMsSince(start));
+    RecordUpdatePerf(name, ElapsedUsSince(start));
 }
 
-static void MaybeLogUpdatePerfSummary(long long frameElapsedMs) {
+static void MaybeLogUpdatePerfSummary(long long frameElapsedUs) {
     g_updatePerfTickCount += 1;
     const auto now = std::chrono::steady_clock::now();
     if (g_lastUpdatePerfSummaryTime.time_since_epoch().count() != 0 &&
@@ -179,23 +209,23 @@ static void MaybeLogUpdatePerfSummary(long long frameElapsedMs) {
         : std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastUpdatePerfSummaryTime).count();
     g_lastUpdatePerfSummaryTime = now;
 
-    Logger::LogInfo("[PERF] GameLoop summary window_ms=%lld ticks=%llu last_frame_ms=%lld subsystems=%zu",
+    Logger::LogInfo("[PERF] GameLoop summary window_ms=%lld ticks=%llu last_frame_ms=%.3f subsystems=%zu",
         windowMs,
         static_cast<unsigned long long>(g_updatePerfTickCount),
-        frameElapsedMs,
+        static_cast<double>(frameElapsedUs) / 1000.0,
         g_updatePerfAggregates.size());
 
     for (const auto& entry : g_updatePerfAggregates) {
         const PerfAggregate& aggregate = entry.second;
         const double avgMs = aggregate.calls > 0
-            ? static_cast<double>(aggregate.totalMs) / static_cast<double>(aggregate.calls)
+            ? static_cast<double>(aggregate.totalUs) / static_cast<double>(aggregate.calls) / 1000.0
             : 0.0;
-        Logger::LogInfo("[PERF]   %s calls=%lld total_ms=%lld avg_ms=%.3f max_ms=%lld slow_calls=%lld",
+        Logger::LogInfo("[PERF]   %s calls=%lld total_ms=%.3f avg_ms=%.3f max_ms=%.3f slow_calls=%lld",
             entry.first.c_str(),
             aggregate.calls,
-            aggregate.totalMs,
+            static_cast<double>(aggregate.totalUs) / 1000.0,
             avgMs,
-            aggregate.maxMs,
+            static_cast<double>(aggregate.maxUs) / 1000.0,
             aggregate.slowCalls);
     }
 
@@ -312,6 +342,15 @@ static bool IsConversationTargetEligible(
         return false;
     }
 
+    ActorEligibilityFNV::Metadata identityMetadata;
+    identityMetadata.name = name;
+    std::string identityReason;
+    if (!ActorEligibilityFNV::IsTargetableActorIdentity(identityMetadata, &identityReason)) {
+        Logger::LogInfo("GameLoop: Conversation target rejected: %s (0x%08X): %s",
+            name.c_str(), formId, identityReason.c_str());
+        return false;
+    }
+
     // Creatures remain available through explicit Manual Activate, matching CHIM's policy.
     if (Config::autoAddCreatures ||
         AgentManager::IsManuallyActivated(formId)) {
@@ -364,7 +403,7 @@ static bool IsConversationTargetEligible(
     Logger::LogInfo("GameLoop: Conversation target rejected by creature policy: %s (0x%08X): %s",
         name.c_str(), formId, reason.empty() ? "not eligible" : reason.c_str());
     if (notify) {
-        Console::Print("[Dialectic] Manually activate %s before talking.", name.c_str());
+        Console::Print("[DIALECTIC] Manually activate %s before talking.", name.c_str());
     }
     return false;
 }
@@ -445,7 +484,7 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
         oldPartner.c_str(),
         oldPartnerFormId,
         reason ? reason : "scene validation");
-    Console::Print("[Dialectic] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
+    Console::Print("[DIALECTIC] %s left the scene", oldPartner.empty() ? "Conversation target" : oldPartner.c_str());
     StopConversation();
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
@@ -455,12 +494,21 @@ static void ClearConversationIfPartnerLeftScene(const char* reason) {
 }
 
 static float GetPlayerSpeechDistanceMultiplier();
+static float GetConversationTargetRadius();
 static bool IsStealthPlayerInputActive();
+static bool EqualsIgnoreCase(const std::string& left, const std::string& right);
+
+static bool IsPrivateConversationMode() {
+    return EqualsIgnoreCase(Config::currentMode, "WHISPER") ||
+        EqualsIgnoreCase(Config::currentMode, "CLOSE");
+}
 
 static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     std::vector<std::string> names;
     std::set<std::string> seen;
     const float playerSpeechDistanceMultiplier = GetPlayerSpeechDistanceMultiplier();
+    const bool closeMode = EqualsIgnoreCase(Config::currentMode, "CLOSE");
+    const float closeRadius = closeMode ? GetConversationTargetRadius() : 0.0f;
 
     AppendConversationPartnerAudienceName(names, seen);
     AppendUniqueAudienceName(names, seen, Config::playerName.empty() ? "Player" : Config::playerName);
@@ -487,9 +535,11 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
             }
 
             const auto spatial = SpatialAwarenessFNV::Evaluate(player, position);
-            const float effectiveMaxDistance = spatial.maxDistance > 0.0f
-                ? spatial.maxDistance * playerSpeechDistanceMultiplier
-                : 0.0f;
+            const float effectiveMaxDistance = closeMode
+                ? closeRadius
+                : (spatial.maxDistance > 0.0f
+                    ? spatial.maxDistance * playerSpeechDistanceMultiplier
+                    : 0.0f);
             bool canHearPlayer = spatial.canCommunicate;
             if (!canHearPlayer &&
                 playerSpeechDistanceMultiplier > 1.0f &&
@@ -506,7 +556,10 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
                 spatial.airDistance <= nearbyMaxDistance;
             const bool managedActor = AgentManager::IsManuallyActivated(position.formId) ||
                 AgentManager::IsAutoManaged(position.formId);
-            if (!withinSpeechRange && !withinNearbyRange && !managedActor) {
+            const bool includeInAudience = closeMode
+                ? withinSpeechRange
+                : (withinSpeechRange || withinNearbyRange || managedActor);
+            if (!includeInAudience) {
                 continue;
             }
 
@@ -697,7 +750,7 @@ static std::string BuildPrivateNarratorAudienceSnapshotJson() {
     return json.str();
 }
 
-static std::string BuildTargetOnlyAudienceSnapshotJson() {
+static std::string BuildTargetOnlyAudienceSnapshotJson(bool privateConversation = false) {
     const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
     std::ostringstream people;
     people << "|" << playerName << "|";
@@ -707,6 +760,9 @@ static std::string BuildTargetOnlyAudienceSnapshotJson() {
 
     std::ostringstream json;
     json << "{\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",\"target_only\":true";
+    if (privateConversation) {
+        json << ",\"private\":true,\"privacy_scope\":\"target_only\"";
+    }
     if (g_conversationPartnerFormId != 0) {
         json << ",\"target_form_id\":\"0x"
              << std::hex << std::setw(8) << std::setfill('0') << g_conversationPartnerFormId << std::dec
@@ -733,6 +789,45 @@ static float GetPlayerSpeechDistanceMultiplier() {
     }
 
     return std::clamp(multiplier, 0.05f, 4.0f);
+}
+
+static float GetConversationTargetRadius() {
+    constexpr float kDefaultTargetRadius = 500.0f;
+    constexpr float kCloseRadius = 200.0f;
+    if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+        return ActorPositionResolverFNV::IsPlayerSneaking()
+            ? kCloseRadius * 0.5f
+            : kCloseRadius;
+    }
+    return kDefaultTargetRadius * GetPlayerSpeechDistanceMultiplier();
+}
+
+// Whisper and Close require the selected listener to remain within their request-local radius.
+static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::string& name, bool notify) {
+    if (!IsPrivateConversationMode() || formId == 0) {
+        return true;
+    }
+
+    const auto player = ActorPositionResolverFNV::ResolvePlayer();
+    const auto target = ActorPositionResolverFNV::ResolveActor(formId);
+    if (!player.resolved || !target.resolved) {
+        Logger::LogDebug("GameLoop: Private mode range unavailable for %s (0x%08X); preserving explicit target",
+            name.c_str(), formId);
+        return true;
+    }
+
+    const auto spatial = SpatialAwarenessFNV::Evaluate(player, target);
+    const float radius = GetConversationTargetRadius();
+    if (std::isfinite(spatial.airDistance) && spatial.airDistance <= radius) {
+        return true;
+    }
+
+    Logger::LogInfo("GameLoop: %s mode rejected %s (0x%08X), distance=%.1f radius=%.1f",
+        Config::currentMode.c_str(), name.c_str(), formId, spatial.airDistance, radius);
+    if (notify) {
+        Console::Print("[DIALECTIC] Move closer to %s", name.empty() ? "the target" : name.c_str());
+    }
+    return false;
 }
 
 static bool IsStealthPlayerInputActive() {
@@ -803,17 +898,23 @@ static void StartNarratorConversation(const char* reason) {
     HTTPManager::SendEvent("conversation_start", payload.str(), BuildPrivateNarratorAudienceSnapshotJson());
 }
 
-static constexpr const char* kOpenModeMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_mode_menu.tmp";
-static constexpr const char* kOpenLLMModelMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_llm_model_menu.tmp";
-static constexpr const char* kOpenDynamicProfileMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_dynamic_profile_menu.tmp";
 static constexpr const char* kOpenTextInputMenuPath = "Data\\NVSE\\Plugins\\dialectic_open_text_input.tmp";
 static constexpr const char* kTextInputTargetPath = "Data\\NVSE\\Plugins\\dialectic_textinput_target.tmp";
 static constexpr const char* kTextInputStatusPath = "Data\\NVSE\\Plugins\\dialectic_textinput_status.tmp";
 static constexpr const char* kModeSelectPath = "Data\\NVSE\\Plugins\\dialectic_mode_select.tmp";
 static constexpr const char* kDynamicProfileSelectPath = "Data\\NVSE\\Plugins\\dialectic_dynamic_profile_select.tmp";
+static constexpr const char* kRuntimeConfigReloadPath = "Data\\NVSE\\Plugins\\dialectic_reload_runtime.tmp";
 static std::atomic<bool> g_textInputMenuPending(false);
 static std::atomic<DWORD> g_textInputMenuRequestTick(0);
 static std::atomic<DWORD> g_textInputMenuBlockUntilTick(0);
+
+struct PreparedTextInputTarget {
+    uint32_t formId = 0;
+    std::string name;
+    std::uint64_t runtimeGeneration = 0;
+};
+
+static PreparedTextInputTarget g_preparedTextInputTarget;
 
 static bool WriteToolBridgeSignal(const char* path, const char* label) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -914,7 +1015,7 @@ static void PollVoiceSampleToolRequest() {
     Dialectic_RequestVoiceSampleBatch("Tools INI flag");
 }
 
-static void PollDynamicProfileToolRequests() {
+static void PollDynamicProfileSelection() {
     int selectedProfileAction = -1;
     if (PollToolBridgeInt(kDynamicProfileSelectPath, selectedProfileAction)) {
         Logger::LogInfo("GameLoop: detected dynamic profile menu selection=%d", selectedProfileAction);
@@ -929,6 +1030,9 @@ static void PollDynamicProfileToolRequests() {
         }
     }
 
+}
+
+static void PollLegacyDynamicProfileToolRequests() {
     const int updateTargetProfile = Config::ReadINIInt("Tools", "UpdateTargetProfile", 0);
     if (updateTargetProfile > 0) {
         Config::WriteCustomINIValue("Tools", "UpdateTargetProfile", "0");
@@ -955,12 +1059,13 @@ static const char* ModeNameFromIndex(int modeIndex) {
     switch (modeIndex) {
         case 0: return "STANDARD";
         case 1: return "WHISPER";
-        case 2: return "SHOUT";
-        case 3: return "NARRATOR";
-        case 4: return "DIRECTOR";
-        case 5: return "INJECTION_LOG";
-        case 6: return "INJECTION_CHAT";
-        case 7: return "CHEATMODE";
+        case 2: return "CLOSE";
+        case 3: return "SHOUT";
+        case 4: return "NARRATOR";
+        case 5: return "DIRECTOR";
+        case 6: return "INJECTION_LOG";
+        case 7: return "INJECTION_CHAT";
+        case 8: return "CHEATMODE";
         default: return "STANDARD";
     }
 }
@@ -969,19 +1074,30 @@ static const char* ModeLabelFromIndex(int modeIndex) {
     switch (modeIndex) {
         case 0: return "Standard";
         case 1: return "Whisper";
-        case 2: return "Shout";
-        case 3: return "Narrator";
-        case 4: return "Director";
-        case 5: return "Inject Event";
-        case 6: return "Inject & Chat";
-        case 7: return "Cheat Mode";
+        case 2: return "Close";
+        case 3: return "Shout";
+        case 4: return "Narrator";
+        case 5: return "Director";
+        case 6: return "Inject Event";
+        case 7: return "Inject & Chat";
+        case 8: return "Cheat Mode";
         default: return "Standard";
+    }
+}
+
+static const char* ModeTitleNameFromIndex(int modeIndex) {
+    // Keep titles aligned with the user-facing menu labels instead of internal mode names.
+    switch (modeIndex) {
+        case 6: return "INJECT EVENT";
+        case 7: return "INJECT & CHAT";
+        case 8: return "CHEAT";
+        default: return ModeNameFromIndex(modeIndex);
     }
 }
 
 static int ModeIndexFromName(const std::string& rawMode) {
     const std::string mode = ToUpperCopy(TrimInput(rawMode));
-    for (int i = 0; i <= 7; ++i) {
+    for (int i = 0; i <= 8; ++i) {
         if (mode == ModeNameFromIndex(i)) {
             return i;
         }
@@ -1002,46 +1118,16 @@ static const char* ProfileModelLabelFromSlot(int slot) {
 static void MaybeSyncRuntimeStateFromServer(bool force = false);
 
 static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
-    modeIndex = std::clamp(modeIndex, 0, 7);
+    modeIndex = std::clamp(modeIndex, 0, 8);
     const char* modeName = ModeNameFromIndex(modeIndex);
     const char* modeLabel = ModeLabelFromIndex(modeIndex);
 
-    static bool capturedDefaultDistances = false;
-    static float defaultActivationInterior = 1200.0f;
-    static float defaultActivationExterior = 2400.0f;
-    static float defaultSpatialInterior = 750.0f;
-    static float defaultSpatialExterior = 1500.0f;
-    if (!capturedDefaultDistances) {
-        defaultActivationInterior = Config::distanceActivatingNpcInterior;
-        defaultActivationExterior = Config::distanceActivatingNpcExterior;
-        defaultSpatialInterior = Config::spatialInteriorHearingDistance;
-        defaultSpatialExterior = Config::spatialExteriorHearingDistance;
-        capturedDefaultDistances = true;
-    }
-
     Config::currentModeIndex = modeIndex;
     Config::currentMode = modeName;
-    Config::narratorModeEnabled = modeIndex == 3;
-
-    if (modeIndex == 1) {
-        Config::distanceActivatingNpcInterior = 200.0f;
-        Config::distanceActivatingNpcExterior = 200.0f;
-        Config::spatialInteriorHearingDistance = 200.0f;
-        Config::spatialExteriorHearingDistance = 200.0f;
-    } else if (modeIndex == 2) {
-        Config::distanceActivatingNpcInterior = std::max(defaultActivationInterior, 2400.0f);
-        Config::distanceActivatingNpcExterior = std::max(defaultActivationExterior, 4800.0f);
-        Config::spatialInteriorHearingDistance = std::max(defaultSpatialInterior, 2400.0f);
-        Config::spatialExteriorHearingDistance = std::max(defaultSpatialExterior, 4800.0f);
-    } else {
-        Config::distanceActivatingNpcInterior = defaultActivationInterior;
-        Config::distanceActivatingNpcExterior = defaultActivationExterior;
-        Config::spatialInteriorHearingDistance = defaultSpatialInterior;
-        Config::spatialExteriorHearingDistance = defaultSpatialExterior;
-    }
+    Config::narratorModeEnabled = modeIndex == 4;
 
     if (sendServerUpdate) {
-        Console::Print("[Dialectic] Mode: %s", modeLabel);
+        Console::Print("[DIALECTIC] Mode: %s", modeLabel);
     }
     Logger::LogInfo("GameLoop: Dialectic mode set to %s (%d)", modeName, modeIndex);
 
@@ -1056,35 +1142,136 @@ static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
     }
 }
 
-static void PollModeToolRequests() {
-    MaybeSyncRuntimeStateFromServer(false);
+void NoteProfileModelSelection(int slot) {
+    const int modelSlot = std::clamp(slot, 1, 4);
+    if (modelSlot == Config::currentProfileModelSlot) {
+        return;
+    }
+    Logger::LogInfo("GameLoop: LLM model slot selection %d -> %d (%s)",
+        Config::currentProfileModelSlot,
+        modelSlot,
+        ProfileModelLabelFromSlot(modelSlot));
+    Config::currentProfileModelSlot = modelSlot;
+}
 
+static void PollModeSelection() {
     int selectedModeIndex = 0;
     if (PollToolBridgeInt(kModeSelectPath, selectedModeIndex)) {
         Logger::LogInfo("GameLoop: detected mode menu selection=%d", selectedModeIndex);
         ApplyModeIndex(selectedModeIndex, true);
+    }
+}
+
+void MarkRuntimeConfigDirty() {
+    g_runtimeConfigDirty.store(true);
+    g_runtimeConfigDirtyTick.store(GetTickCount());
+}
+
+static void PollRuntimeConfigReloadFallback() {
+    std::string signal;
+    if (!ReadToolBridgeLine(kRuntimeConfigReloadPath, signal)) {
+        return;
+    }
+    ClearToolBridgeFile(kRuntimeConfigReloadPath);
+    MarkRuntimeConfigDirty();
+}
+
+static void ApplyPendingRuntimeConfigReload() {
+    if (!g_runtimeConfigDirty.load() || g_gameState.isInMenu || g_gameState.isLoading) {
+        return;
+    }
+    const DWORD dirtyTick = g_runtimeConfigDirtyTick.load();
+    if (dirtyTick != 0 && GetTickCount() - dirtyTick < 250) {
         return;
     }
 
-    const int modeChanged = Config::ReadINIInt("Tools", "ModeChanged", 0);
-    if (modeChanged <= 0) {
+    Config::LoadRuntimeSettings();
+    InputManager::LoadConfig();
+    g_runtimeConfigDirty.store(false);
+    g_runtimeConfigDirtyTick.store(0);
+    ClearToolBridgeFile(kRuntimeConfigReloadPath);
+    Logger::LogInfo("GameLoop: Applied deferred runtime settings after menu close");
+}
+
+static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
+    return !state.inGame || state.paused || state.pipboyOpen ||
+        state.pauseMenuOpen || state.dialogueMenuOpen || state.barterMenuOpen ||
+        state.containerMenuOpen || state.loadingMenuOpen;
+}
+
+void RequestDialecticControlMenuOpen() {
+    const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
         return;
     }
 
-    Config::WriteCustomINIValue("Tools", "ModeChanged", "0");
-    const int legacySelectedModeIndex = Config::ReadINIInt("Modes", "CurrentIndex", 0);
-    ApplyModeIndex(legacySelectedModeIndex, true);
+    NPCDetector::NPCInfo waitTarget = NPCDetector::GetCrosshairNPC();
+    if (!waitTarget.isValid || waitTarget.isDead || waitTarget.formId == 0x00000014) {
+        waitTarget = NPCDetector::GetClosestNPC();
+    }
+    if (waitTarget.isValid && !waitTarget.isDead && waitTarget.formId != 0x00000014) {
+        g_dialecticControlTargetFormId = waitTarget.formId;
+        g_dialecticControlTargetName = waitTarget.name;
+        Logger::LogInfo("GameLoop: DIALECTIC Control captured Wait Here target %s (0x%08X) at %.1f units",
+            waitTarget.name.c_str(), waitTarget.formId, waitTarget.distance);
+    } else {
+        g_dialecticControlTargetFormId = 0;
+        g_dialecticControlTargetName.clear();
+        Logger::LogInfo("GameLoop: DIALECTIC Control found no living NPC for Wait Here");
+    }
+
+    // Re-read the live mode state on every open so the buttons advertise current values.
+    XNVSEAdapter::NativeToolMenuStatus status;
+    status.chatMode = ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8));
+    status.llmMode = ToUpperCopy(ProfileModelLabelFromSlot(Config::currentProfileModelSlot));
+
+    if (XNVSEAdapter::OpenNativeToolMenu(
+            XNVSEAdapter::NativeToolMenu::DialecticControl, nullptr, &status)) {
+        Logger::LogInfo("GameLoop: Opened Dialectic Control through native UI adapter");
+        return;
+    }
+    Logger::LogError("GameLoop: Failed to open Dialectic Control through native UI adapter");
+}
+
+void RequestControlMenuWaitHere() {
+    const uint32_t actorFormId = g_dialecticControlTargetFormId;
+    const std::string actorName = g_dialecticControlTargetName;
+    g_dialecticControlTargetFormId = 0;
+    g_dialecticControlTargetName.clear();
+
+    if (actorFormId == 0) {
+        Console::Print("[DIALECTIC] Look at an NPC or stand near one before choosing Wait Here");
+        Logger::LogInfo("GameLoop: DIALECTIC Control Wait Here selected without an NPC target");
+        return;
+    }
+
+    ActionManager::RequestWaitHere(actorFormId, actorName, "DialecticControl");
+}
+
+// Chat shortcuts deliberately omit the Control menu's nearest-NPC fallback.
+static void RequestChatHotkeyWaitHere() {
+    const NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
+    if (!npc.isValid || npc.isDead || npc.formId == 0x00000014) {
+        Console::Print("[DIALECTIC] Look at a living NPC to make them wait here");
+        return;
+    }
+    ActionManager::RequestWaitHere(npc.formId, npc.name, "ChatHotkey");
 }
 
 void RequestModeMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring mode selector while a blocking menu is open");
+        return;
+    }
+    const std::string modeMenuTitle = std::string("Mode: [") +
+        ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8)) + "]";
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode, modeMenuTitle.c_str())) {
         Logger::LogInfo("GameLoop: Opened mode selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenModeMenu", "1");
-    WriteToolBridgeSignal(kOpenModeMenuPath, "mode");
-    Logger::LogInfo("GameLoop: Requested mode selector menu");
+    Logger::LogError("GameLoop: Failed to open mode selector through native UI adapter");
 }
 
 void RequestTextInputMenuOpen() {
@@ -1147,107 +1334,28 @@ void RequestTextInputMenuOpen() {
 
 void RequestLLMModelMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::LlmModel)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring LLM model selector while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::LlmModel)) {
         Logger::LogInfo("GameLoop: Opened LLM model selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenLLMModelMenu", "1");
-    WriteToolBridgeSignal(kOpenLLMModelMenuPath, "llm_model");
-    Logger::LogInfo("GameLoop: Requested LLM model selector menu");
+    Logger::LogError("GameLoop: Failed to open LLM model selector through native UI adapter");
 }
 
 void RequestDynamicProfileMenuOpen() {
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
-    if (!state.inMenu && XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DynamicProfile)) {
+    if (IsToolMenuBlocked(state)) {
+        Logger::LogInfo("GameLoop: Ignoring dynamic profile selector while a blocking menu is open");
+        return;
+    }
+    if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::DynamicProfile)) {
         Logger::LogInfo("GameLoop: Opened dynamic profile selector through native UI adapter");
         return;
     }
-    Config::WriteCustomINIValue("Tools", "OpenDynamicProfileMenu", "1");
-    WriteToolBridgeSignal(kOpenDynamicProfileMenuPath, "dynamic_profile");
-    Logger::LogInfo("GameLoop: Requested dynamic profile selector menu");
-}
-
-static std::string BuildAgentNameSummary(
-    const std::vector<std::pair<uint32_t, std::string>>& actors,
-    std::size_t limit = 8) {
-    std::ostringstream summary;
-    const std::size_t count = std::min(limit, actors.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        if (i > 0) {
-            summary << ", ";
-        }
-        summary << (actors[i].second.empty() ? "Unknown NPC" : actors[i].second);
-    }
-    if (actors.size() > count) {
-        summary << " and " << (actors.size() - count) << " more";
-    }
-    return summary.str();
-}
-
-void ManageAIAgents(int action) {
-    switch (action) {
-        case 0:
-            ActivationManager::ActivateCurrentTarget(ActivationManager::ActivationSource::Manual);
-            return;
-        case 1: {
-            const std::size_t count = ActivationManager::ActivateNearbyActors(
-                ActivationManager::ActivationSource::Manual);
-            Logger::LogInfo("GameLoop: AI Agent manager added %zu nearby actor(s)", count);
-            Console::Print("[Dialectic] Added %zu nearby AI agent(s)", count);
-            return;
-        }
-        case 2: {
-            uint32_t formId = 0;
-            std::string name;
-            const NPCDetector::NPCInfo crosshairNpc = NPCDetector::GetCrosshairNPC();
-            if (crosshairNpc.isValid) {
-                formId = crosshairNpc.formId;
-                name = crosshairNpc.name;
-            } else {
-                const auto& target = TargetManager::GetCurrentTarget();
-                formId = target.formId;
-                name = target.name;
-            }
-            if (formId == 0 || !ActivationManager::DeactivateActor(formId)) {
-                Console::Print("[Dialectic] Target is not an active AI agent");
-                return;
-            }
-            Logger::LogInfo("GameLoop: AI Agent manager removed %s (0x%08X)", name.c_str(), formId);
-            Console::Print("[Dialectic] Removed AI agent: %s", name.empty() ? "Unknown NPC" : name.c_str());
-            return;
-        }
-        case 3: {
-            const std::size_t count = ActivationManager::DeactivateAllActors();
-            Logger::LogInfo("GameLoop: AI Agent manager removed all %zu agent(s)", count);
-            Console::Print("[Dialectic] Removed %zu AI agent(s)", count);
-            return;
-        }
-        case 4: {
-            const auto agents = AgentManager::GetRegisteredAgentSnapshot();
-            const std::string names = BuildAgentNameSummary(agents);
-            Logger::LogInfo("GameLoop: Active AI agents (%zu): %s", agents.size(), names.c_str());
-            if (agents.empty()) {
-                Console::Print("[Dialectic] No active AI agents");
-            } else {
-                Console::Print("[Dialectic] Active AI agents (%zu): %s", agents.size(), names.c_str());
-            }
-            return;
-        }
-        case 5: {
-            const auto actors = ActivationManager::GetNearbyManageableActors();
-            const std::string names = BuildAgentNameSummary(actors);
-            Logger::LogInfo("GameLoop: Nearby manageable actors (%zu): %s", actors.size(), names.c_str());
-            if (actors.empty()) {
-                Console::Print("[Dialectic] No nearby NPCs available");
-            } else {
-                Console::Print("[Dialectic] Nearby NPCs (%zu): %s", actors.size(), names.c_str());
-            }
-            return;
-        }
-        default:
-            Logger::LogWarning("GameLoop: Ignoring unknown AI Agent management action=%d", action);
-            return;
-    }
+    Logger::LogError("GameLoop: Failed to open dynamic profile selector through native UI adapter");
 }
 
 static uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
@@ -1330,13 +1438,13 @@ static void SendDynamicProfileBatchRequest(const std::vector<std::string>& npcNa
     }
 
     if (cleaned.empty()) {
-        Console::Print("[Dialectic] No AI NPCs found for dynamic profile update");
+        Console::Print("[DIALECTIC] No AI NPCs found for dynamic profile update");
         Logger::LogInfo("GameLoop: Dynamic profile request skipped; empty NPC list");
         return;
     }
 
     const std::string npcList = JoinCsv(cleaned);
-    Console::Print("[Dialectic] Updating %zu dynamic profile%s",
+    Console::Print("[DIALECTIC] Updating %zu dynamic profile%s",
         cleaned.size(),
         cleaned.size() == 1 ? "" : "s");
     Logger::LogInfo("GameLoop: Sending updateprofiles_batch_async for [%s]", npcList.c_str());
@@ -1358,13 +1466,13 @@ static void SendDynamicProfileBatchRequest(const std::vector<std::string>& npcNa
 static void TriggerDynamicProfileForCurrentTarget() {
     const auto& target = TargetManager::GetCurrentTarget();
     if (!target.isActor || target.name.empty() || target.name == "<no name>") {
-        Console::Print("[Dialectic] Target an AI NPC to update their dynamic profile");
+        Console::Print("[DIALECTIC] Target an AI NPC to update their dynamic profile");
         Logger::LogInfo("GameLoop: UpdateTargetProfile skipped; invalid target");
         return;
     }
 
     if (!AgentManager::IsAIAgent(target.formId)) {
-        Console::Print("[Dialectic] %s is not an active Dialectic NPC", target.name.c_str());
+        Console::Print("[DIALECTIC] %s is not an active DIALECTIC NPC", target.name.c_str());
         Logger::LogInfo("GameLoop: UpdateTargetProfile skipped; %s 0x%08X is not an AI agent",
             target.name.c_str(),
             target.formId);
@@ -1377,7 +1485,7 @@ static void TriggerDynamicProfileForCurrentTarget() {
 static void TriggerDynamicProfilesForNearbyAgents() {
     const auto player = ActorPositionResolverFNV::ResolvePlayer();
     if (!player.resolved) {
-        Console::Print("[Dialectic] Could not resolve player position for nearby profile update");
+        Console::Print("[DIALECTIC] Could not resolve player position for nearby profile update");
         Logger::LogInfo("GameLoop: UpdateNearbyProfiles skipped; player position unresolved");
         return;
     }
@@ -1439,7 +1547,7 @@ static void TriggerDynamicProfilesForNearbyAgents() {
 }
 
 static void TriggerDynamicProfileForNarrator() {
-    Console::Print("[Dialectic] Updating The Narrator dynamic profile");
+    Console::Print("[DIALECTIC] Updating The Narrator dynamic profile");
     Logger::LogInfo("GameLoop: Sending updateprofile_narrator");
     HTTPManager::SendEvent("updateprofile_narrator", "{\"schema\":\"dialectic.dynamic_profile.v1\",\"npc\":\"The Narrator\"}");
 }
@@ -1550,6 +1658,10 @@ static bool IsBoredEventBlocked(std::string& reason) {
         reason = "paused";
         return true;
     }
+    if (Config::boredAvoidInMenu && IsTextInputMenuActiveOrRecentlyClosed()) {
+        reason = "text input active";
+        return true;
+    }
     if (Config::boredAvoidInMenu && g_gameState.isInMenu) {
         reason = "menu open";
         return true;
@@ -1602,10 +1714,25 @@ static bool IsBoredEventBlocked(std::string& reason) {
     return false;
 }
 
-static std::string BuildBoredEventPayload(uint32_t actorFormId, const std::string& actorName) {
+static std::string BuildBoredEventPayload(
+    uint32_t actorFormId,
+    const std::string& actorName,
+    const std::vector<std::pair<uint32_t, std::string>>& eligibleActors) {
     const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
     const std::string location = Misc::GetPlayerLocation();
-    const std::string people = "|" + actorName + "|" + playerName + "|";
+    std::ostringstream people;
+    people << "|";
+    std::set<std::string> seenNames;
+    for (const auto& candidate : eligibleActors) {
+        if (candidate.second.empty() || !seenNames.insert(candidate.second).second) {
+            continue;
+        }
+        people << candidate.second << "|";
+    }
+    if (seenNames.insert(actorName).second) {
+        people << actorName << "|";
+    }
+    people << playerName << "|";
 
     std::ostringstream payload;
     payload << "{";
@@ -1620,8 +1747,22 @@ static std::string BuildBoredEventPayload(uint32_t actorFormId, const std::strin
     payload << "\"listener\":\"" << HTTPManager::EscapeJson(playerName) << "\",";
     payload << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\",";
     payload << "\"reason\":\"idle_bored\",";
-    payload << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\",";
-    payload << "\"audience_snapshot\":" << BuildAudienceSnapshotJson();
+    payload << "\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",";
+    payload << "\"eligible_actors\":[";
+    for (size_t index = 0; index < eligibleActors.size(); ++index) {
+        if (index > 0) {
+            payload << ",";
+        }
+        payload << "{\"name\":\"" << HTTPManager::EscapeJson(eligibleActors[index].second) << "\",";
+        payload << "\"refid\":\""
+            << HTTPManager::EscapeJson(FormatFormIdJsonValue(eligibleActors[index].first)) << "\"}";
+    }
+    payload << "],";
+    payload << "\"audience_snapshot\":{";
+    payload << "\"people\":\"" << HTTPManager::EscapeJson(people.str()) << "\",";
+    payload << "\"target_only\":false,";
+    payload << "\"target_form_id\":\""
+        << HTTPManager::EscapeJson(FormatFormIdJsonValue(actorFormId)) << "\"}";
     payload << "}";
     return payload.str();
 }
@@ -1670,6 +1811,13 @@ static std::vector<std::pair<uint32_t, std::string>> BuildFreshBoredCandidates(f
             ? spatial.airDistance
             : DistanceBetween(player.position, position.position);
         if (maxDistance > 0.0f && distance > maxDistance) {
+            continue;
+        }
+
+        std::string activityReason;
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, &activityReason)) {
+            Logger::LogDebug("GameLoop: Bored candidate %s (0x%08X) skipped: %s",
+                position.actorName.c_str(), position.formId, activityReason.c_str());
             continue;
         }
 
@@ -1746,9 +1894,10 @@ static void UpdateBoredEventTimer() {
     }
 
     RefreshPlayerNameFromGame();
-    const std::string payload = BuildBoredEventPayload(selectedFormId, selectedName);
+    const std::string payload = BuildBoredEventPayload(selectedFormId, selectedName, freshCandidates);
     AgentManager::MarkBoredEventFired(selectedFormId);
     Logger::LogInfo("GameLoop: Sending bored event for %s (0x%08X)", selectedName.c_str(), selectedFormId);
+    SpeakManager::StartRechatChainForAutonomousEvent();
     HTTPManager::SendEvent("bored", payload);
 }
 
@@ -1826,7 +1975,7 @@ static void CaptureRuntimeStatusFromServer(const std::string& response) {
 
     {
         std::lock_guard<std::mutex> lock(g_runtimeStatusMutex);
-        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 7);
+        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 8);
         g_pendingRuntimeModelSlot = modelSlot;
         g_runtimeStatusPending = true;
     }
@@ -2101,14 +2250,14 @@ static bool ParseBridgeFlag(const std::unordered_map<std::string, std::string>& 
 
 static void CancelDialogueForCombatEntry() {
     Logger::LogInfo("GameLoop: Player entered combat - cancelling active AI dialogue");
-    Console::Print("[Dialectic] Combat started - clearing AI dialogue");
+    Console::Print("[DIALECTIC] Combat started - clearing AI dialogue");
     SpeakManager::CancelDialogueTurn("combat_entry", false, false);
     ResetBoredEventTimer("combat entry");
 }
 
 static void CancelDialogueForVanillaDialogueEntry() {
     Logger::LogInfo("GameLoop: Vanilla dialogue menu opened - cancelling active AI dialogue");
-    ResetRuntimeForAIActions("vanilla_dialogue_menu_open", true, false, false, false);
+    ResetRuntimeForAIActions("vanilla_dialogue_menu_open", true, false, false);
 }
 
 static bool HasDialoguePlaybackWorkForMenuPause() {
@@ -2129,91 +2278,38 @@ static bool HasDialoguePlaybackWorkForMenuPause() {
         || status.currentPlaybackLineActive;
 }
 
-static void RefreshGameStateBridge() {
+static void RefreshGameState() {
     static bool s_hadState = false;
     static bool s_lastInMenu = false;
     static bool s_lastPaused = false;
     static bool s_lastInDialogue = false;
     static bool s_lastInCombat = false;
-    static bool s_lastUsedNative = false;
-    static std::chrono::steady_clock::time_point s_lastComparisonSample;
 
     RuntimeSnapshot::GameState nativeState;
-    const bool nativeFresh = RuntimeSnapshot::TryGetFreshGameState(
-        nativeState, std::chrono::milliseconds(500));
-
-    bool bridgeFresh = false;
-    bool bridgeInMenu = false;
-    bool bridgePaused = false;
-    bool bridgeDialogue = false;
-    bool bridgeCombat = false;
-    uint64_t bridgeAgeMs = 0;
-    if (GetFileModifiedAgeMs(kGameStateBridgePath, bridgeAgeMs) && bridgeAgeMs <= 750) {
-        const std::string data = ReadFileIfExists(kGameStateBridgePath);
-        if (!data.empty()) {
-            const auto values = ParseBridgeKeyValueData(data);
-            const bool tradeMenuOpen = ParseBridgeFlag(values, "trade_menu_mode", false);
-            const bool pipboyOpen = ParseBridgeFlag(values, "pipboy_open", false);
-            const bool pauseMenuOpen = ParseBridgeFlag(values, "pause_menu_open", false);
-            bridgeDialogue = ParseBridgeFlag(values, "dialogue_menu_open", false);
-            bridgePaused = tradeMenuOpen || pipboyOpen || pauseMenuOpen;
-            bridgeInMenu = bridgePaused || bridgeDialogue;
-            bridgeCombat = ParseBridgeFlag(values, "combat", ParseBridgeFlag(values, "in_combat", false));
-            bridgeFresh = true;
-        }
+    if (!RuntimeSnapshot::TryGetFreshGameState(nativeState, std::chrono::milliseconds(500))) {
+        return;
     }
 
-    const bool nativeBlockingMenu = nativeFresh && (
+    const bool inMenu =
         nativeState.paused ||
         nativeState.pipboyOpen ||
         nativeState.pauseMenuOpen ||
         nativeState.dialogueMenuOpen ||
         nativeState.barterMenuOpen ||
         nativeState.containerMenuOpen ||
-        nativeState.loadingMenuOpen);
-    const bool inMenu = nativeFresh ? nativeBlockingMenu : bridgeInMenu;
-    const bool paused = nativeFresh ? nativeState.paused : bridgePaused;
-    const bool inDialogue = nativeFresh ? nativeState.dialogueMenuOpen : bridgeDialogue;
-    const bool inCombat = nativeFresh ? nativeState.inCombat : bridgeCombat;
-    if (!nativeFresh && !bridgeFresh) {
-        return;
-    }
-
-    if (nativeFresh && bridgeFresh) {
-        const auto now = std::chrono::steady_clock::now();
-        if (s_lastComparisonSample.time_since_epoch().count() == 0 ||
-            now - s_lastComparisonSample >= std::chrono::seconds(1)) {
-            const bool equivalent = nativeBlockingMenu == bridgeInMenu &&
-                nativeState.paused == bridgePaused &&
-                nativeState.dialogueMenuOpen == bridgeDialogue &&
-                nativeState.inCombat == bridgeCombat;
-            std::ostringstream detail;
-            detail << "native=" << (nativeBlockingMenu ? 1 : 0)
-                   << "," << (nativeState.paused ? 1 : 0)
-                   << "," << (nativeState.dialogueMenuOpen ? 1 : 0)
-                   << "," << (nativeState.inCombat ? 1 : 0)
-                   << " bridge=" << (bridgeInMenu ? 1 : 0)
-                   << "," << (bridgePaused ? 1 : 0)
-                   << "," << (bridgeDialogue ? 1 : 0)
-                   << "," << (bridgeCombat ? 1 : 0)
-                   << " age_ms=" << bridgeAgeMs;
-            NativeComparisonTelemetry::Record("game_state",
-                equivalent ? NativeComparisonTelemetry::Result::Match
-                           : NativeComparisonTelemetry::Result::Mismatch,
-                detail.str());
-            s_lastComparisonSample = now;
-        }
-    }
+        nativeState.loadingMenuOpen;
+    const bool paused = nativeState.paused;
+    const bool inDialogue = nativeState.dialogueMenuOpen;
+    const bool inCombat = nativeState.inCombat;
 
     if (!s_hadState || s_lastInMenu != inMenu || s_lastPaused != paused ||
         s_lastInDialogue != inDialogue ||
-        s_lastInCombat != inCombat || s_lastUsedNative != nativeFresh) {
-        Log("GameLoop: Runtime state source=%s inGame=%d inMenu=%d paused=%d dialogue=%d combat=%d loading=%d",
-            nativeFresh ? "native" : "bridge",
-            nativeFresh ? (nativeState.inGame ? 1 : 0) : 1,
+        s_lastInCombat != inCombat) {
+        Log("GameLoop: Native runtime state inGame=%d inMenu=%d paused=%d dialogue=%d combat=%d loading=%d",
+            nativeState.inGame ? 1 : 0,
             inMenu ? 1 : 0, paused ? 1 : 0, inDialogue ? 1 : 0,
             inCombat ? 1 : 0,
-            nativeFresh ? (nativeState.loadingMenuOpen ? 1 : 0) : 0);
+            nativeState.loadingMenuOpen ? 1 : 0);
         if (s_hadState && !s_lastInCombat && inCombat && Config::cancelDialogueOnCombat) {
             CancelDialogueForCombatEntry();
         }
@@ -2225,15 +2321,14 @@ static void RefreshGameStateBridge() {
         s_lastPaused = paused;
         s_lastInDialogue = inDialogue;
         s_lastInCombat = inCombat;
-        s_lastUsedNative = nativeFresh;
     }
 
     g_gameState.isInMenu = inMenu;
     g_gameState.isPaused = paused;
     g_gameState.isInDialogue = inDialogue;
     g_gameState.isInCombat = inCombat;
-    g_gameState.isInGame = nativeFresh ? nativeState.inGame : true;
-    g_gameState.isLoading = nativeFresh ? nativeState.loadingMenuOpen : false;
+    g_gameState.isInGame = nativeState.inGame;
+    g_gameState.isLoading = nativeState.loadingMenuOpen;
 }
 
 enum class FreshTargetResult {
@@ -2324,7 +2419,7 @@ static bool IsConversationTargetOnCooldown(uint32_t formId, const std::string& n
         formId,
         std::max<long long>(0, remainingMs) / 1000.0);
     if (notify) {
-        Console::Print("[Dialectic] %s has finished talking with you for now.",
+        Console::Print("[DIALECTIC] %s has finished talking with you for now.",
             displayName.empty() ? "This NPC" : displayName.c_str());
     }
     return true;
@@ -2338,13 +2433,13 @@ static FreshTargetResult TrySetCurrentTargetFromCrosshair(bool announceTarget) {
     }
 
     if (NPCDetector::IsExcluded(npc.formId, npc.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", npc.name.c_str());
         Logger::LogInfo("GameLoop: Crosshair NPC %s is excluded", npc.name.c_str());
         return FreshTargetResult::Blocked;
     }
 
     if (npc.isDead) {
-        Console::Print("[Dialectic] Cannot talk to %s (dead)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (dead)", npc.name.c_str());
         Logger::LogInfo("GameLoop: Crosshair NPC %s is dead", npc.name.c_str());
         return FreshTargetResult::Blocked;
     }
@@ -2368,7 +2463,7 @@ static bool UpdateConversationPartnerFromCurrentTarget(const char* reason) {
     }
 
     if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", currentTarget.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
         Logger::LogInfo("GameLoop: Current target %s is excluded", currentTarget.name.c_str());
         return false;
     }
@@ -2411,9 +2506,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor && currentTarget.isAlive && currentTarget.formId != 0 && !currentTarget.name.empty()) {
+    if (currentTarget.formId != 0 && !currentTarget.name.empty() &&
+        (!currentTarget.isActor || !currentTarget.isAlive)) {
+        Logger::LogInfo("GameLoop: Remembered target %s (0x%08X) has stale actor state; continuing target fallback",
+            currentTarget.name.c_str(), currentTarget.formId);
+    } else if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
         if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
-            Console::Print("[Dialectic] Cannot talk to %s (excluded)", currentTarget.name.c_str());
+            Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
             Logger::LogInfo("GameLoop: TargetManager NPC %s is excluded, cannot start conversation",
                 currentTarget.name.c_str());
             return ConversationStartResult::Blocked;
@@ -2434,13 +2533,14 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
 
     NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
     Logger::LogInfo("GameLoop: No crosshair target, finding closest NPC...");
-    npc = NPCDetector::GetClosestNPC(500.0f);
+    const float targetRadius = GetConversationTargetRadius();
+    npc = NPCDetector::GetClosestNPC(targetRadius);
 
     if (!npc.isValid) {
         Logger::LogInfo("GameLoop: No NPCDetector target, finding closest spatial actor...");
         const auto player = ActorPositionResolverFNV::ResolvePlayer();
         const auto positions = ActorPositionResolverFNV::GetRecentActorPositions();
-        float bestDistanceSq = 500.0f * 500.0f;
+        float bestDistanceSq = targetRadius * targetRadius;
         ActorPositionResolverFNV::PositionResult bestPosition;
 
         if (player.resolved) {
@@ -2468,7 +2568,7 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         }
 
         if (!bestPosition.resolved) {
-            Console::Print("[Dialectic] No NPC found nearby");
+            Console::Print("[DIALECTIC] No NPC found nearby");
             Logger::LogInfo("GameLoop: No valid NPC found for conversation");
             return ConversationStartResult::NoTarget;
         }
@@ -2484,13 +2584,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
     }
 
     if (NPCDetector::IsExcluded(npc.formId, npc.name)) {
-        Console::Print("[Dialectic] Cannot talk to %s (excluded)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", npc.name.c_str());
         Logger::LogInfo("GameLoop: NPC %s is excluded, cannot start conversation", npc.name.c_str());
         return ConversationStartResult::Blocked;
     }
 
     if (npc.isDead) {
-        Console::Print("[Dialectic] Cannot talk to %s (dead)", npc.name.c_str());
+        Console::Print("[DIALECTIC] Cannot talk to %s (dead)", npc.name.c_str());
         Logger::LogInfo("GameLoop: NPC %s is dead, cannot start conversation", npc.name.c_str());
         return ConversationStartResult::Blocked;
     }
@@ -2509,8 +2609,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         : ConversationStartResult::Blocked;
 }
 
-static bool WriteTextInputTargetHint(const std::string& targetName) {
-    if (targetName.empty()) {
+static void ClearPreparedTextInputTarget() {
+    g_preparedTextInputTarget = {};
+}
+
+static bool WriteTextInputTargetHint(uint32_t formId, const std::string& targetName) {
+    if (formId == 0 || targetName.empty()) {
+        ClearPreparedTextInputTarget();
         ClearToolBridgeFile(kTextInputTargetPath);
         return false;
     }
@@ -2518,10 +2623,18 @@ static bool WriteTextInputTargetHint(const std::string& targetName) {
     std::ofstream out(kTextInputTargetPath, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
         Logger::LogWarning("GameLoop: Failed to write text input target hint");
+        ClearPreparedTextInputTarget();
         return false;
     }
 
     out << targetName << "\n";
+    g_preparedTextInputTarget.formId = formId;
+    g_preparedTextInputTarget.name = targetName;
+    g_preparedTextInputTarget.runtimeGeneration = RuntimeGeneration::Current();
+    Logger::LogInfo("[TEXT_INPUT_TARGET] retained form=0x%08X name=%s generation=%llu",
+        formId,
+        targetName.c_str(),
+        static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
     return true;
 }
 
@@ -2542,12 +2655,17 @@ static bool PrepareTargetFromNpcInfo(const NPCDetector::NPCInfo& npc, const char
             source ? source : "unknown", npc.name.c_str());
         return false;
     }
+    if (npc.distance > GetConversationTargetRadius()) {
+        Logger::LogInfo("GameLoop: Skipping %s chatbox target %s outside mode radius distance=%.1f radius=%.1f",
+            source ? source : "unknown", npc.name.c_str(), npc.distance, GetConversationTargetRadius());
+        return false;
+    }
     if (IsConversationTargetOnCooldown(npc.formId, npc.name, true)) {
         return false;
     }
 
     TargetManager::SetCurrentTarget(npc.formId, npc.name, true);
-    WriteTextInputTargetHint(npc.name);
+    WriteTextInputTargetHint(npc.formId, npc.name);
     Logger::LogInfo("GameLoop: Prepared %s chatbox target %s (0x%08X)",
         source ? source : "unknown",
         npc.name.c_str(),
@@ -2600,7 +2718,7 @@ static bool PrepareNearestSpatialTextInputTarget(float maxDistance) {
     }
 
     TargetManager::SetCurrentTarget(bestPosition.formId, bestPosition.actorName, true);
-    WriteTextInputTargetHint(bestPosition.actorName);
+    WriteTextInputTargetHint(bestPosition.formId, bestPosition.actorName);
     Logger::LogInfo("GameLoop: Prepared nearest spatial chatbox target %s (0x%08X)",
         bestPosition.actorName.c_str(),
         bestPosition.formId);
@@ -2608,42 +2726,73 @@ static bool PrepareNearestSpatialTextInputTarget(float maxDistance) {
 }
 
 static void PrepareTextInputTargetHint() {
+    ClearPreparedTextInputTarget();
     ClearToolBridgeFile(kTextInputTargetPath);
 
-    if (PrepareTargetFromNpcInfo(NPCDetector::GetCrosshairNPC(), "crosshair")) {
+    const float targetRadius = GetConversationTargetRadius();
+    const NPCDetector::NPCInfo crosshairTarget = NPCDetector::GetCrosshairNPC();
+    const NPCDetector::NPCInfo closestTarget = NPCDetector::GetClosestNPC(targetRadius);
+    const auto currentTarget = TargetManager::GetCurrentTarget();
+    Logger::LogInfo(
+        "[TEXT_INPUT_TARGET] open generation=%llu radius=%.1f "
+        "crosshair(valid=%d form=0x%08X name=%s dead=%d creature=%d distance=%.1f) "
+        "closest(valid=%d form=0x%08X name=%s dead=%d creature=%d distance=%.1f) "
+        "current(form=0x%08X name=%s actor=%d alive=%d) "
+        "conversation(active=%d narrator=%d form=0x%08X name=%s)",
+        static_cast<unsigned long long>(RuntimeGeneration::Current()),
+        targetRadius,
+        crosshairTarget.isValid ? 1 : 0,
+        crosshairTarget.formId,
+        crosshairTarget.name.c_str(),
+        crosshairTarget.isDead ? 1 : 0,
+        crosshairTarget.isCreature ? 1 : 0,
+        crosshairTarget.distance,
+        closestTarget.isValid ? 1 : 0,
+        closestTarget.formId,
+        closestTarget.name.c_str(),
+        closestTarget.isDead ? 1 : 0,
+        closestTarget.isCreature ? 1 : 0,
+        closestTarget.distance,
+        currentTarget.formId,
+        currentTarget.name.c_str(),
+        currentTarget.isActor ? 1 : 0,
+        currentTarget.isAlive ? 1 : 0,
+        g_conversationActive ? 1 : 0,
+        g_conversationIsNarrator ? 1 : 0,
+        g_conversationPartnerFormId.load(),
+        g_conversationPartner.c_str());
+
+    if (PrepareTargetFromNpcInfo(crosshairTarget, "crosshair")) {
         return;
     }
 
-    if (PrepareTargetFromNpcInfo(NPCDetector::GetClosestNPC(500.0f), "nearest npc")) {
+    if (PrepareTargetFromNpcInfo(closestTarget, "nearest npc")) {
         return;
     }
 
-    if (PrepareNearestSpatialTextInputTarget(500.0f)) {
-        return;
-    }
-
-    const auto& currentTarget = TargetManager::GetCurrentTarget();
-    if (currentTarget.isActor &&
-        currentTarget.isAlive &&
-        currentTarget.formId != 0 &&
+    if (currentTarget.formId != 0 &&
         !currentTarget.name.empty() &&
         !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
         IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
         !IsConversationTargetOnCooldown(currentTarget.formId, currentTarget.name, false)) {
-        WriteTextInputTargetHint(currentTarget.name);
+        WriteTextInputTargetHint(currentTarget.formId, currentTarget.name);
         Logger::LogInfo("GameLoop: Prepared cached chatbox target %s (0x%08X)",
             currentTarget.name.c_str(),
             currentTarget.formId);
         return;
     }
 
+    if (PrepareNearestSpatialTextInputTarget(targetRadius)) {
+        return;
+    }
+
     if (g_conversationActive && !g_conversationIsNarrator &&
         g_conversationPartnerFormId != 0 && !g_conversationPartner.empty() &&
         IsConversationTargetEligible(g_conversationPartnerFormId, g_conversationPartner, false)) {
-        WriteTextInputTargetHint(g_conversationPartner);
+        WriteTextInputTargetHint(g_conversationPartnerFormId, g_conversationPartner);
         Logger::LogInfo("GameLoop: Prepared active conversation chatbox target %s (0x%08X)",
             g_conversationPartner.c_str(),
-            g_conversationPartnerFormId);
+            g_conversationPartnerFormId.load());
         return;
     }
 
@@ -2652,11 +2801,17 @@ static void PrepareTextInputTargetHint() {
 
 static void ProcessTextInputBridge() {
     const std::string status = ReadAndDeleteTextInputFile(kTextInputStatusPath);
+    bool bridgeClosed = false;
+    bool bridgeSubmitted = false;
+    bool bridgeBlocked = false;
     if (!status.empty()) {
         const auto statusValues = ParseBridgeKeyValueData(status);
-        if (ParseBridgeFlag(statusValues, "closed", false)) {
-            MarkTextInputMenuClosed(ParseBridgeFlag(statusValues, "submitted", false) ? "submitted" : "closed");
-        } else if (ParseBridgeFlag(statusValues, "blocked", false)) {
+        bridgeClosed = ParseBridgeFlag(statusValues, "closed", false);
+        bridgeSubmitted = ParseBridgeFlag(statusValues, "submitted", false);
+        bridgeBlocked = ParseBridgeFlag(statusValues, "blocked", false);
+        if (bridgeClosed) {
+            MarkTextInputMenuClosed(bridgeSubmitted ? "submitted" : "closed");
+        } else if (bridgeBlocked) {
             MarkTextInputMenuClosed("blocked");
         }
     }
@@ -2664,15 +2819,69 @@ static void ProcessTextInputBridge() {
     std::string message = TrimInput(ReadAndDeleteTextInputFile("Data\\NVSE\\Plugins\\dialectic_textinput.tmp"));
 
     if (message.empty()) {
-        if (!status.empty()) {
+        // entered/opening status files arrive while the menu is active; only terminal states may discard the target.
+        if (bridgeClosed || bridgeBlocked) {
+            Logger::LogInfo(
+                "[TEXT_INPUT_TARGET] bridge completed without message; clearing retained form=0x%08X name=%s generation=%llu",
+                g_preparedTextInputTarget.formId,
+                g_preparedTextInputTarget.name.c_str(),
+                static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
+            ClearPreparedTextInputTarget();
             Logger::LogInfo("GameLoop: Text input closed without a message; no request will be sent");
+        } else if (!status.empty()) {
+            Logger::LogInfo(
+                "[TEXT_INPUT_TARGET] bridge status received while menu remains open; retaining form=0x%08X name=%s generation=%llu",
+                g_preparedTextInputTarget.formId,
+                g_preparedTextInputTarget.name.c_str(),
+                static_cast<unsigned long long>(g_preparedTextInputTarget.runtimeGeneration));
         }
         return;
     }
 
+    const PreparedTextInputTarget preparedTarget = g_preparedTextInputTarget;
+    ClearPreparedTextInputTarget();
     MarkTextInputMenuClosed("message received");
     Logger::LogInfo("GameLoop: Received typed message from script bridge: %s", message.c_str());
+    const std::uint64_t currentGeneration = RuntimeGeneration::Current();
+    const bool hasPreparedTarget = preparedTarget.formId != 0 && !preparedTarget.name.empty();
+    const bool preparedGenerationCurrent = hasPreparedTarget &&
+        RuntimeGeneration::IsCurrent(preparedTarget.runtimeGeneration);
+    const auto submitCurrentTarget = TargetManager::GetCurrentTarget();
+    const NPCDetector::NPCInfo submitCrosshairTarget = NPCDetector::GetCrosshairNPC();
+    Logger::LogInfo(
+        "[TEXT_INPUT_TARGET] submit prepared(form=0x%08X name=%s generation=%llu current_generation=%llu valid_generation=%d) "
+        "current(form=0x%08X name=%s actor=%d alive=%d) "
+        "crosshair(valid=%d form=0x%08X name=%s dead=%d distance=%.1f) "
+        "conversation(active=%d narrator=%d form=0x%08X name=%s)",
+        preparedTarget.formId,
+        preparedTarget.name.c_str(),
+        static_cast<unsigned long long>(preparedTarget.runtimeGeneration),
+        static_cast<unsigned long long>(currentGeneration),
+        preparedGenerationCurrent ? 1 : 0,
+        submitCurrentTarget.formId,
+        submitCurrentTarget.name.c_str(),
+        submitCurrentTarget.isActor ? 1 : 0,
+        submitCurrentTarget.isAlive ? 1 : 0,
+        submitCrosshairTarget.isValid ? 1 : 0,
+        submitCrosshairTarget.formId,
+        submitCrosshairTarget.name.c_str(),
+        submitCrosshairTarget.isDead ? 1 : 0,
+        submitCrosshairTarget.distance,
+        g_conversationActive ? 1 : 0,
+        g_conversationIsNarrator ? 1 : 0,
+        g_conversationPartnerFormId.load(),
+        g_conversationPartner.c_str());
+    if (hasPreparedTarget && !preparedGenerationCurrent) {
+        Logger::LogWarning(
+            "[TEXT_INPUT_TARGET] discarded retained target because runtime generation changed form=0x%08X name=%s prepared_generation=%llu current_generation=%llu reason=%s",
+            preparedTarget.formId,
+            preparedTarget.name.c_str(),
+            static_cast<unsigned long long>(preparedTarget.runtimeGeneration),
+            static_cast<unsigned long long>(currentGeneration),
+            RuntimeGeneration::LastReason());
+    }
     if (ShouldRouteToNarrator(message, true)) {
+        Logger::LogInfo("[TEXT_INPUT_TARGET] routing submitted text to narrator");
         if (!g_conversationActive || !g_conversationIsNarrator) {
             StartNarratorConversation("typed input");
         }
@@ -2683,13 +2892,31 @@ static void ProcessTextInputBridge() {
     ClearConversationIfPartnerLeftScene("typed input");
 
     if (!g_conversationActive) {
-        Logger::LogInfo("GameLoop: No active conversation for typed message, trying current target");
-        const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
-        if (startResult != ConversationStartResult::Started) {
-            if (startResult == ConversationStartResult::NoTarget) {
-                Console::Print("[Dialectic] Target an NPC before sending text");
+        if (preparedGenerationCurrent) {
+            Logger::LogInfo("GameLoop: Starting typed conversation with prepared chatbox target %s (0x%08X)",
+                preparedTarget.name.c_str(), preparedTarget.formId);
+            TargetManager::SetCurrentTarget(preparedTarget.formId, preparedTarget.name, true);
+            if (!StartConversation()) {
+                const auto failedTarget = TargetManager::GetCurrentTarget();
+                Logger::LogWarning(
+                    "[TEXT_INPUT_TARGET] prepared conversation start failed retained(form=0x%08X name=%s) current(form=0x%08X name=%s actor=%d alive=%d)",
+                    preparedTarget.formId,
+                    preparedTarget.name.c_str(),
+                    failedTarget.formId,
+                    failedTarget.name.c_str(),
+                    failedTarget.isActor ? 1 : 0,
+                    failedTarget.isAlive ? 1 : 0);
+                return;
             }
-            return;
+        } else {
+            Logger::LogInfo("GameLoop: No active conversation for typed message, trying current target");
+            const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
+            if (startResult != ConversationStartResult::Started) {
+                if (startResult == ConversationStartResult::NoTarget) {
+                    Console::Print("[DIALECTIC] Target an NPC before sending text");
+                }
+                return;
+            }
         }
     } else if (!g_conversationIsNarrator) {
         if (IsConversationTargetOnCooldown(g_conversationPartnerFormId, g_conversationPartner, true)) {
@@ -2697,6 +2924,23 @@ static void ProcessTextInputBridge() {
             g_conversationIsNarrator = false;
             g_conversationPartner.clear();
             g_conversationPartnerFormId = 0;
+            return;
+        }
+        if (preparedGenerationCurrent) {
+            TargetManager::SetCurrentTarget(preparedTarget.formId, preparedTarget.name, true);
+            if (!UpdateConversationPartnerFromCurrentTarget("typed input prepared chatbox target")) {
+                const auto failedTarget = TargetManager::GetCurrentTarget();
+                Logger::LogWarning(
+                    "[TEXT_INPUT_TARGET] prepared conversation retarget failed retained(form=0x%08X name=%s) current(form=0x%08X name=%s actor=%d alive=%d)",
+                    preparedTarget.formId,
+                    preparedTarget.name.c_str(),
+                    failedTarget.formId,
+                    failedTarget.name.c_str(),
+                    failedTarget.isActor ? 1 : 0,
+                    failedTarget.isAlive ? 1 : 0);
+                return;
+            }
+            SendPlayerMessage(message);
             return;
         }
         const FreshTargetResult crosshairResult = TrySetCurrentTargetFromCrosshair(false);
@@ -2749,16 +2993,161 @@ static bool SelectRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
         return outFormId != 0 && !outName.empty();
     }
 
-    const auto registered = AgentManager::GetRegisteredAgentSnapshot();
-    for (const auto& [formId, name] : registered) {
-        if (formId != 0 && !name.empty()) {
-            outFormId = formId;
-            outName = name;
-            return true;
+    return false;
+}
+
+static bool IsCombatRpgSpeakerCandidate(
+    uint32_t formId,
+    const RuntimeSnapshot::GameState& gameState,
+    RuntimeSnapshot::ActorState& outActor) {
+    return formId != 0 &&
+        AgentManager::IsAIAgent(formId) &&
+        RuntimeSnapshot::TryGetActor(formId, outActor) &&
+        outActor.loaded3D &&
+        !outActor.dead &&
+        outActor.inCombat &&
+        !outActor.name.empty() &&
+        RuntimeSnapshot::IsActorInScene(outActor, gameState);
+}
+
+static bool SelectCombatRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
+    outFormId = 0;
+    outName.clear();
+
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    RuntimeSnapshot::ActorState actor;
+    uint32_t conversationFormId = g_conversationPartnerFormId;
+    if (conversationFormId == 0 && !g_conversationPartner.empty()) {
+        conversationFormId = AgentManager::FindAgentFormIdByName(g_conversationPartner);
+    }
+    if (g_conversationActive && !g_conversationIsNarrator &&
+        IsCombatRpgSpeakerCandidate(conversationFormId, gameState, actor)) {
+        outFormId = actor.formId;
+        outName = actor.name;
+        return true;
+    }
+
+    const auto& target = TargetManager::GetCurrentTarget();
+    if (target.isActor && target.isAIAgent &&
+        IsCombatRpgSpeakerCandidate(target.formId, gameState, actor)) {
+        outFormId = actor.formId;
+        outName = actor.name;
+        return true;
+    }
+
+    const float maxDistance = std::max(Config::distanceActivatingNpcInterior, Config::distanceActivatingNpcExterior);
+    float nearestDistance = std::numeric_limits<float>::max();
+    for (const RuntimeSnapshot::ActorState& candidate : RuntimeSnapshot::GetActors()) {
+        if (!IsCombatRpgSpeakerCandidate(candidate.formId, gameState, actor) ||
+            (maxDistance > 0.0f && actor.distanceToPlayer > maxDistance) ||
+            actor.distanceToPlayer >= nearestDistance) {
+            continue;
+        }
+        nearestDistance = actor.distanceToPlayer;
+        outFormId = actor.formId;
+        outName = actor.name;
+    }
+
+    return outFormId != 0 && !outName.empty();
+}
+
+struct CombatPromptContext {
+    std::vector<std::string> allies;
+    std::vector<std::string> hostiles;
+};
+
+// Builds the current combat graph without applying conversational race eligibility to enemies.
+static CombatPromptContext BuildCombatPromptContext(
+    uint32_t speakerFormId,
+    const std::string& playerName) {
+    CombatPromptContext context;
+    const RuntimeSnapshot::GameState gameState = RuntimeSnapshot::GetGameState();
+    const std::vector<RuntimeSnapshot::ActorState> actors = RuntimeSnapshot::GetActors();
+    std::unordered_map<uint32_t, const RuntimeSnapshot::ActorState*> actorsByFormId;
+    actorsByFormId.reserve(actors.size());
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (actor.formId != 0) {
+            actorsByFormId[actor.formId] = &actor;
         }
     }
 
-    return false;
+    auto isLiveCombatActor = [&](const RuntimeSnapshot::ActorState& actor) {
+        return actor.formId != 0 && actor.inCombat && actor.loaded3D && !actor.dead &&
+            !actor.name.empty() && RuntimeSnapshot::IsActorInScene(actor, gameState);
+    };
+
+    std::set<uint32_t> alliedFormIds;
+    std::set<uint32_t> hostileFormIds;
+    std::set<std::string> alliedNames;
+    std::set<std::string> hostileNames;
+    auto addName = [](std::vector<std::string>& values, std::set<std::string>& names, const std::string& name) {
+        const std::string trimmed = TrimInput(name);
+        if (!trimmed.empty() && names.insert(ToLowerCopy(trimmed)).second) {
+            values.push_back(trimmed);
+        }
+    };
+    if (gameState.inCombat) {
+        addName(context.allies, alliedNames, playerName);
+    }
+    if (gameState.playerFormId != 0) {
+        alliedFormIds.insert(gameState.playerFormId);
+    }
+    alliedFormIds.insert(speakerFormId);
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (!isLiveCombatActor(actor)) {
+            continue;
+        }
+        if (actor.playerTeammate) {
+            alliedFormIds.insert(actor.formId);
+        } else if (actor.hostileToPlayer) {
+            hostileFormIds.insert(actor.formId);
+        }
+    }
+
+    bool expanded = true;
+    while (expanded) {
+        expanded = false;
+        for (const RuntimeSnapshot::ActorState& actor : actors) {
+            if (!isLiveCombatActor(actor) || actor.combatTargetFormId == 0) {
+                continue;
+            }
+            const auto targetIt = actorsByFormId.find(actor.combatTargetFormId);
+            if (targetIt == actorsByFormId.end() || !isLiveCombatActor(*targetIt->second)) {
+                continue;
+            }
+
+            const bool actorAllied = alliedFormIds.count(actor.formId) != 0;
+            const bool actorHostile = hostileFormIds.count(actor.formId) != 0;
+            const bool targetAllied = alliedFormIds.count(actor.combatTargetFormId) != 0;
+            const bool targetHostile = hostileFormIds.count(actor.combatTargetFormId) != 0;
+            if (actorAllied && !targetAllied && !targetHostile) {
+                expanded = hostileFormIds.insert(actor.combatTargetFormId).second || expanded;
+            } else if (actorHostile && !targetAllied && !targetHostile) {
+                expanded = alliedFormIds.insert(actor.combatTargetFormId).second || expanded;
+            } else if (targetAllied && !actorAllied && !actorHostile) {
+                expanded = hostileFormIds.insert(actor.formId).second || expanded;
+            } else if (targetHostile && !actorAllied && !actorHostile) {
+                expanded = alliedFormIds.insert(actor.formId).second || expanded;
+            }
+        }
+    }
+
+    const auto speakerIt = actorsByFormId.find(speakerFormId);
+    if (speakerIt != actorsByFormId.end()) {
+        addName(context.allies, alliedNames, speakerIt->second->name);
+    }
+    for (const RuntimeSnapshot::ActorState& actor : actors) {
+        if (!isLiveCombatActor(actor)) {
+            continue;
+        }
+        if (alliedFormIds.count(actor.formId) != 0) {
+            addName(context.allies, alliedNames, actor.name);
+        } else if (hostileFormIds.count(actor.formId) != 0) {
+            addName(context.hostiles, hostileNames, actor.name);
+        }
+    }
+
+    return context;
 }
 
 struct RpgBridgeEvent {
@@ -2768,6 +3157,38 @@ struct RpgBridgeEvent {
     std::string itemName;
     std::vector<std::pair<std::string, std::string>> items;
 };
+
+static std::mutex g_rpgCommentQueueMutex;
+static std::deque<RpgBridgeEvent> g_rpgCommentQueue;
+static std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_lastQueuedRpgEvent;
+
+void QueueRpgCommentEvent(const std::string& eventType, const std::string& eventText) {
+    const std::string type = TrimInput(eventType);
+    const std::string text = TrimInput(eventText);
+    if (type.empty() || text.empty()) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const std::string dedupeKey = type + "\n" + text;
+    std::lock_guard<std::mutex> lock(g_rpgCommentQueueMutex);
+    for (auto it = g_lastQueuedRpgEvent.begin(); it != g_lastQueuedRpgEvent.end();) {
+        if (now - it->second >= std::chrono::minutes(1)) {
+            it = g_lastQueuedRpgEvent.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    const auto previous = g_lastQueuedRpgEvent.find(dedupeKey);
+    if (previous != g_lastQueuedRpgEvent.end() && now - previous->second < std::chrono::seconds(10)) {
+        return;
+    }
+    g_lastQueuedRpgEvent[dedupeKey] = now;
+    g_rpgCommentQueue.push_back({type, text});
+    while (g_rpgCommentQueue.size() > 16) {
+        g_rpgCommentQueue.pop_front();
+    }
+}
 
 static std::string JoinHumanList(const std::vector<std::string>& values) {
     if (values.empty()) {
@@ -2829,11 +3250,18 @@ static RpgBridgeEvent CombinePlayerConsumedEvents(const std::vector<RpgBridgeEve
 
 static void ProcessRpgEventBridge() {
     const std::string data = ReadAndDeleteTextInputFile("Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp");
-    if (data.empty()) {
+    std::vector<RpgBridgeEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(g_rpgCommentQueueMutex);
+        while (!g_rpgCommentQueue.empty()) {
+            events.push_back(std::move(g_rpgCommentQueue.front()));
+            g_rpgCommentQueue.pop_front();
+        }
+    }
+    if (data.empty() && events.empty()) {
         return;
     }
 
-    std::vector<RpgBridgeEvent> events;
     std::vector<RpgBridgeEvent> pendingConsumed;
     auto flushPendingConsumed = [&events, &pendingConsumed]() {
         if (!pendingConsumed.empty()) {
@@ -2887,9 +3315,40 @@ static void ProcessRpgEventBridge() {
     flushPendingConsumed();
 
     for (const auto& event : events) {
+        if (event.eventType == "goodnight" ||
+            event.eventType == "waitstart" ||
+            event.eventType == "waitstop") {
+            RefreshPlayerNameFromGame();
+            const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
+            const std::string location = Misc::GetPlayerLocation();
+            const std::string audienceJson = BuildAudienceSnapshotJson("sleep_wait");
+            const std::string people = ExtractPeopleFromAudienceSnapshotJson(audienceJson);
+
+            std::ostringstream payload;
+            payload << "{"
+                    << "\"schema\":\"dialectic.sleep_wait.v1\","
+                    << "\"event\":\"" << HTTPManager::EscapeJson(event.eventType) << "\","
+                    << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\","
+                    << "\"text\":\"" << HTTPManager::EscapeJson(event.eventText) << "\","
+                    << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
+                    << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
+                    << "\"audience_snapshot\":" << audienceJson << ","
+                    << "\"game\":\"fnv\""
+                    << "}";
+
+            Logger::LogInfo("GameLoop: Forwarding sleep/wait lifecycle event %s: %s",
+                event.eventType.c_str(),
+                event.eventText.c_str());
+            HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
+            continue;
+        }
+
         uint32_t speakerFormId = 0;
         std::string speakerName;
-        if (!SelectRpgCommentSpeaker(speakerFormId, speakerName)) {
+        const bool speakerSelected = event.eventType == "combatbark"
+            ? SelectCombatRpgCommentSpeaker(speakerFormId, speakerName)
+            : SelectRpgCommentSpeaker(speakerFormId, speakerName);
+        if (!speakerSelected) {
             Logger::LogInfo("GameLoop: RPG event %s skipped; no active Dialectic NPC speaker", event.eventType.c_str());
             continue;
         }
@@ -2907,6 +3366,10 @@ static void ProcessRpgEventBridge() {
             people = narrowPeople;
         }
 
+        const CombatPromptContext combatContext = event.eventType == "combatbark"
+            ? BuildCombatPromptContext(speakerFormId, playerName)
+            : CombatPromptContext{};
+
         std::ostringstream payload;
         payload << "{"
                 << "\"schema\":\"dialectic.rpg_event.v1\","
@@ -2920,6 +3383,23 @@ static void ProcessRpgEventBridge() {
                 << "\"location\":\"" << HTTPManager::EscapeJson(location) << "\","
                 << "\"people\":\"" << HTTPManager::EscapeJson(people) << "\","
                 << "\"audience_snapshot\":" << audienceJson;
+        if (event.eventType == "combatbark") {
+            payload << ",\"combat\":{\"allies_currently_fighting\":[";
+            for (size_t i = 0; i < combatContext.allies.size(); ++i) {
+                if (i > 0) {
+                    payload << ",";
+                }
+                payload << "\"" << HTTPManager::EscapeJson(combatContext.allies[i]) << "\"";
+            }
+            payload << "],\"hostile_combatants\":[";
+            for (size_t i = 0; i < combatContext.hostiles.size(); ++i) {
+                if (i > 0) {
+                    payload << ",";
+                }
+                payload << "\"" << HTTPManager::EscapeJson(combatContext.hostiles[i]) << "\"";
+            }
+            payload << "]}";
+        }
         if (event.eventType == "player_consumed") {
             payload << ",\"item\":{"
                     << "\"name\":\"" << HTTPManager::EscapeJson(event.itemName.empty() ? event.eventText : event.itemName) << "\","
@@ -2946,10 +3426,18 @@ static void ProcessRpgEventBridge() {
                 << "\"game\":\"fnv\""
                 << "}";
 
-        Logger::LogInfo("GameLoop: Forwarding RPG comment event %s for %s: %s",
-            event.eventType.c_str(),
-            speakerName.c_str(),
-            event.eventText.c_str());
+        if (event.eventType == "combatbark") {
+            Logger::LogInfo("GameLoop: Forwarding combat bark for %s (allies=%zu hostiles=%zu): %s",
+                speakerName.c_str(),
+                combatContext.allies.size(),
+                combatContext.hostiles.size(),
+                event.eventText.c_str());
+        } else {
+            Logger::LogInfo("GameLoop: Forwarding RPG comment event %s for %s: %s",
+                event.eventType.c_str(),
+                speakerName.c_str(),
+                event.eventText.c_str());
+        }
         HTTPManager::SendEvent(event.eventType, payload.str(), audienceJson);
     }
 }
@@ -3072,46 +3560,6 @@ static bool IsAttributionActorEligible(const ActorPositionResolverFNV::PositionR
     return !ActorEligibilityFNV::IsClearlyDisallowedCreature(metadata);
 }
 
-static CapturedDialogueSpeakerAttribution ReadRecentDialogueTopicSpeakerAttribution() {
-    constexpr const char* kDialogueSpeakerPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_speaker.tmp";
-    uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kDialogueSpeakerPath, ageMs)) {
-        return {};
-    }
-
-    if (ageMs > 2500) {
-        DeleteFileIfExists(kDialogueSpeakerPath);
-        return {};
-    }
-
-    std::string data = ReadFileIfExists(kDialogueSpeakerPath);
-    if (data.empty()) {
-        return {};
-    }
-
-    const auto fields = ParseBridgeKeyValueData(data);
-    const auto findField = [&fields](const char* key) -> std::string {
-        const auto it = fields.find(key);
-        return it == fields.end() ? "" : it->second;
-    };
-
-    if (findField("end") != "1") {
-        return {};
-    }
-
-    DeleteFileIfExists(kDialogueSpeakerPath);
-
-    CapturedDialogueSpeakerAttribution attribution;
-    attribution.name = TrimInput(findField("speaker"));
-    attribution.formId = ParseFormIdString(findField("speaker_refid"));
-    attribution.source = "dialog_topic_handler";
-    if (!IsUsableCapturedSpeakerName(attribution.name) || attribution.formId == 0) {
-        return {};
-    }
-
-    return attribution;
-}
-
 static CapturedDialogueSpeakerAttribution GetCurrentTargetSpeakerAttribution() {
     const auto& target = TargetManager::GetCurrentTarget();
     if (target.formId == 0 ||
@@ -3212,14 +3660,7 @@ static CapturedDialogueSpeakerAttribution ResolveCapturedDialogueSpeakerAttribut
         return { speaker, speakerFormId, speakerFormId != 0 ? "dialogue_bridge" : "dialogue_bridge_name_only" };
     }
 
-    CapturedDialogueSpeakerAttribution attribution = ReadRecentDialogueTopicSpeakerAttribution();
-    if (attribution.formId != 0) {
-        if (IsDialogueMenuNpcCaptureSource(source)) {
-            RememberDialogueMenuSpeakerAttribution(attribution);
-        }
-        return attribution;
-    }
-
+    CapturedDialogueSpeakerAttribution attribution;
     if (IsDialogueMenuNpcCaptureSource(source)) {
         attribution = GetRecentDialogueMenuSpeakerAttribution();
         if (attribution.formId != 0) {
@@ -3296,7 +3737,6 @@ static void ProcessDialogueCaptureBridge() {
         return;
     }
 
-    const char* dialogueCapturePath = nullptr;
     std::string bridgeData;
     {
         std::lock_guard<std::mutex> lock(g_nativeDialogueCaptureMutex);
@@ -3304,18 +3744,6 @@ static void ProcessDialogueCaptureBridge() {
             bridgeData = std::move(g_nativeDialogueCaptures.front());
             g_nativeDialogueCaptures.pop_front();
         }
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_player_choice.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_capture_itr.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
-    }
-    if (bridgeData.empty()) {
-        dialogueCapturePath = "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp";
-        bridgeData = ReadFileIfExists(dialogueCapturePath);
     }
     if (bridgeData.empty()) {
         return;
@@ -3336,10 +3764,6 @@ static void ProcessDialogueCaptureBridge() {
             lastIncompleteLogTime = now;
         }
         return;
-    }
-
-    if (dialogueCapturePath) {
-        DeleteFileIfExists(dialogueCapturePath);
     }
 
     std::string source = ToLowerCopy(getField("source"));
@@ -3515,16 +3939,20 @@ static void HandleOpenMicVoiceDetected() {
     if (!Config::openMicEnabled || Config::openMicMuted) {
         return;
     }
-    if ((!g_conversationActive && !Config::narratorModeEnabled) || g_voiceInputActive || VoiceRecorder::IsRecording()) {
-        Logger::LogInfo("GameLoop: Ignoring open mic trigger activeConversation=%d voiceActive=%d recording=%d",
-            g_conversationActive ? 1 : 0,
+    if (g_voiceInputActive || VoiceRecorder::IsRecording()) {
+        Logger::LogInfo("GameLoop: Ignoring open mic trigger voiceActive=%d recording=%d",
             g_voiceInputActive.load() ? 1 : 0,
             VoiceRecorder::IsRecording() ? 1 : 0);
         return;
     }
 
-    if (!g_conversationActive && Config::narratorModeEnabled) {
-        StartNarratorConversation("open mic narrator mode");
+    if (!g_conversationActive) {
+        if (Config::narratorModeEnabled) {
+            StartNarratorConversation("open mic narrator mode");
+        } else if (TryStartConversationFromCurrentTarget() != ConversationStartResult::Started) {
+            Logger::LogInfo("GameLoop: Open mic detected speech without an available NPC target");
+            return;
+        }
     }
 
     StartVoiceInputInternal(true);
@@ -3539,7 +3967,12 @@ static void UpdateOpenMicMonitoringState() {
     const bool shouldMonitor =
         Config::openMicEnabled &&
         !Config::openMicMuted &&
-        (g_conversationActive || Config::narratorModeEnabled) &&
+        g_gameState.isInGame &&
+        !g_gameState.isLoading &&
+        !g_gameState.isPaused &&
+        !g_gameState.isInMenu &&
+        !g_gameState.isInDialogue &&
+        InputManager::IsGameForeground() &&
         !g_voiceInputActive &&
         !VoiceRecorder::IsRecording();
 
@@ -3554,16 +3987,14 @@ static void UpdateOpenMicMonitoringState() {
     }
 }
 
-static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool showNotice,
+static int ResetRuntimeForAIActions(const char* reason, bool notifyServer,
     bool haltActorActions, bool clearCapturedDialogue) {
+    InputManager::ResetChatGestures();
     const bool hadConversation = g_conversationActive;
     const std::string previousPartner = g_conversationPartner;
     const char* resetReason = reason ? reason : "runtime reset";
 
     Logger::LogInfo("GameLoop: Resetting AI runtime state (%s)", resetReason);
-    if (showNotice) {
-        Console::Print("[Dialectic] Clearing active dialogue");
-    }
 
     g_voiceInputActive = false;
     VoiceRecorder::StopRecording();
@@ -3607,6 +4038,10 @@ static int ResetRuntimeForAIActions(const char* reason, bool notifyServer, bool 
 }
 
 static void MaybeSendLoadedSaveInit() {
+    if (g_loadedSaveInitBlocked) {
+        return;
+    }
+
     const long long currentGamets = WorldContextFNV::GetGameTimestamp();
     if (currentGamets <= 0) {
         return;
@@ -3625,9 +4060,12 @@ static void MaybeSendLoadedSaveInit() {
     g_lastSeenGamets = currentGamets;
 
     const char* reason = firstInit ? "loaded_save" : "gamets_rollback";
-    ResetRuntimeForAIActions(reason, false, detectedRollback || g_conversationActive || SpeakManager::IsSpeaking(), false);
-    Logger::LogInfo("GameLoop: Sending init event for %s at gamets=%lld", reason, currentGamets);
-    HTTPManager::SendEvent("init", "");
+    ResetRuntimeForAIActions(reason, false, false);
+    Logger::LogInfo("GameLoop: Sending init event for %s at gamets=%lld (plugin=%s)",
+                    reason,
+                    currentGamets,
+                    DIALECTIC_VERSION);
+    HTTPManager::SendEvent("init", DIALECTIC_VERSION);
     VersionCheck::Schedule();
 }
 
@@ -3637,39 +4075,74 @@ static void ProcessNativeRuntimeEvents() {
         using Type = RuntimeEventBus::EventType;
         switch (event.type) {
             case Type::PreLoadGame:
-                ResetRuntimeForAIActions("native_pre_load_game", false, false, false);
+                PlayerInventoryManagerFNV::Reset("native_pre_load_game");
+                PlayerSurvivalManagerFNV::Reset("native_pre_load_game");
+                FalloutStatsManagerFNV::Reset("native_pre_load_game");
+                ResetRuntimeForAIActions("native_pre_load_game", false, false);
                 BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
                 break;
             case Type::LoadGame:
-                ResetRuntimeForAIActions("native_load_game", false, false, false);
+                PlayerInventoryManagerFNV::Reset("native_load_game");
+                PlayerInventoryManagerFNV::ForceRefresh("native_load_game", 2000);
+                PlayerSurvivalManagerFNV::Reset("native_load_game");
+                PlayerSurvivalManagerFNV::ForceRefresh("native_load_game", 3000);
+                FalloutStatsManagerFNV::Reset("native_load_game");
+                ResetRuntimeForAIActions("native_load_game", false, false);
                 BeginDynamicProfileTimerBlock("load game");
                 DelayDynamicProfileTimerAfterLoad("game load");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = true;
+                break;
+            case Type::PostLoadGame:
+                g_lastSeenGamets = 0;
+                if (event.flag) {
+                    g_loadedSaveInitSent = false;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogInfo("GameLoop: successful PostLoadGame; waiting for fresh loaded-save timestamp");
+                } else {
+                    g_loadedSaveInitSent = true;
+                    g_loadedSaveInitBlocked = false;
+                    Logger::LogWarning("GameLoop: PostLoadGame reported failure; suppressing loaded-save init");
+                }
                 break;
             case Type::NewGame:
-                ResetRuntimeForAIActions("native_new_game", false, false, false);
+                PlayerInventoryManagerFNV::Reset("native_new_game");
+                PlayerInventoryManagerFNV::ForceRefresh("native_new_game", 3000);
+                PlayerSurvivalManagerFNV::Reset("native_new_game");
+                PlayerSurvivalManagerFNV::ForceRefresh("native_new_game", 4000);
+                FalloutStatsManagerFNV::Reset("native_new_game");
+                ResetRuntimeForAIActions("native_new_game", false, false);
                 g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
                 g_dynamicProfileBlockedAt = {};
                 g_dynamicProfileResumeNotBefore = {};
                 g_lastDynamicProfileLoadDelayAt = {};
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::ExitToMainMenu:
             case Type::ExitGame:
-                ResetRuntimeForAIActions("native_runtime_exit", false, false, false);
+                PlayerInventoryManagerFNV::Reset("native_runtime_exit");
+                PlayerSurvivalManagerFNV::Reset("native_runtime_exit");
+                FalloutStatsManagerFNV::Reset("native_runtime_exit");
+                ResetRuntimeForAIActions("native_runtime_exit", false, false);
                 BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
+                g_loadedSaveInitBlocked = false;
                 break;
             case Type::CellChanged:
-                ResetRuntimeForAIActions("native_cell_changed", false, false, false);
+                // The event flag marks a hard interior/worldspace boundary.
+                if (event.flag) {
+                    ResetRuntimeForAIActions("native_cell_changed", false, false);
+                }
                 break;
             case Type::ReloadConfig:
-                Config::Load();
+                MarkRuntimeConfigDirty();
                 break;
             default:
                 break;
@@ -3689,6 +4162,7 @@ void Initialize() {
     g_voiceInputActive = false;
     g_loadedSaveInitSent = false;
     g_lastSeenGamets = 0;
+    g_loadedSaveInitBlocked = false;
     {
         std::lock_guard<std::mutex> lock(g_conversationCooldownMutex);
         g_conversationCooldownByFormId.clear();
@@ -3701,14 +4175,27 @@ void Initialize() {
     g_dynamicProfileBlockedAt = {};
     g_dynamicProfileResumeNotBefore = {};
     g_lastDynamicProfileLoadDelayAt = {};
+    g_lastModeSelectionPoll = {};
+    g_lastDynamicProfileSelectionPoll = {};
+    g_lastLegacyToolPoll = {};
+    g_lastTextInputPoll = {};
+    g_lastRuntimeConfigFallbackPoll = {};
+    g_lastRpgEventPoll = {};
+    g_runtimeConfigDirty.store(false);
+    g_runtimeConfigDirtyTick.store(0);
     g_lastBoredEventTimerUpdate = g_lastUpdateTime;
     g_lastBoredBlockingActivityTime = g_lastUpdateTime;
     g_lastUpdatePerfSummaryTime = {};
     g_updatePerfAggregates.clear();
     g_updatePerfTickCount = 0;
+    DeleteFileIfExists(kRuntimeConfigReloadPath);
     
     ApplyModeIndex(Config::currentModeIndex, false);
+    PlayerInventoryManagerFNV::Initialize();
+    PlayerSurvivalManagerFNV::Initialize();
+    FalloutStatsManagerFNV::Initialize();
     TradeManager::Initialize();
+    LoadedPluginsFNV::RequestSync();
     
     Log("GameLoop: Initialized (native frame and response queue pump)");
 }
@@ -3718,6 +4205,10 @@ void Shutdown() {
     
     VoiceRecorder::Shutdown();
     TradeManager::Shutdown();
+    PlayerInventoryManagerFNV::Shutdown();
+    PlayerSurvivalManagerFNV::Shutdown();
+    FalloutStatsManagerFNV::Shutdown();
+    PipVisionManager::Shutdown();
     
     // Stop any active conversation
     if (g_conversationActive) {
@@ -3738,27 +4229,54 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("InputManager::Update", []() { InputManager::Update(); });
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
-    ProfileUpdateSubsystem("RefreshGameStateBridge", []() { RefreshGameStateBridge(); });
-    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
+    ProfileUpdateSubsystem("RefreshGameState", []() { RefreshGameState(); });
+    if (ShouldPoll(g_lastRuntimeConfigFallbackPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
+    }
+    ProfileUpdateSubsystem("ApplyPendingRuntimeConfigReload", []() { ApplyPendingRuntimeConfigReload(); });
     ProfileUpdateSubsystem("MaybeSendLoadedSaveInit", []() { MaybeSendLoadedSaveInit(); });
+    ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("NearbyActorsFNV::Update", []() { NearbyActorsFNV::Update(); });
     ProfileUpdateSubsystem("AutoGreetingFNV::Update", []() { AutoGreetingFNV::Update(); });
     ProfileUpdateSubsystem("ActivityStatusFNV::Update", []() { ActivityStatusFNV::Update(); });
     ProfileUpdateSubsystem("NearbyItemsFNV::Update", []() { NearbyItemsFNV::Update(); });
     ProfileUpdateSubsystem("NearbyPoiFNV::Update", []() { NearbyPoiFNV::Update(); });
     ProfileUpdateSubsystem("QuestJournalFNV::Update", []() { QuestJournalFNV::Update(); });
+    ProfileUpdateSubsystem("PlayerInventoryManagerFNV::Update", []() { PlayerInventoryManagerFNV::Update(); });
+    ProfileUpdateSubsystem("PlayerSurvivalManagerFNV::Update", []() { PlayerSurvivalManagerFNV::Update(); });
+    ProfileUpdateSubsystem("FalloutStatsManagerFNV::Update", []() { FalloutStatsManagerFNV::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
     ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });
     ProfileUpdateSubsystem("UpdateBoredEventTimer", []() { UpdateBoredEventTimer(); });
-    ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
-    ProfileUpdateSubsystem("PollDynamicProfileToolRequests", []() { PollDynamicProfileToolRequests(); });
-    ProfileUpdateSubsystem("PollModeToolRequests", []() { PollModeToolRequests(); });
+    if (ShouldPoll(g_lastDynamicProfileSelectionPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("PollDynamicProfileSelection", []() { PollDynamicProfileSelection(); });
+    }
+    if (ShouldPoll(g_lastModeSelectionPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("PollModeSelection", []() { PollModeSelection(); });
+    }
+    if (ShouldPoll(g_lastLegacyToolPoll, std::chrono::seconds(1))) {
+        ProfileUpdateSubsystem("MaybeSyncRuntimeStateFromServer", []() {
+            MaybeSyncRuntimeStateFromServer(false);
+        });
+        ProfileUpdateSubsystem("PollVoiceSampleToolRequest", []() { PollVoiceSampleToolRequest(); });
+        ProfileUpdateSubsystem("PollLegacyDynamicProfileToolRequests", []() { PollLegacyDynamicProfileToolRequests(); });
+    }
     ProfileUpdateSubsystem("ProcessDialogueCaptureBridge", []() { ProcessDialogueCaptureBridge(); });
-    ProfileUpdateSubsystem("ProcessRpgEventBridge", []() { ProcessRpgEventBridge(); });
-    ProfileUpdateSubsystem("ProcessTextInputBridge", []() { ProcessTextInputBridge(); });
+    if (ShouldPoll(g_lastRpgEventPoll, std::chrono::milliseconds(100))) {
+        ProfileUpdateSubsystem("ProcessRpgEventBridge", []() { ProcessRpgEventBridge(); });
+    }
+    if (g_textInputMenuPending.load() &&
+        ShouldPoll(g_lastTextInputPoll, std::chrono::milliseconds(50))) {
+        ProfileUpdateSubsystem("ProcessTextInputBridge", []() { ProcessTextInputBridge(); });
+    }
     
     // Process input actions
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::StopTalking)) {
+        Logger::LogInfo("GameLoop: Halt AI Actions hotkey pressed through native input");
+        HaltAIActionsNow();
+    }
+
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ManualActivateNPC)) {
         Logger::LogInfo("GameLoop: ManualActivateNPC hotkey pressed");
         ActivationManager::ActivateCurrentTarget(ActivationManager::ActivationSource::Manual);
@@ -3766,28 +4284,27 @@ void Update(float deltaTime) {
 
     ProfileUpdateSubsystem("ActivationManager::Update", []() { ActivationManager::Update(); });
 
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::TalkToNPC)) {
-        Logger::LogInfo("GameLoop: Chatbox hotkey pressed");
+    const auto textGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::TalkToNPC);
+    if ((textGestures & InputManager::Hold) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    if ((textGestures & InputManager::Tap) != 0) {
+        Logger::LogInfo("GameLoop: Chatbox hotkey tapped");
         RequestTextInputMenuOpen();
     }
+
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::PipVision, 60)) {
+        Logger::LogInfo("GameLoop: PipVision hotkey pressed");
+        PipVisionManager::BeginHotkeyPress();
+    }
+    if (InputManager::IsActionReleased(InputManager::HotkeyAction::PipVision)) {
+        PipVisionManager::EndHotkeyPress();
+    }
+    ProfileUpdateSubsystem("PipVisionManager::Update", []() { PipVisionManager::Update(); });
     
-    const bool dynamicProfileMenuTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::DynamicProfileMenu);
-    const bool toggleModesTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleModes);
-    const bool toggleLLMModelTriggered = InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleLLMModel);
-
-    if (dynamicProfileMenuTriggered) {
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed");
-        RequestDynamicProfileMenuOpen();
-    }
-
-    if (toggleModesTriggered) {
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed");
-        RequestModeMenuOpen();
-    }
-
-    if (toggleLLMModelTriggered) {
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed");
-        RequestLLMModelMenuOpen();
+    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::DialecticControl)) {
+        Logger::LogInfo("GameLoop: DialecticControl hotkey pressed");
+        RequestDialecticControlMenuOpen();
     }
 
     if (InputManager::IsActionTriggered(InputManager::HotkeyAction::OpenMicMute)) {
@@ -3798,13 +4315,24 @@ void Update(float deltaTime) {
             Config::openMicMuted ? "1" : "0");
         UpdateOpenMicMonitoringState();
         Logger::LogInfo("GameLoop: Open mic mute toggled muted=%d", Config::openMicMuted ? 1 : 0);
-        Console::Print(Config::openMicMuted ? "[Dialectic] Open mic muted" : "[Dialectic] Open mic unmuted");
+        Console::Print(Config::openMicMuted ? "[DIALECTIC] Open mic muted" : "[DIALECTIC] Open mic unmuted");
     }
     
-    // Voice input handling (hold-to-talk)
-    if (InputManager::IsActionTriggered(InputManager::HotkeyAction::ToggleVoice)) {
+    const auto voiceGestures = InputManager::ConsumeChatGestures(InputManager::HotkeyAction::ToggleVoice);
+    if ((voiceGestures & InputManager::Tap) != 0) {
+        // Clear speech and late replies, not NPC packages, dialogue history or the selected partner.
+        SpeakManager::CancelDialogueTurn("voice_hotkey_tap", false, true);
+        ResetBoredEventTimer("voice hotkey tap");
+        Console::Print("[DIALECTIC] Stopped all dialogue");
+    }
+    if ((voiceGestures & InputManager::DoubleTap) != 0) {
+        RequestChatHotkeyWaitHere();
+    }
+    // A release processed after a slow frame may identify a hold, but must not start a late recording.
+    if ((voiceGestures & InputManager::Hold) != 0 &&
+        InputManager::IsActionHeld(InputManager::HotkeyAction::ToggleVoice)) {
         if (g_voiceInputActive) {
-            Console::Print("[Dialectic] Already recording...");
+            Console::Print("[DIALECTIC] Recording...");
         } else {
             ClearConversationIfPartnerLeftScene("voice input");
             if (!g_conversationActive) {
@@ -3815,7 +4343,7 @@ void Update(float deltaTime) {
                     const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
                     if (startResult != ConversationStartResult::Started) {
                         if (startResult == ConversationStartResult::NoTarget) {
-                            Console::Print("[Dialectic] Target an NPC first");
+                            Console::Print("[DIALECTIC] Target an NPC");
                         }
                         return;
                     }
@@ -3856,21 +4384,22 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("SpeakManager::ProcessQueue", []() { SpeakManager::ProcessQueue(); });
         ProfileUpdateSubsystem("LoadedPluginsFNV::Update", []() { LoadedPluginsFNV::Update(); });
         ProfileUpdateSubsystem("WorldDataSyncFNV::Update", []() { WorldDataSyncFNV::Update(); });
+        ProfileUpdateSubsystem("DialecticInitialization::Update", []() { DialecticInitialization::Update(); });
         ProfileUpdateSubsystem("SpatialSnapshotManagerFNV::Update", []() {
             SpatialSnapshotManagerFNV::Update(1);
         });
     }
     
-    const long long frameElapsedMs = ElapsedMsSince(frameProfileStart);
-    if (frameElapsedMs >= kPerfSlowFrameMs) {
-        Logger::LogInfo("[PERF] GameLoop frame slow elapsed_ms=%lld delta=%.4f conversation=%d voice=%d speaking=%d",
-            frameElapsedMs,
+    const long long frameElapsedUs = ElapsedUsSince(frameProfileStart);
+    if (frameElapsedUs >= kPerfSlowFrameUs) {
+        Logger::LogInfo("[PERF] GameLoop frame slow elapsed_ms=%.3f delta=%.4f conversation=%d voice=%d speaking=%d",
+            static_cast<double>(frameElapsedUs) / 1000.0,
             deltaTime,
             g_conversationActive ? 1 : 0,
             g_voiceInputActive.load() ? 1 : 0,
             SpeakManager::IsSpeaking() ? 1 : 0);
     }
-    MaybeLogUpdatePerfSummary(frameElapsedMs);
+    MaybeLogUpdatePerfSummary(frameElapsedUs);
 }
 
 const GameState& GetGameState() {
@@ -3909,16 +4438,16 @@ static bool EnforceCombatDialogueGate(uint32_t actorFormId, const char* source, 
         source ? source : "unknown",
         actorFormId);
     if (notify) {
-        Console::Print("[Dialectic] AI dialogue is disabled during combat");
+        Console::Print("[DIALECTIC] AI dialogue is disabled during combat");
     }
     return false;
 }
 
 void HaltAIActionsNow() {
     Log("GameLoop: Halt AI Actions requested");
-    Console::Print("[Dialectic] Halting AI actions");
+    Console::Print("[DIALECTIC] Halting AI actions");
 
-    const int haltedActors = ResetRuntimeForAIActions("halt_ai_actions", true, false, true);
+    const int haltedActors = ResetRuntimeForAIActions("halt_ai_actions", true, true);
     Logger::LogInfo("GameLoop: Halt AI Actions completed for %d actor(s)", haltedActors);
 }
 
@@ -3927,7 +4456,7 @@ bool StartConversation() {
     
     if (!target.isActor || !target.isAlive) {
         Log("GameLoop: Cannot start conversation - invalid target");
-        Console::Print("[Dialectic] Target is not a valid NPC");
+        Console::Print("[DIALECTIC] Target is not a valid NPC");
         return false;
     }
 
@@ -3936,6 +4465,10 @@ bool StartConversation() {
     }
 
     if (!IsConversationTargetEligible(target.formId, target.name, true)) {
+        return false;
+    }
+
+    if (!IsConversationTargetWithinModeRadius(target.formId, target.name, true)) {
         return false;
     }
 
@@ -3951,7 +4484,7 @@ bool StartConversation() {
     SpeakManager::GuardActorForPendingDialogue(g_conversationPartnerFormId, g_conversationPartner);
     
     Log("GameLoop: Started conversation with %s (0x%08X)", 
-        g_conversationPartner.c_str(), g_conversationPartnerFormId);
+        g_conversationPartner.c_str(), g_conversationPartnerFormId.load());
     
     std::ostringstream npcId;
     npcId << "0x" << std::hex << std::setw(8) << std::setfill('0') << g_conversationPartnerFormId << std::dec;
@@ -3992,7 +4525,7 @@ void StopConversation() {
     if (!g_conversationActive) return;
     
     Log("GameLoop: Ending conversation with %s", g_conversationPartner.c_str());
-    Console::Print("[Dialectic] Conversation ended");
+    Console::Print("[DIALECTIC] Conversation ended");
     
     // Stop any ongoing speech
     SpeakManager::CancelDialogueTurn("conversation_stop", true, false);
@@ -4017,7 +4550,7 @@ void StopConversation() {
 void SendPlayerMessage(const std::string& message) {
     if (!g_conversationActive) {
         Log("GameLoop: Cannot send message - no active conversation");
-    Console::Print("[Dialectic] No active conversation");
+    Console::Print("[DIALECTIC] No active conversation");
         return;
     }
 
@@ -4030,6 +4563,10 @@ void SendPlayerMessage(const std::string& message) {
         g_conversationActive = false;
         g_conversationPartner.clear();
         g_conversationPartnerFormId = 0;
+        return;
+    }
+    if (!g_conversationIsNarrator &&
+        !IsConversationTargetWithinModeRadius(g_conversationPartnerFormId, g_conversationPartner, true)) {
         return;
     }
     
@@ -4049,6 +4586,7 @@ void SendPlayerMessage(const std::string& message) {
     const bool cheatMode =
         !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "CHEATMODE");
     const bool injectionMode = injectionLogMode || injectionChatMode;
+    const bool privateConversationMode = !g_conversationIsNarrator && IsPrivateConversationMode();
     const bool skipPlayerTtsMode = injectionMode || directorMode || cheatMode;
 
     SpeakManager::CancelDialogueTurn("player_input", true, true);
@@ -4073,7 +4611,7 @@ void SendPlayerMessage(const std::string& message) {
             900);
         Log("GameLoop: Prompt metadata refresh for %s (0x%08X) ok=%d",
             g_conversationPartner.c_str(),
-            g_conversationPartnerFormId,
+            g_conversationPartnerFormId.load(),
             metadataOk ? 1 : 0);
     }
     if (Config::worldContextSendBeforePlayerInput) {
@@ -4095,9 +4633,14 @@ void SendPlayerMessage(const std::string& message) {
     const char* playerInputEventType = g_conversationIsNarrator
         ? "narrator_inputtext"
         : (stealthPlayerInput ? "inputtext_s" : "inputtext");
+    const bool targetOnlyConversationMode =
+        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "WHISPER");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
-        : (injectionMode ? BuildTargetOnlyAudienceSnapshotJson() : BuildAudienceSnapshotJson());
+        : ((injectionMode || targetOnlyConversationMode)
+            ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
+            : BuildAudienceSnapshotJson(EqualsIgnoreCase(Config::currentMode, "CLOSE") ? "player_close" : ""));
+    SpeakManager::SetPlayerTurnAudience(ExtractPeopleFromAudienceSnapshotJson(audienceSnapshot));
     Log("GameLoop: Audience snapshot for player input type=%s stealth=%d distanceMultiplier=%.3f: %s",
         playerInputEventType,
         stealthPlayerInput ? 1 : 0,
@@ -4120,8 +4663,10 @@ void SendPlayerMessage(const std::string& message) {
             << "\"mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\","
             << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(g_conversationPartner) << "\",\"refid\":\"" << npcId.str() << "\"},"
             << "\"player_actor\":{\"name\":\"" << HTTPManager::EscapeJson(playerName) << "\"},";
-    if (g_conversationIsNarrator) {
-        payload << "\"private\":true,\"listener\":\"The Narrator\",";
+    if (g_conversationIsNarrator || privateConversationMode) {
+        payload << "\"private\":true,\"listener\":\""
+                << HTTPManager::EscapeJson(g_conversationIsNarrator ? "The Narrator" : g_conversationPartner)
+                << "\",";
     }
     payload << "\"audience_snapshot\":" << audienceSnapshot << ","
             << "\"game\":\"fnv\""
@@ -4136,11 +4681,15 @@ void SendPlayerMessage(const std::string& message) {
 }
 
 bool IsConversationActive() {
-    return g_conversationActive;
+    return g_conversationActive.load();
 }
 
 const std::string& GetConversationPartner() {
     return g_conversationPartner;
+}
+
+uint32_t GetConversationPartnerFormId() {
+    return g_conversationPartnerFormId.load();
 }
 
 void StartVoiceInput() {
@@ -4152,7 +4701,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     if (!g_conversationActive) {
         Log("GameLoop: Voice input requested without active conversation");
         if (!openMicTriggered) {
-            Console::Print("[Dialectic] Target an NPC first");
+            Console::Print("[DIALECTIC] Target an NPC");
         }
         return;
     }
@@ -4165,16 +4714,14 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     int voiceKey = openMicTriggered ? -1 : InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice);
     if (!openMicTriggered && voiceKey <= 0) {
         Log("GameLoop: Voice input requested with no bound hotkey");
-        Console::Print("[Dialectic] Mic is not bound");
+        Console::Print("[DIALECTIC] Voice key not bound");
         return;
     }
 
     Log("GameLoop: Starting %s voice input on device: %s",
         openMicTriggered ? "open-mic" : "push-to-talk",
         VoiceRecorder::GetCurrentRecordingDeviceName().c_str());
-    Console::Print(openMicTriggered
-        ? "[Dialectic] Open mic recording..."
-        : "[Dialectic] Recording... (release voice key to send)");
+    Console::Print("[DIALECTIC] Recording...");
 
     ResetBoredEventTimer(openMicTriggered ? "open mic recording start" : "voice recording start");
     // Treat mic input as player interruption: new player intent cancels
@@ -4209,12 +4756,12 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
                 SendPlayerMessage(cleanedText);
             } else {
                 Log("GameLoop: No active conversation for voice input");
-                Console::Print("[Dialectic] No active conversation");
+                Console::Print("[DIALECTIC] No active conversation");
             }
         } else {
             Log("GameLoop: STT returned empty result");
             if (!openMicTriggered) {
-                Console::Print("[Dialectic] Could not transcribe audio");
+                Console::Print("[DIALECTIC] No speech detected");
             }
         }
     }, openMicSilenceMs);

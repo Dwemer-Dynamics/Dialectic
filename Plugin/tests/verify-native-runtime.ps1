@@ -30,7 +30,8 @@ $cmakeFile = Join-Path $PluginRoot 'CMakeLists.txt'
 $repoRoot = Split-Path -Parent $PluginRoot
 $mcmFile = Join-Path $repoRoot 'Mod\Data\MCM\Dialectic.json'
 $iniFile = Join-Path $repoRoot 'Mod\Data\NVSE\Plugins\dialectic.ini'
-$agentManagementScript = Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic\AgentManagementAction.gek'
+$scriptRoot = Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic'
+$bootstrapFile = Join-Path $repoRoot 'Mod\Data\NVSE\Plugins\scripts\ln_DialecticBootstrap.txt'
 
 Require-Path (Join-Path $PluginRoot 'vendor\xnvse-sdk\nvse\PluginAPI.h') 'pinned xNVSE SDK'
 Require-Path (Join-Path $sourceRoot 'FNVRuntime.cpp') 'native runtime'
@@ -39,6 +40,7 @@ Require-Path (Join-Path $sourceRoot 'RuntimeSnapshot.cpp') 'runtime snapshot'
 Require-Path (Join-Path $sourceRoot 'TaskManager.cpp') 'central task manager'
 Require-Path (Join-Path $sourceRoot 'NativeComparisonTelemetry.cpp') 'native comparison telemetry'
 Require-Path (Join-Path $sourceRoot 'SpatialSnapshotManagerFNV.cpp') 'incremental spatial snapshot manager'
+Require-Path (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Dialectic initialization coordinator'
 Require-Path (Join-Path $sourceRoot 'XNVSEAdapter.cpp') 'xNVSE adapter'
 Require-Path (Join-Path $repoRoot 'docs\NATIVE_RUNTIME_MIGRATION.md') 'migration record'
 Require-Path (Join-Path $repoRoot 'docs\NATIVE_RUNTIME_VALIDATION.md') 'runtime validation matrix'
@@ -70,6 +72,8 @@ Reject-Text $cppPaths 'aiagent_textinput\.tmp' 'legacy text-input bridge'
 Reject-Text $cppPaths 'rolecommand\|' 'delimiter rolecommand parser'
 Reject-Text $cppPaths 'RegisterFrameCallback|RegisterHooks|IsGamePaused' 'retired no-op plugin API'
 Require-Text (Join-Path $sourceRoot 'ActionManager.cpp') 'ExtractJsonStringArrayValue\(lineObject, "command_args"\)' 'structured action arguments'
+Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'BuildAudienceSnapshotJson\(EqualsIgnoreCase\(Config::currentMode, "CLOSE"\) \? "player_close"' 'Close player-centered audience snapshot'
+Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'audienceNames = g_playerTurnAudience' 'Close rechat audience preservation'
 
 $sdkIncludeOwners = @('main.cpp', 'XNVSEAdapter.cpp')
 $unexpectedSdkIncludes = $cppFiles |
@@ -93,6 +97,7 @@ Require-Text $cmakeFile 'vendor/xnvse-sdk' 'vendored xNVSE include path'
 Require-Text $cmakeFile 'src/FNVRuntime\.cpp' 'FNVRuntime build source'
 Require-Text $cmakeFile 'src/TaskManager\.cpp' 'TaskManager build source'
 Require-Text $cmakeFile 'src/SpatialSnapshotManagerFNV\.cpp' 'spatial snapshot manager build source'
+Require-Text $cmakeFile 'src/DialecticInitialization\.cpp' 'Dialectic initialization coordinator build source'
 Require-Text (Join-Path $sourceRoot 'FNVRuntime.cpp') 'xNVSE main-game-loop pump authoritative' 'native frame-pump marker'
 Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'ResponseQueueFNV::DispatchPending' 'game-thread response dispatch'
 Require-Text (Join-Path $sourceRoot 'ResponseQueueFNV.cpp') 'RuntimeGeneration::IsCurrent\(item\.runtimeGeneration\)' 'runtime-generation response gate'
@@ -138,27 +143,52 @@ Require-Text (Join-Path $sourceRoot 'GameLoop.cpp') 'EnforceCombatDialogueGate\(
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(speakerFormId\)' 'rechat speaker combat gate'
 Require-Text (Join-Path $sourceRoot 'SpeakManager.cpp') 'IsCombatDialogueAllowed\(targetFormId\)' 'rechat target combat gate'
 
-# CHIM-equivalent AI Agent management operations must remain wired through the
-# canonical activation/agent/target registries.
-Require-Text $mcmFile '"listTitle": "AI Agents"' 'AI Agents MCM page'
-foreach ($label in @(
-    'Add Targeted NPC',
-    'Add All Nearby NPCs',
-    'Remove Targeted AI Agent',
-    'Remove All AI Agents',
-    'List Active AI Agents',
-    'Refresh Nearby NPCs'
-)) {
-    Require-Text $mcmFile ([regex]::Escape($label)) "AI Agent operation '$label'"
+# DIALECTIC initialization must share one action between the MCM and one-time prompt.
+Require-Text $mcmFile '"title": "Initialize DIALECTIC"' 'combined DIALECTIC initialization button'
+Require-Text $mcmFile '"configINI": "Tools:InitializeDialectic"' 'combined initialization MCM binding'
+Require-Text $mcmFile '"value": "Dialectic/InitializeDialectic\.gek"' 'combined initialization MCM callback'
+Reject-Text @($mcmFile) '"title": "Send Faction and Location Info"|"title": "Send All Voice Samples"' 'separate initialization buttons'
+Require-Path (Join-Path $scriptRoot 'InitializeDialectic.gek') 'combined initialization MCM callback'
+Require-Path (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'shared Dialectic initializer'
+Require-Path (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'first-run initialization prompt'
+Require-Path (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'initialization prompt callback'
+Require-Text (Join-Path $scriptRoot 'RunDialecticInitialization.gek') 'DialecticInitialize' 'coordinated initialization action'
+Require-Text (Join-Path $sourceRoot 'main.cpp') 'kCommandInfo_DialecticInitialize' 'coordinated initialization command registration'
+$mainSource = Get-Content -LiteralPath (Join-Path $sourceRoot 'main.cpp') -Raw
+$initializeOpcodeIndex = $mainSource.IndexOf('&kCommandInfo_DialecticInitialize')
+$previousLastOpcodeIndex = $mainSource.IndexOf('&kCommandInfo_DialecticHandleHotkeyUp')
+if ($initializeOpcodeIndex -lt 0 -or $initializeOpcodeIndex -lt $previousLastOpcodeIndex) {
+    $failures.Add('DialecticInitialize must remain appended after the legacy command ABI')
 }
-Require-Path $agentManagementScript 'AI Agent MCM callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 0' 'targeted agent activation callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 1' 'nearby agent activation callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 2' 'targeted agent removal callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 3' 'all-agent removal callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 4' 'active-agent listing callback'
-Require-Text $agentManagementScript 'DialecticManageAIAgents 5' 'nearby-agent listing callback'
-Require-Text (Join-Path $sourceRoot 'main.cpp') '"DialecticManageAIAgents"' 'AI Agent xNVSE command registration'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'Voices synced\.' 'voice completion notice'
+Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Factions synced\.' 'faction completion notice'
+Require-Text (Join-Path $sourceRoot 'WorldDataSyncFNV.cpp') 'Locations synced\.' 'location completion notice'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'DIALECTIC initialized\.' 'final initialization notice'
+Require-Text (Join-Path $sourceRoot 'IngameNotifier.cpp') 'level == Level::Warning \? 1U : 0U' 'happy Pip-Boy icon for informational and successful notices'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'std::chrono::seconds\(5\)' 'five-second initialization progress interval'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'BuildProgressMessage\(\)' 'initialization progress notice builder'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'Setup:InitializationPromptVersion' 'persistent initialization prompt marker'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'dialectic_initialization_prompt_v1\.done' 'file-backed initialization prompt marker check'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'PlayerRef\.GetParentCell' 'loaded player cell prompt gate'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') 'MessageBoxExAlt' 'initialization prompt message box'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptTick.txt') '\|OK\|Close"' 'initialization prompt OK and Close buttons'
+Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'Initialize Now|Not Now' 'retired initialization prompt choices'
+Reject-Text @((Join-Path $scriptRoot 'InitializationPromptTick.txt')) 'if MenuMode' 'menu mode initialization prompt gate'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'iButton != 0' 'initialization prompt Close action gate'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') 'WriteStringToFile "Data\\\\NVSE\\\\Plugins\\\\dialectic_initialization_prompt_v1\.done"' 'file-backed prompt marker after user selection'
+Require-Text (Join-Path $sourceRoot 'DialecticInitialization.cpp') 'DIALECTIC initialization has started\. Please wait\.' 'happy initialization started notice'
+Require-Text (Join-Path $scriptRoot 'InitializationPromptSelect.gek') '^\s*DialecticInitialize\s*$' 'direct prompt initialization command'
+Reject-Text @((Join-Path $scriptRoot 'InitializationPromptSelect.gek')) 'RunDialecticInitialization\.gek' 'nested prompt initialization callback'
+Require-Text $bootstrapFile 'Dialectic/InitializationPromptTick\.txt' 'initialization prompt bootstrap schedule'
+
+# The retired AI Agents MCM must stay removed while the core agent runtime remains intact.
+Reject-Text @($mcmFile) '"listTitle": "AI Agents"|AgentManagementAction\.gek' 'retired AI Agents MCM wiring'
+if (Test-Path -LiteralPath (Join-Path $repoRoot 'Mod\Data\NVSE\user_defined_functions\Dialectic\AgentManagementAction.gek')) {
+    $failures.Add('Retired AI Agent MCM callback must not be restored')
+}
+Reject-Text @((Join-Path $sourceRoot 'GameLoop.cpp'), (Join-Path $sourceRoot 'GameLoop.h')) '\bManageAIAgents\b|BuildAgentNameSummary' 'retired AI Agent management entrypoint'
+Reject-Text @((Join-Path $sourceRoot 'main.cpp')) 'GameLoop::ManageAIAgents' 'active AI Agent MCM command wiring'
+Require-Text (Join-Path $sourceRoot 'main.cpp') 'Deprecated AI Agent MCM ABI slot' 'reserved AI Agent command ABI slot'
 Require-Text (Join-Path $sourceRoot 'ActivationManager.cpp') 'ActivateNearbyActors' 'nearby agent activation implementation'
 Require-Text (Join-Path $sourceRoot 'ActivationManager.cpp') 'DeactivateAllActors' 'all-agent removal implementation'
 Require-Text (Join-Path $sourceRoot 'AgentManager.cpp') 'UnregisterAIAgent' 'canonical agent removal implementation'

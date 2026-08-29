@@ -1,9 +1,8 @@
 #include "WorldDataSyncFNV.h"
 
-#include "Console.h"
+#include "DialecticInitialization.h"
 #include "HTTPManager.h"
 #include "Logger.h"
-#include "RuntimeGeneration.h"
 #include "TaskManager.h"
 #include "XNVSEAdapter.h"
 
@@ -30,6 +29,7 @@
 namespace WorldDataSyncFNV {
 namespace {
 
+constexpr size_t kFactionBatchSize = 150;
 constexpr size_t kLocationBatchSize = 150;
 constexpr uint32_t kCompressedRecordFlag = 0x00040000;
 constexpr uint32_t kMapMarkerBaseFormId = 0x00000010;
@@ -67,10 +67,21 @@ struct LoadedPluginData {
 std::atomic<bool> g_syncRequested(false);
 std::atomic<bool> g_syncInProgress(false);
 std::atomic<bool> g_completed(false);
+std::atomic<uint64_t> g_syncRunId(0);
 bool g_nativeMarkerCaptureStarted = false;
 std::chrono::steady_clock::time_point g_lastAttempt;
 std::mutex g_locationMutex;
 std::vector<LocationRow> g_cachedLocations;
+bool ResponseAcknowledged(const std::string& response) {
+    std::string compact;
+    compact.reserve(response.size());
+    for (const char ch : response) {
+        if (!std::isspace(static_cast<unsigned char>(ch))) {
+            compact.push_back(ch);
+        }
+    }
+    return compact.find("\"ok\":true") != std::string::npos;
+}
 
 std::string Trim(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -692,11 +703,17 @@ std::string JsonArray(const std::vector<std::string>& values) {
     return json.str();
 }
 
-std::string BuildFactionsPayload(const std::vector<FactionRow>& factions) {
+std::string BuildFactionsPayload(const std::vector<FactionRow>& factions, size_t start, size_t count, bool replace,
+                                 size_t batchIndex, size_t batchCount) {
     std::ostringstream json;
-    json << "{\"type\":\"world_factions\",\"replace\":true,\"factions\":[";
-    for (size_t i = 0; i < factions.size(); ++i) {
-        if (i > 0) {
+    json << "{\"schema\":\"dialectic.world_factions.v1\",\"type\":\"world_factions\",\"replace\":"
+         << (replace ? "true" : "false")
+         << ",\"batch_index\":" << batchIndex
+         << ",\"batch_count\":" << batchCount
+         << ",\"factions\":[";
+    const size_t end = std::min(factions.size(), start + count);
+    for (size_t i = start; i < end; ++i) {
+        if (i > start) {
             json << ",";
         }
         json << "{";
@@ -708,9 +725,14 @@ std::string BuildFactionsPayload(const std::vector<FactionRow>& factions) {
     return json.str();
 }
 
-std::string BuildLocationsPayload(const std::vector<LocationRow>& locations, size_t start, size_t count, bool replace) {
+std::string BuildLocationsPayload(const std::vector<LocationRow>& locations, size_t start, size_t count, bool replace,
+                                  size_t batchIndex, size_t batchCount) {
     std::ostringstream json;
-    json << "{\"type\":\"world_locations\",\"replace\":" << (replace ? "true" : "false") << ",\"locations\":[";
+    json << "{\"schema\":\"dialectic.world_locations.v1\",\"type\":\"world_locations\",\"replace\":"
+         << (replace ? "true" : "false")
+         << ",\"batch_index\":" << batchIndex
+         << ",\"batch_count\":" << batchCount
+         << ",\"locations\":[";
     const size_t end = std::min(locations.size(), start + count);
     for (size_t i = start; i < end; ++i) {
         if (i > start) {
@@ -737,56 +759,93 @@ std::string BuildLocationsPayload(const std::vector<LocationRow>& locations, siz
 bool SendWorldData(const std::vector<FactionRow>& factions, const std::vector<LocationRow>& locations,
                    const TaskManager::CancellationToken& token) {
     if (token.IsCancellationRequested()) return false;
-    const std::string factionResponse = HTTPManager::SendJson("gamedata.php", BuildFactionsPayload(factions));
-    if (factionResponse.find("OK") == std::string::npos) {
-        Logger::LogWarning("[WORLD_DATA] Faction upload returned non-OK response");
-        return false;
+
+    if (factions.empty()) {
+        Logger::LogWarning("[WORLD_DATA] Faction scan found zero rows; leaving existing server factions unchanged");
+        DialecticInitialization::QueueNotice("No factions found.", IngameNotifier::Level::Warning);
+    } else {
+        const size_t factionBatchCount = (factions.size() + kFactionBatchSize - 1) / kFactionBatchSize;
+        DialecticInitialization::ReportWorldProgress("uploading factions", 0, factionBatchCount);
+        for (size_t start = 0, batchIndex = 1; start < factions.size(); start += kFactionBatchSize, ++batchIndex) {
+            if (token.IsCancellationRequested()) return false;
+            const std::string response = HTTPManager::SendJson(
+                "gamedata.php",
+                BuildFactionsPayload(factions, start, kFactionBatchSize, start == 0, batchIndex, factionBatchCount));
+            if (!ResponseAcknowledged(response)) {
+                Logger::LogWarning("[WORLD_DATA] Faction batch %zu/%zu was not acknowledged: %s",
+                    batchIndex, factionBatchCount, response.c_str());
+                DialecticInitialization::QueueNotice("Faction sync failed.", IngameNotifier::Level::Error);
+                return false;
+            }
+            Logger::LogInfo("[WORLD_DATA] Uploaded faction batch %zu/%zu", batchIndex, factionBatchCount);
+            DialecticInitialization::ReportWorldProgress("uploading factions", batchIndex, factionBatchCount);
+        }
+        DialecticInitialization::QueueNotice("Factions synced.", IngameNotifier::Level::Success);
     }
 
     if (locations.empty()) {
         Logger::LogWarning("[WORLD_DATA] Location scan found zero rows; leaving existing server locations unchanged");
+        DialecticInitialization::QueueNotice("No locations found.", IngameNotifier::Level::Warning);
         return true;
     }
 
-    for (size_t start = 0; start < locations.size(); start += kLocationBatchSize) {
+    const size_t locationBatchCount = (locations.size() + kLocationBatchSize - 1) / kLocationBatchSize;
+    DialecticInitialization::ReportWorldProgress("uploading locations", 0, locationBatchCount);
+    for (size_t start = 0, batchIndex = 1; start < locations.size(); start += kLocationBatchSize, ++batchIndex) {
         if (token.IsCancellationRequested()) return false;
         const bool replace = start == 0;
         const std::string response = HTTPManager::SendJson(
             "gamedata.php",
-            BuildLocationsPayload(locations, start, kLocationBatchSize, replace));
-        if (response.find("OK") == std::string::npos) {
-            Logger::LogWarning("[WORLD_DATA] Location batch upload returned non-OK response at offset %zu", start);
+            BuildLocationsPayload(locations, start, kLocationBatchSize, replace, batchIndex, locationBatchCount));
+        if (!ResponseAcknowledged(response)) {
+            Logger::LogWarning("[WORLD_DATA] Location batch %zu/%zu was not acknowledged: %s",
+                batchIndex, locationBatchCount, response.c_str());
+            DialecticInitialization::QueueNotice("Location sync failed.", IngameNotifier::Level::Error);
             return false;
         }
+        Logger::LogInfo("[WORLD_DATA] Uploaded location batch %zu/%zu", batchIndex, locationBatchCount);
+        DialecticInitialization::ReportWorldProgress("uploading locations", batchIndex, locationBatchCount);
     }
+    DialecticInitialization::QueueNotice("Locations synced.", IngameNotifier::Level::Success);
 
     return true;
 }
 
-void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers) {
+void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers, uint64_t runId) {
     if (g_syncInProgress.exchange(true)) {
         return;
     }
 
-    Console::Print("[Dialectic] Syncing Fallout factions and locations...");
     Logger::LogInfo("[WORLD_DATA] Collecting Fallout factions and map marker locations");
+    DialecticInitialization::ReportWorldProgress("finding factions and locations");
     auto factions = CollectFactions();
     auto nativeLocations = CollectNativeLocations(std::move(nativeMarkers));
     auto plugins = CollectLoadedPluginRows();
 
     const std::size_t factionCount = factions.size();
-    if (!TaskManager::Enqueue("gamedata", "world_data", RuntimeGeneration::Current(), false,
+    if (!TaskManager::Enqueue("gamedata", "world_data", 0, false,
             std::chrono::minutes(2),
             [factions = std::move(factions), nativeLocations = std::move(nativeLocations),
-             plugins = std::move(plugins), factionCount](const TaskManager::CancellationToken& token) mutable {
+             plugins = std::move(plugins), factionCount, runId](const TaskManager::CancellationToken& token) mutable {
                 if (token.IsCancellationRequested()) {
-                    g_syncInProgress = false;
+                    if (g_syncRunId.load() == runId) {
+                        g_syncRequested = false;
+                        g_syncInProgress = false;
+                        DialecticInitialization::QueueNotice("World sync cancelled.", IngameNotifier::Level::Warning);
+                        DialecticInitialization::ReportWorldFinished(false);
+                    }
                     return;
                 }
                 std::set<uint32_t> seenFormIds;
+                DialecticInitialization::ReportWorldProgress("finding locations");
                 auto locations = CollectLocationsFromPlugins(plugins, seenFormIds, token);
                 if (token.IsCancellationRequested()) {
-                    g_syncInProgress = false;
+                    if (g_syncRunId.load() == runId) {
+                        g_syncRequested = false;
+                        g_syncInProgress = false;
+                        DialecticInitialization::QueueNotice("World sync cancelled.", IngameNotifier::Level::Warning);
+                        DialecticInitialization::ReportWorldFinished(false);
+                    }
                     return;
                 }
                 for (auto& location : nativeLocations) {
@@ -805,28 +864,43 @@ void TrySyncNow(std::vector<XNVSEAdapter::NativeMapMarker> nativeMarkers) {
                 Logger::LogInfo("[WORLD_DATA] Discovered %zu factions and %zu locations",
                     factionCount, locationCount);
                 const bool success = SendWorldData(factions, locations, token);
+                if (g_syncRunId.load() != runId) {
+                    return;
+                }
                 if (success) {
                     g_completed = true;
                     g_syncRequested = false;
                     Logger::LogInfo("[WORLD_DATA] Synced %zu factions and %zu locations",
                         factionCount, locationCount);
                 } else {
+                    g_completed = false;
+                    g_syncRequested = false;
                     Logger::LogWarning("[WORLD_DATA] Sync failed");
                 }
+                DialecticInitialization::ReportWorldFinished(success);
                 g_syncInProgress = false;
             })) {
         Logger::LogWarning("[WORLD_DATA] Could not queue upload task");
+        g_syncRequested = false;
         g_syncInProgress = false;
+        DialecticInitialization::QueueNotice("World sync could not start.", IngameNotifier::Level::Error);
+        DialecticInitialization::ReportWorldFinished(false);
     }
 }
 
 } // namespace
 
 void RequestSync() {
+    if (g_syncRequested.load() || g_syncInProgress.load()) {
+        Logger::LogInfo("[WORLD_DATA] Ignored duplicate sync request while a sync is active");
+        DialecticInitialization::QueueNotice("World sync is already running.", IngameNotifier::Level::Warning);
+        return;
+    }
+
     g_completed = false;
     g_syncRequested = true;
     g_nativeMarkerCaptureStarted = false;
-    Console::Print("[Dialectic] Queued Fallout faction/location sync");
+    g_syncRunId.fetch_add(1);
     Logger::LogInfo("[WORLD_DATA] Sync requested");
 }
 
@@ -897,7 +971,7 @@ void Update() {
     const auto now = std::chrono::steady_clock::now();
     g_lastAttempt = now;
     g_nativeMarkerCaptureStarted = false;
-    TrySyncNow(std::move(nativeMarkers));
+    TrySyncNow(std::move(nativeMarkers), g_syncRunId.load());
 }
 
 } // namespace WorldDataSyncFNV

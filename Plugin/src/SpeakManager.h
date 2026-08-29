@@ -61,10 +61,14 @@ void QueueDialogue(const std::string& text,
                    const std::string& requestId = "",
                    uint64_t runtimeGeneration = 0,
                    uint32_t listenerFormId = 0,
-                   uint32_t rechatTargetFormId = 0);
+                   uint32_t rechatTargetFormId = 0,
+                   const std::string& displayName = "");
 
 // Suppress vanilla/radiant dialogue for an actor while an AI turn is pending.
 void GuardActorForPendingDialogue(uint32_t actorFormId, const std::string& actorName);
+
+// Preserve the player-centered audience for later rechat requests.
+void SetPlayerTurnAudience(const std::string& peoplePipe);
 
 // Rechat chain state
 bool BeginRechatAttempt(const std::string& speaker);
@@ -79,6 +83,7 @@ void QueueRechatRetry(const std::string& speaker,
 void CompleteRechatAttempt(const std::string& speaker, bool success);
 bool IsRechatInFlightFor(const std::string& speaker);
 void ResetRechatChainState();
+void StartRechatChainForAutonomousEvent();
 bool IsRechatChainClosed();
 std::string GetLastRechatter();
 void SetLastRechatter(const std::string& speaker);

@@ -1,0 +1,22 @@
+ref rPlayerCell
+
+float fPromptVersion
+
+Begin Function {}
+    set fPromptVersion to GetINIFloat "Setup:InitializationPromptVersion" "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    if eval fPromptVersion >= 1
+        return
+    endif
+
+    if eval (FileExists "Data\\NVSE\\Plugins\\dialectic_initialization_prompt_v1.done") || (FileExists "NVSE\\Plugins\\dialectic_initialization_prompt_v1.done")
+        return
+    endif
+
+    let rPlayerCell := PlayerRef.GetParentCell
+    if eval !(rPlayerCell) || !(IsFormValid rPlayerCell)
+        CallAfterSeconds 2.0 (CompileScript "Dialectic/InitializationPromptTick.txt") 0
+        return
+    endif
+
+    MessageBoxExAlt (CompileScript "Dialectic/InitializationPromptSelect.gek") "^Initialize DIALECTIC^This will initialize DIALECTIC for the best experience. Please wait 1 minute after clicking OK for it to initialize.|OK|Close"
+End

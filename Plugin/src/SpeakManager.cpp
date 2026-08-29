@@ -1,11 +1,12 @@
 #include "SpeakManager.h"
-#include "ActionManager.h"
 #include "AudioManager.h"
 #include "AgentManager.h"
 #include "ActorEligibilityFNV.h"
+#include "ActivityStatusFNV.h"
 #include "ActorPositionResolverFNV.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
+#include "HeadVoiceVolumeUtils.h"
 #include "HTTPManager.h"
 #include "Config.h"
 #include "Misc.h"
@@ -39,7 +40,6 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <vector>
 #include <atomic>
 #include <functional>
@@ -57,6 +57,7 @@ namespace SpeakManager {
     struct ScriptLine {
         std::string text;
         std::string actor;
+        std::string displayName;
         std::string action;
         uint32_t actorFormId = 0;
         bool isFinalResponseLine = false;
@@ -71,6 +72,7 @@ namespace SpeakManager {
         std::string sceneKey;
         uint64_t runtimeGeneration = 0;
         bool rechatLaunched = false;
+        bool textOnlyFallback = false;
         uint64_t sequence = 0;
     };
 
@@ -81,6 +83,7 @@ namespace SpeakManager {
         uint32_t actorFormId = 0;
         ScriptLine line;
         bool ready;
+        bool textOnlyFallback = false;
     };
 
     static std::queue<ScriptLine> g_scriptQueue;
@@ -99,13 +102,15 @@ namespace SpeakManager {
     static bool g_playerInputTtsGateActive = false;
     static std::chrono::steady_clock::time_point g_playerInputTtsGateUntil = {};
     static constexpr auto kPlayerInputTtsGateTimeout = std::chrono::seconds(5);
+    static constexpr int kNpcTtsMaxDownloadAttempts = 50;
+    static constexpr auto kNpcTtsPreparationTimeout = std::chrono::seconds(20);
     static uint32_t g_currentSpeakerFormId = 0;
     static std::string g_currentSpeaker;
     static ScriptLine g_currentPlaybackLine;
     static bool g_currentPlaybackLineActive = false;
     static bool g_currentPlaybackRechatLaunched = false;
+    static bool g_currentPlaybackIsHeadVoice = false;
     static bool g_faceTargetBridgeActive = false;
-    static bool g_faceTargetScriptFallbackActive = false;
 static uint32_t g_faceTargetSpeakerFormId = 0;
 static uint32_t g_faceTargetTargetFormId = 0;
     static std::string g_lastDialogueGuardValue;
@@ -188,7 +193,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static PendingRechatRetry g_pendingRechatRetry;
     static std::string g_lastRechatter;
     static bool g_rechatChainClosed = false;
+    static bool g_rechatChainAutonomous = false;
     static std::string g_rechatChainId;
+    static std::vector<std::string> g_playerTurnAudience;
     static std::chrono::steady_clock::time_point g_rechatCooldownUntil = {};
     static ScriptLine g_pendingRechatLaunchLine;
     static bool g_pendingRechatLaunchActive = false;
@@ -199,8 +206,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static constexpr int kDialogueActorLatestScanMs = 8000;
 
     static const char* kSubtitleBridgePath = "Data\\NVSE\\Plugins\\dialectic_subtitle.txt";
-    static const char* kLipSyncRefPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_ref.txt";
-    static const char* kLipSyncCommandPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_command.txt";
     static const char* kLipSyncStatusPath = "Data\\NVSE\\Plugins\\dialectic_lipsync_status.txt";
     static const char* kDialogueGuardRefPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_ref.txt";
     static const char* kDialogueGuardModPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_mod.txt";
@@ -208,9 +213,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static const char* kDialogueGuardStatusPath = "Data\\NVSE\\Plugins\\dialectic_dialogue_guard_status.txt";
     static const char* kQueueStatusPath = "Data\\NVSE\\Plugins\\dialectic_queue_status.tmp";
     static const char* kRechatStatusPath = "Data\\NVSE\\Plugins\\dialectic_rechat_status.tmp";
-    static const char* kFaceTargetSpeakerRefPath = "Data\\NVSE\\Plugins\\dialectic_facing_speaker_ref.txt";
-    static const char* kFaceTargetTargetRefPath = "Data\\NVSE\\Plugins\\dialectic_facing_target_ref.txt";
-    static const char* kFaceTargetYawPath = "Data\\NVSE\\Plugins\\dialectic_facing_yaw.txt";
 
     struct PassiveSubtitleSegment {
         double startSeconds = 0.0;
@@ -229,6 +231,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static bool g_playerTextOnlySubtitleActive = false;
     static std::chrono::steady_clock::time_point g_playerTextOnlySubtitleUntil = {};
     static constexpr auto kPlayerTextOnlySubtitleDuration = std::chrono::seconds(2);
+    static bool g_npcTextOnlyFallbackActive = false;
+    static std::chrono::steady_clock::time_point g_npcTextOnlyFallbackUntil = {};
     static std::mutex g_recentSubtitleMutex;
     static std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> g_recentAiSubtitleKeys;
     static constexpr auto kRecentAiSubtitleWindow = std::chrono::seconds(20);
@@ -692,22 +696,22 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return 0;
         }
 
-        uint32_t targetFormId = line.rechatTargetFormId;
-        if (targetFormId != 0 && targetFormId != line.actorFormId) {
-            return targetFormId;
-        }
-
-        targetFormId = ResolveFaceTargetHint(line.rechatTargetHint, line.actorFormId);
-        if (targetFormId != 0) {
-            return targetFormId;
-        }
-
-        targetFormId = line.listenerFormId;
+        uint32_t targetFormId = line.listenerFormId;
         if (targetFormId != 0 && targetFormId != line.actorFormId) {
             return targetFormId;
         }
 
         targetFormId = ResolveFaceTargetHint(line.listenerHint, line.actorFormId);
+        if (targetFormId != 0) {
+            return targetFormId;
+        }
+
+        targetFormId = line.rechatTargetFormId;
+        if (targetFormId != 0 && targetFormId != line.actorFormId) {
+            return targetFormId;
+        }
+
+        targetFormId = ResolveFaceTargetHint(line.rechatTargetHint, line.actorFormId);
         if (targetFormId != 0) {
             return targetFormId;
         }
@@ -728,18 +732,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         return 0x00000014;
-    }
-
-    static void WriteFaceTargetRefFile(const char* path, uint32_t formId) {
-        std::ofstream file(path, std::ios::trunc);
-        if (!file.is_open()) {
-            Log("SpeakManager: Failed to write face-target bridge file: %s", path);
-            return;
-        }
-
-        if (formId != 0) {
-            file << RawHexFormId(formId) << "\n";
-        }
     }
 
     static bool CalculateFaceTargetYaw(uint32_t speakerFormId,
@@ -779,38 +771,11 @@ static uint32_t g_faceTargetTargetFormId = 0;
             std::ostringstream stream;
             stream << speaker.source << "/" << target.source
                 << " dx=" << std::fixed << std::setprecision(1) << dx
-                << " dy=" << dy;
+                << " dy=" << dy
+                << " yaw=" << yawDegrees;
             *reason = stream.str();
         }
         return true;
-    }
-
-    static bool WriteFaceTargetYawFile(uint32_t speakerFormId, uint32_t targetFormId, std::string* reason = nullptr) {
-        std::ofstream file(kFaceTargetYawPath, std::ios::trunc);
-        if (!file.is_open()) {
-            Log("SpeakManager: Failed to write face-target yaw bridge file: %s", kFaceTargetYawPath);
-            if (reason) {
-                *reason = "yaw_file_open_failed";
-            }
-            return false;
-        }
-
-        float yawDegrees = 0.0f;
-        std::string localReason;
-        if (CalculateFaceTargetYaw(speakerFormId, targetFormId, yawDegrees, &localReason)) {
-            file << std::fixed << std::setprecision(3) << yawDegrees << "\n";
-            if (reason) {
-                std::ostringstream stream;
-                stream << "yaw=" << std::fixed << std::setprecision(3) << yawDegrees
-                    << " " << localReason;
-                *reason = stream.str();
-            }
-            return true;
-        }
-        if (reason) {
-            *reason = localReason.empty() ? "yaw_unresolved" : localReason;
-        }
-        return false;
     }
 
     static void ApplyFaceTargetAtDialogueStart();
@@ -820,10 +785,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (speakerFormId != 0) {
                 XNVSEAdapter::ClearNativeFacing(speakerFormId);
             }
-            WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, 0);
-            WriteFaceTargetRefFile(kFaceTargetTargetRefPath, 0);
-            std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-            g_faceTargetScriptFallbackActive = false;
         };
         if (GameThreadDispatcher::IsGameThread()) {
             clear();
@@ -909,23 +870,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             const uint32_t speakerFormId = g_faceTargetSpeakerFormId;
             const uint32_t targetFormId = g_faceTargetTargetFormId;
             auto apply = [speakerFormId, targetFormId, yawDegrees]() {
-                if (XNVSEAdapter::ApplyNativeFacing(speakerFormId, targetFormId, yawDegrees)) {
-                    if (g_faceTargetScriptFallbackActive) {
-                        WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, 0);
-                        WriteFaceTargetRefFile(kFaceTargetTargetRefPath, 0);
-                        std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-                        g_faceTargetScriptFallbackActive = false;
-                    }
-                    return;
+                if (!XNVSEAdapter::ApplyNativeFacing(speakerFormId, targetFormId, yawDegrees)) {
+                    Log("SpeakManager: Native one-shot face target failed speaker=0x%08X target=0x%08X",
+                        speakerFormId, targetFormId);
                 }
-
-                WriteFaceTargetRefFile(kFaceTargetSpeakerRefPath, speakerFormId);
-                WriteFaceTargetRefFile(kFaceTargetTargetRefPath, targetFormId);
-                std::ofstream yawFile(kFaceTargetYawPath, std::ios::trunc);
-                if (yawFile.is_open()) {
-                    yawFile << std::fixed << std::setprecision(3) << yawDegrees << "\n";
-                }
-                g_faceTargetScriptFallbackActive = true;
             };
             if (GameThreadDispatcher::IsGameThread()) {
                 apply();
@@ -1017,6 +965,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (reason) {
                 *reason = "actor is currently controlled by a scene/dialogue package";
             }
+            return false;
+        }
+
+        if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(position.formId, reason)) {
             return false;
         }
 
@@ -1189,7 +1141,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         const std::string displayText = NormalizeSubtitleText(line.text);
         const std::string speakerName = IsPlayerSpeakerName(line.actor)
             ? PlayerDisplayName()
-            : line.actor;
+            : (!line.displayName.empty() ? line.displayName : line.actor);
         const std::string speaker = NormalizeSubtitleText(speakerName);
         if (displayText.empty() || speaker.empty()) {
             return displayText;
@@ -1341,6 +1293,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_subtitleLastText.clear();
         g_playerTextOnlySubtitleActive = false;
         g_playerTextOnlySubtitleUntil = {};
+        g_npcTextOnlyFallbackActive = false;
+        g_npcTextOnlyFallbackUntil = {};
 
         auto clear = []() {
             XNVSEAdapter::ClearNativePassiveSubtitle();
@@ -1387,6 +1341,53 @@ static uint32_t g_faceTargetTargetFormId = 0;
             Log("SpeakManager: Player text-only subtitle finished");
             ClearSubtitleBridge();
         }
+    }
+
+    static std::chrono::milliseconds EstimateNpcTextOnlyFallbackDuration(const ScriptLine& line) {
+        const size_t visibleCharacters = NormalizeSubtitleText(line.text).size();
+        const long long estimatedMs = static_cast<long long>(visibleCharacters) * 55LL + 1200LL;
+        return std::chrono::milliseconds(std::clamp<long long>(estimatedMs, 2500LL, 12000LL));
+    }
+
+    static void StartNpcTextOnlyFallback(const ScriptLine& line) {
+        ClearSubtitleBridge();
+        const auto duration = Config::showAISubtitles
+            ? EstimateNpcTextOnlyFallbackDuration(line)
+            : std::chrono::milliseconds(100);
+        g_npcTextOnlyFallbackActive = true;
+        g_npcTextOnlyFallbackUntil = std::chrono::steady_clock::now() + duration;
+
+        if (Config::showAISubtitles) {
+            const std::string displayText = BuildSpeakerSubtitleText(line);
+            if (!displayText.empty()) {
+                WriteSubtitleBridgeText(displayText,
+                                        line.utteranceId.empty() ? line.requestId : line.utteranceId,
+                                        0,
+                                        1,
+                                        0.0,
+                                        std::chrono::duration<double>(duration).count());
+            }
+        }
+
+        Log("SpeakManager: Audio unavailable; delivering text-only fallback speaker='%s' duration_ms=%lld text='%s'",
+            line.actor.c_str(),
+            static_cast<long long>(duration.count()),
+            PreviewText(line.text).c_str());
+        SendDeliveryState(line, "text_only");
+    }
+
+    static bool UpdateNpcTextOnlyFallback() {
+        if (!g_npcTextOnlyFallbackActive) {
+            return false;
+        }
+        if (std::chrono::steady_clock::now() < g_npcTextOnlyFallbackUntil) {
+            return true;
+        }
+
+        g_npcTextOnlyFallbackActive = false;
+        g_npcTextOnlyFallbackUntil = {};
+        ClearSubtitleBridge();
+        return false;
     }
 
     struct WavInfo {
@@ -1436,6 +1437,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
     static uint64_t g_lipSyncLineSequence = 0;
     static std::chrono::steady_clock::time_point g_lipSyncLastCommandAt = {};
     static constexpr int kMaxConsecutiveNativeLipSyncFailures = 3;
+    static constexpr int kMaxLipSyncResetAttempts = 5;
+    static constexpr auto kLipSyncResetRetryDelay = std::chrono::milliseconds(100);
+
+    struct PendingLipSyncReset {
+        uint32_t actorFormId = 0;
+        uint64_t lineSequence = 0;
+        int attempts = 0;
+        std::chrono::steady_clock::time_point nextAttempt = {};
+        std::string reason;
+    };
+
+    static std::deque<PendingLipSyncReset> g_pendingLipSyncResets;
 
     static uint16_t ReadLE16(const uint8_t* data) {
         return static_cast<uint16_t>(data[0] | (data[1] << 8));
@@ -1617,51 +1630,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         out << status << "\r\n";
-    }
-
-    static void WriteLipSyncCommand(uint32_t formId, const std::string& command) {
-        if (formId == 0 || command.empty()) {
-            return;
-        }
-        g_lipSyncCommandsRequested.fetch_add(1, std::memory_order_relaxed);
-
-        const std::string refId = ConsoleFormId(formId);
-        int phoneme = -1;
-        int intensity = 0;
-        const bool reset = EqualsIgnoreCase(command, "MFG Reset");
-        const bool parsed = reset ||
-            std::sscanf(command.c_str(), "MFG Phoneme %d %d", &phoneme, &intensity) == 2;
-        auto apply = [formId, command, refId, phoneme, intensity, reset, parsed]() {
-            if (parsed && XNVSEAdapter::ApplyNativeMfg(formId, phoneme, intensity, reset)) {
-                g_nativeMfgApplied.fetch_add(1, std::memory_order_relaxed);
-                std::ofstream refClear(kLipSyncRefPath, std::ios::binary | std::ios::trunc);
-                std::ofstream commandClear(kLipSyncCommandPath, std::ios::binary | std::ios::trunc);
-                WriteLipSyncStatus(std::string("status=native_applied ref=") + refId + " command=" + command);
-            } else {
-                g_scriptMfgFallbacks.fetch_add(1, std::memory_order_relaxed);
-                std::ofstream refOut(kLipSyncRefPath, std::ios::binary | std::ios::trunc);
-                std::ofstream out(kLipSyncCommandPath, std::ios::binary | std::ios::trunc);
-                if (!refOut.is_open() || !out.is_open()) {
-                    WriteLipSyncStatus("status=error reason=fallback_file_open_failed");
-                    return;
-                }
-                refOut << refId << "\r\n";
-                out << command << "\r\n";
-                WriteLipSyncStatus(std::string("status=script_fallback ref=") + refId + " command=" + command);
-            }
-
-            ++g_lipSyncCommandCount;
-            if (g_lipSyncCommandCount <= 5 || g_lipSyncCommandCount % 20 == 0) {
-                Log("SpeakManager: Lip sync fallback command #%llu ref=0x%08X command=%s",
-                    static_cast<unsigned long long>(g_lipSyncCommandCount), formId, command.c_str());
-            }
-        };
-        if (GameThreadDispatcher::IsGameThread()) {
-            apply();
-        } else {
-            GameThreadDispatcher::Enqueue("lipsync", "lipsync:" + std::to_string(formId),
-                RuntimeGeneration::Current(), std::move(apply));
-        }
     }
 
     static int PhonemeForTextAt(const std::string& text, size_t index, size_t& consumed) {
@@ -2029,29 +1997,129 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return frames;
     }
 
-    static void StopLipSync(bool resetFace) {
+    static void ClearLipSyncSessionLocked() {
+        g_lipSyncActive = false;
+        g_lipSyncActorFormId = 0;
+        g_lipSyncFrames.clear();
+        g_lipSyncFrameIndex = 0;
+        g_lipSyncLastPhoneme = -2;
+        g_lipSyncLastIntensity = -1;
+        g_lipSyncCommandCount = 0;
+        g_lipSyncConsecutiveNativeFailures = 0;
+        g_lipSyncRuntimeGeneration = 0;
+        g_lipSyncAudioGeneration = 0;
+        g_lipSyncLineSequence = 0;
+        g_lipSyncLastCommandAt = {};
+    }
+
+    static void QueueLipSyncResetRetry(uint32_t formId,
+                                       uint64_t lineSequence,
+                                       int attempts,
+                                       const char* reason) {
+        std::lock_guard<std::mutex> lock(g_lipSyncMutex);
+        for (PendingLipSyncReset& pending : g_pendingLipSyncResets) {
+            if (pending.actorFormId == formId && pending.lineSequence == lineSequence) {
+                pending.attempts = std::max(pending.attempts, attempts);
+                pending.nextAttempt = std::chrono::steady_clock::now() + kLipSyncResetRetryDelay;
+                return;
+            }
+        }
+        g_pendingLipSyncResets.push_back({
+            formId,
+            lineSequence,
+            attempts,
+            std::chrono::steady_clock::now() + kLipSyncResetRetryDelay,
+            reason ? reason : "unknown"
+        });
+    }
+
+    static void FinalizeLipSync(const char* reason) {
         uint32_t formId = 0;
+        uint64_t lineSequence = 0;
         {
             std::lock_guard<std::mutex> lock(g_lipSyncMutex);
             formId = g_lipSyncActorFormId;
-            g_lipSyncActive = false;
-            g_lipSyncActorFormId = 0;
-            g_lipSyncFrames.clear();
-            g_lipSyncFrameIndex = 0;
-            g_lipSyncLastPhoneme = -2;
-            g_lipSyncLastIntensity = -1;
-            g_lipSyncCommandCount = 0;
-            g_lipSyncConsecutiveNativeFailures = 0;
-            g_lipSyncRuntimeGeneration = 0;
-            g_lipSyncAudioGeneration = 0;
-            g_lipSyncLineSequence = 0;
+            lineSequence = g_lipSyncLineSequence;
+            ClearLipSyncSessionLocked();
         }
 
-        if (resetFace && formId != 0) {
-            if (!XNVSEAdapter::ApplyNativeFaceGenLipSync(formId, -1, 0, 100, true)) {
-                WriteLipSyncCommand(formId, "MFG Reset");
+        if (formId == 0) {
+            return;
+        }
+
+        if (XNVSEAdapter::ResetNativeLipSync(formId)) {
+            Log("SpeakManager: Lip sync finalized reason=%s ref=0x%08X line=%llu reset=direct",
+                reason ? reason : "unknown",
+                formId,
+                static_cast<unsigned long long>(lineSequence));
+            WriteLipSyncStatus(std::string("status=reset_direct reason=") +
+                               (reason ? reason : "unknown") +
+                               " ref=" + ConsoleFormId(formId));
+            return;
+        }
+
+        Log("SpeakManager: Lip sync reset deferred reason=%s ref=0x%08X line=%llu",
+            reason ? reason : "unknown",
+            formId,
+            static_cast<unsigned long long>(lineSequence));
+        QueueLipSyncResetRetry(formId, lineSequence, 1, reason);
+        WriteLipSyncStatus(std::string("status=reset_pending reason=") +
+                           (reason ? reason : "unknown") +
+                           " ref=" + ConsoleFormId(formId));
+    }
+
+    static void ProcessPendingLipSyncResets() {
+        PendingLipSyncReset pending;
+        bool hasPending = false;
+        {
+            std::lock_guard<std::mutex> lock(g_lipSyncMutex);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = g_pendingLipSyncResets.begin(); it != g_pendingLipSyncResets.end();) {
+                if (g_lipSyncActive && g_lipSyncActorFormId == it->actorFormId) {
+                    if (g_lipSyncLineSequence != it->lineSequence) {
+                        Log("SpeakManager: Discarding obsolete lip sync reset ref=0x%08X oldLine=%llu newLine=%llu",
+                            it->actorFormId,
+                            static_cast<unsigned long long>(it->lineSequence),
+                            static_cast<unsigned long long>(g_lipSyncLineSequence));
+                        it = g_pendingLipSyncResets.erase(it);
+                        continue;
+                    }
+                    ++it;
+                    continue;
+                }
+                if (it->nextAttempt <= now) {
+                    pending = *it;
+                    g_pendingLipSyncResets.erase(it);
+                    hasPending = true;
+                    break;
+                }
+                ++it;
             }
         }
+
+        if (!hasPending) {
+            return;
+        }
+        if (XNVSEAdapter::ResetNativeLipSync(pending.actorFormId)) {
+            Log("SpeakManager: Lip sync reset retry succeeded reason=%s ref=0x%08X attempts=%d",
+                pending.reason.c_str(), pending.actorFormId, pending.attempts + 1);
+            WriteLipSyncStatus(std::string("status=reset_retry_succeeded reason=") +
+                               pending.reason + " ref=" + ConsoleFormId(pending.actorFormId));
+            return;
+        }
+
+        ++pending.attempts;
+        if (pending.attempts >= kMaxLipSyncResetAttempts) {
+            Log("SpeakManager: Lip sync reset exhausted reason=%s ref=0x%08X attempts=%d",
+                pending.reason.c_str(), pending.actorFormId, pending.attempts);
+            WriteLipSyncStatus(std::string("status=reset_failed reason=") +
+                               pending.reason + " ref=" + ConsoleFormId(pending.actorFormId));
+            return;
+        }
+        QueueLipSyncResetRetry(pending.actorFormId,
+                               pending.lineSequence,
+                               pending.attempts,
+                               pending.reason.c_str());
     }
 
     static uint32_t ResolveSpeakerFormId(const ScriptLine& line);
@@ -2098,7 +2166,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static void StartLipSync(const ScriptLine& line, const std::vector<uint8_t>& audioData) {
-        StopLipSync(false);
+        FinalizeLipSync("replacement_line");
 
         const uint32_t formId = ResolveSpeakerFormId(line);
         if (IsPlayerSpeakerName(line.actor) ||
@@ -2249,7 +2317,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             "avoiding high-frequency MFG script fallback",
             formId,
             kMaxConsecutiveNativeLipSyncFailures);
-        WriteLipSyncCommand(formId, "MFG Reset");
+        FinalizeLipSync("native_facegen_failure");
         WriteLipSyncStatus(std::string("status=disabled reason=repeated_native_facegen_failure ref=") +
                            ConsoleFormId(formId));
     }
@@ -2287,18 +2355,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             }
 
             if (staleSession) {
-                g_lipSyncActive = false;
-                g_lipSyncActorFormId = 0;
-                g_lipSyncFrames.clear();
-                g_lipSyncFrameIndex = 0;
-                g_lipSyncRuntimeGeneration = 0;
-                g_lipSyncAudioGeneration = 0;
-                g_lipSyncLineSequence = 0;
-            }
-
-            if (staleSession) {
-                // Never touch an actor after the owning playback generation has changed.
-                // Explicit stop paths perform their face reset separately.
                 shouldWrite = false;
             } else {
 
@@ -2310,7 +2366,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
                 if (elapsed > g_lipSyncFrames.back().endSeconds + 0.1) {
                     formId = g_lipSyncActorFormId;
-                    g_lipSyncActive = false;
                     shouldReset = true;
                 } else {
                     const LipSyncFrame& frame = g_lipSyncFrames[g_lipSyncFrameIndex];
@@ -2340,19 +2395,14 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         if (staleSession) {
-            Log("SpeakManager: Lip sync session dropped without actor write because %s changed",
-                staleReason ? staleReason : "ownership");
-            WriteLipSyncStatus(std::string("status=dropped reason=stale_") +
-                               (staleReason ? staleReason : "ownership"));
+            const std::string reason = std::string("stale_") +
+                (staleReason ? staleReason : "ownership");
+            FinalizeLipSync(reason.c_str());
             return;
         }
 
         if (shouldReset && formId != 0) {
-            if (!XNVSEAdapter::ApplyNativeFaceGenLipSync(formId, -1, 0, 100, true)) {
-                WriteLipSyncCommand(formId, "MFG Reset");
-            } else {
-                WriteLipSyncStatus(std::string("status=reset_direct ref=") + ConsoleFormId(formId));
-            }
+            FinalizeLipSync("frames_complete");
             return;
         }
 
@@ -2394,7 +2444,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         TaskManager::CancelByType("audio_prepare");
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
-        StopLipSync(true);
+        FinalizeLipSync("shutdown");
         std::lock_guard<std::mutex> lock(g_queueMutex);
         while (!g_scriptQueue.empty()) {
             g_scriptQueue.pop();
@@ -2490,6 +2540,13 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return ClampFloat(Config::voiceVolume / 100.0f, 0.0f, 1.0f);
     }
 
+    static float GetCurrentLineVoiceVolume() {
+        return HeadVoiceVolumeUtils::ApplyToLine(
+            GetBaseVoiceVolume(),
+            g_currentPlaybackIsHeadVoice,
+            HeadVoiceVolumeUtils::PercentToMultiplier(Config::headVoiceVolume));
+    }
+
     static float ClampPlaybackDropoffPercent(float percent) {
         if (!std::isfinite(percent)) {
             return 70.0f;
@@ -2510,7 +2567,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         const ActorPositionResolverFNV::PositionResult& speaker,
         const ActorPositionResolverFNV::PositionResult& listener,
         const SpatialAwarenessFNV::Result& spatial) {
-        const float baseVolume = GetBaseVoiceVolume();
+        const float baseVolume = GetCurrentLineVoiceVolume();
         if (!speaker.resolved || !listener.resolved) {
             return baseVolume;
         }
@@ -2609,6 +2666,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         if (!AudioManager::IsPlaying()) {
             g_currentSpeakerFormId = 0;
             g_currentSpeaker.clear();
+            g_currentPlaybackIsHeadVoice = false;
             g_lastSpatialPlaybackUpdateTime = {};
             g_lastSpatialPlaybackSpeakerFormId = 0;
             AudioManager::Set3DPlaybackEnabled(false);
@@ -2619,7 +2677,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_lastSpatialPlaybackUpdateTime = {};
             g_lastSpatialPlaybackSpeakerFormId = 0;
             AudioManager::Set3DPlaybackEnabled(false);
-            AudioManager::SetVolume(GetBaseVoiceVolume());
+            AudioManager::SetVolume(GetCurrentLineVoiceVolume());
             return;
         }
 
@@ -2648,20 +2706,22 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
-        AudioManager::Vector3 listenerForward = { 0.0f, 1.0f, 0.0f };
-        float listenerYaw = listener.yawResolved ? listener.yaw : 0.0f;
+        AudioManager::Vector3 listenerForward = {};
+        XNVSEAdapter::CaptureNativeCameraForward(
+            listenerForward.x,
+            listenerForward.y,
+            listenerForward.z);
         if (Config::audioInvertHeading) {
-            listenerYaw += 3.14159265f;
+            listenerForward.x = -listenerForward.x;
+            listenerForward.y = -listenerForward.y;
         }
 
         AudioManager::Set3DPlaybackEnabled(Config::audio3DPlaybackEnabled);
-        AudioManager::SetCameraBasedAudio(Config::audioCameraBased);
         AudioManager::Set3DPlaybackStrength(Config::audio3DPanStrength);
         AudioManager::Update(
             ToAudioVector(speaker.position),
             ToAudioVector(listener.position),
-            listenerForward,
-            listenerYaw);
+            listenerForward);
 
         AudioManager::SetVolume(CalculatePlaybackVolume(speaker, listener, spatial));
     }
@@ -2674,7 +2734,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::Set3DPlaybackEnabled(false);
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
-        StopLipSync(true);
+        FinalizeLipSync("abort");
     }
 
     bool IsAborted() {
@@ -2783,13 +2843,37 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_rechatInFlight = false;
         g_rechatInFlightSpeaker.clear();
         g_rechatChainClosed = false;
+        g_rechatChainAutonomous = false;
         g_rechatChainId.clear();
+        g_playerTurnAudience.clear();
         g_lastRechatter.clear();
         g_pendingRechatRetry = PendingRechatRetry{};
         g_pendingRechatLaunchLine = ScriptLine{};
         g_pendingRechatLaunchActive = false;
         g_pendingRechatLaunchUntil = {};
         g_pendingRechatNextCheck = {};
+    }
+
+    void SetPlayerTurnAudience(const std::string& peoplePipe) {
+        std::vector<std::string> names;
+        std::set<std::string> seen;
+        std::istringstream stream(peoplePipe);
+        std::string name;
+        while (std::getline(stream, name, '|')) {
+            AppendUniqueAudienceName(names, seen, name);
+        }
+
+        std::lock_guard<std::mutex> lock(g_rechatMutex);
+        g_playerTurnAudience = std::move(names);
+    }
+
+    void StartRechatChainForAutonomousEvent() {
+        ResetRechatChainState();
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            g_rechatChainAutonomous = true;
+        }
+        Log("SpeakManager: Opened a fresh rechat chain from autonomous event");
     }
 
     bool IsRechatChainClosed() {
@@ -2845,9 +2929,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return 0;
         }
         if (EqualsIgnoreCase(Config::currentMode, "WHISPER")) {
-            Log("SpeakManager: Rechat skipped for %s because WHISPER mode is private",
-                cleanSpeaker.c_str());
-            WriteRechatStatus("skipped", cleanSpeaker, "request", "whisper_mode_private", cleanTarget);
+            Log("SpeakManager: Rechat skipped for %s because %s mode is private",
+                cleanSpeaker.c_str(), Config::currentMode.c_str());
+            WriteRechatStatus("skipped", cleanSpeaker, "request", "private_mode", cleanTarget);
             return 0;
         }
         if (cleanSpeaker.empty()) {
@@ -2942,8 +3026,14 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         const std::string chainId = EnsureRechatChainId(cleanSpeaker, cleanListener, cleanTarget);
         const std::string resolvedTarget = cleanTarget.empty() ? cleanListener : cleanTarget;
-        const std::vector<std::string> audienceNames =
-            BuildRechatAudienceNames(cleanSpeaker, cleanListener, cleanTarget, speakerFormId);
+        std::vector<std::string> audienceNames;
+        if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            audienceNames = g_playerTurnAudience;
+        } else {
+            audienceNames = BuildRechatAudienceNames(
+                cleanSpeaker, cleanListener, cleanTarget, speakerFormId);
+        }
         const std::string audienceJson = JsonStringArray(audienceNames);
         const std::string audiencePipe = AudiencePeoplePipe(audienceNames);
 
@@ -3027,30 +3117,31 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static void CompleteFailedAudioDownload(const ScriptLine& item, uint64_t generation) {
-        bool shouldClearGuardIfIdle = false;
+        bool queuedTextFallback = false;
         if (generation == g_audioGeneration.load() && !item.text.empty() && !item.actor.empty()) {
             g_audioFailed.fetch_add(1, std::memory_order_relaxed);
-            HTTPManager::SendDialogueDeliveryAck(item.actor,
-                                                 item.actorFormId,
-                                                 item.text,
-                                                 item.ttsCacheKey,
-                                                 item.utteranceId,
-                                                 "failed",
-                                                 item.requestId);
-            if (!AudioManager::IsPlaying() && !g_currentPlaybackLineActive) {
-                shouldClearGuardIfIdle = true;
-            }
         }
         {
             std::lock_guard<std::mutex> pendingLock(g_pendingMutex);
             if (g_downloadsInProgress > 0) {
                 --g_downloadsInProgress;
             }
-            if (generation == g_audioGeneration.load() && item.sequence != 0) {
+            if (generation == g_audioGeneration.load() && item.sequence != 0 &&
+                !item.text.empty() && !item.actor.empty()) {
+                PendingAudio fallback;
+                fallback.speaker = item.actor;
+                fallback.actorFormId = item.actorFormId;
+                fallback.line = item;
+                fallback.line.textOnlyFallback = true;
+                fallback.ready = true;
+                fallback.textOnlyFallback = true;
+                g_pendingAudioQueue.push_back(std::move(fallback));
+                queuedTextFallback = true;
+            } else if (generation == g_audioGeneration.load() && item.sequence != 0) {
                 g_pendingLineSequences.erase(item.sequence);
             }
         }
-        if (shouldClearGuardIfIdle) {
+        if (!queuedTextFallback && !AudioManager::IsPlaying() && !g_currentPlaybackLineActive) {
             ClearDialogueGuardBridgeIfIdle();
         }
     }
@@ -3062,7 +3153,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         const uint64_t nextSequence = *g_pendingLineSequences.begin();
         for (auto it = g_pendingAudioQueue.begin(); it != g_pendingAudioQueue.end(); ++it) {
-            if (it->ready && !it->audioData.empty() && it->line.sequence == nextSequence) {
+            if (it->ready && (!it->audioData.empty() || it->textOnlyFallback) &&
+                it->line.sequence == nextSequence) {
                 readyAudio = std::move(*it);
                 g_pendingAudioQueue.erase(it);
                 g_pendingLineSequences.erase(nextSequence);
@@ -3178,12 +3270,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
         AudioManager::Stop();
         AudioManager::Set3DPlaybackEnabled(false);
         AudioManager::SetVolume(GetBaseVoiceVolume());
-        StopLipSync(true);
+        FinalizeLipSync("scene_change");
         ClearFaceTargetBridge();
         ClearSubtitleBridge();
         ClearDialogueGuardBridge();
-        ActionManager::ClearPostDialogueActions();
-
         std::vector<ScriptLine> abortedLines;
         {
             std::lock_guard<std::mutex> lock(g_queueMutex);
@@ -3208,6 +3298,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};
@@ -3219,6 +3310,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_currentPlaybackLine = ScriptLine{};
         g_currentPlaybackLineActive = false;
         g_currentPlaybackRechatLaunched = false;
+        g_currentPlaybackIsHeadVoice = false;
         g_playbackPausedForMenu = false;
         ClearPlayerInputTtsGate("scene_change");
     }
@@ -3361,13 +3453,111 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return wide;
     }
 
+    enum class TtsGenerationStatus {
+        Unknown,
+        Pending,
+        Ready,
+        Failed
+    };
+
+    static TtsGenerationStatus QueryTtsGenerationStatus(
+        HINTERNET hConnect,
+        const std::string& cacheKey,
+        uint64_t generation,
+        const TaskManager::CancellationToken& token) {
+        if (!hConnect || cacheKey.empty() ||
+            generation != g_audioGeneration.load() || token.IsCancellationRequested()) {
+            return TtsGenerationStatus::Unknown;
+        }
+
+        const std::string path = "/DialecticServer/tts_status.php?cache_key=" + cacheKey;
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect,
+                                                L"GET",
+                                                Utf8ToWide(path).c_str(),
+                                                NULL,
+                                                WINHTTP_NO_REFERER,
+                                                WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                                0);
+        if (!hRequest) {
+            return TtsGenerationStatus::Unknown;
+        }
+
+        auto interruptibleRequest = std::make_shared<std::atomic<HINTERNET>>(hRequest);
+        token.SetInterrupt([interruptibleRequest]() {
+            HINTERNET request = interruptibleRequest->exchange(nullptr);
+            if (request) WinHttpCloseHandle(request);
+        });
+
+        DWORD timeoutMs = 1000;
+        WinHttpSetTimeouts(hRequest, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+        const bool requestOk = WinHttpSendRequest(hRequest,
+                                                  WINHTTP_NO_ADDITIONAL_HEADERS,
+                                                  0,
+                                                  WINHTTP_NO_REQUEST_DATA,
+                                                  0,
+                                                  0,
+                                                  0) &&
+            WinHttpReceiveResponse(hRequest, NULL);
+
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        if (requestOk) {
+            WinHttpQueryHeaders(hRequest,
+                                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX,
+                                &statusCode,
+                                &statusCodeSize,
+                                WINHTTP_NO_HEADER_INDEX);
+        }
+
+        std::string response;
+        if (requestOk && statusCode == 200) {
+            DWORD available = 0;
+            DWORD downloaded = 0;
+            do {
+                available = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &available) || available == 0) {
+                    break;
+                }
+                std::vector<char> buffer((std::min)(available, static_cast<DWORD>(4096)));
+                if (!WinHttpReadData(hRequest, buffer.data(), static_cast<DWORD>(buffer.size()), &downloaded)) {
+                    break;
+                }
+                response.append(buffer.data(), downloaded);
+                if (response.size() >= 8192) {
+                    break;
+                }
+            } while (available > 0);
+        }
+
+        token.ClearInterrupt();
+        HINTERNET requestToClose = interruptibleRequest->exchange(nullptr);
+        if (requestToClose) WinHttpCloseHandle(requestToClose);
+
+        if (response.find("\"status\":\"failed\"") != std::string::npos ||
+            response.find("\"status\": \"failed\"") != std::string::npos) {
+            return TtsGenerationStatus::Failed;
+        }
+        if (response.find("\"status\":\"ready\"") != std::string::npos ||
+            response.find("\"status\": \"ready\"") != std::string::npos) {
+            return TtsGenerationStatus::Ready;
+        }
+        if (response.find("\"status\":\"pending\"") != std::string::npos ||
+            response.find("\"status\": \"pending\"") != std::string::npos) {
+            return TtsGenerationStatus::Pending;
+        }
+        return TtsGenerationStatus::Unknown;
+    }
+
     static std::vector<uint8_t> DownloadSoundcacheWavWithRetry(
         const std::string& host,
         int port,
         const std::string& path,
+        const std::string& cacheKey,
+        bool queryGenerationStatus,
         uint64_t generation,
         const TaskManager::CancellationToken& token,
-        int maxAttempts = 20) {
+        int maxAttempts = 30) {
         maxAttempts = std::max(1, maxAttempts);
         std::vector<uint8_t> audioData;
         const auto startTime = std::chrono::steady_clock::now();
@@ -3394,12 +3584,34 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WinHttpCloseHandle(hSession);
         };
 
-        for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        int attempt = 1;
+        while (attempt <= maxAttempts) {
             if (generation != g_audioGeneration.load() || token.IsCancellationRequested()) {
                 Log("SpeakManager: [Thread] TTS download cancelled before attempt %d for %s",
                     attempt, path.c_str());
                 closeHandles();
                 return {};
+            }
+
+            if (queryGenerationStatus) {
+                const TtsGenerationStatus status =
+                    QueryTtsGenerationStatus(hConnect, cacheKey, generation, token);
+                if (status == TtsGenerationStatus::Failed) {
+                    Log("SpeakManager: [Thread] Server reported permanent TTS failure for %s",
+                        cacheKey.c_str());
+                    closeHandles();
+                    return {};
+                }
+                if (status == TtsGenerationStatus::Pending) {
+                    if (!token.WaitFor(std::chrono::milliseconds(300))) {
+                        closeHandles();
+                        return {};
+                    }
+                    // A confirmed server-side job should remain eligible until
+                    // the task deadline. Download attempts still stay bounded
+                    // for unknown status or transient cache-read failures.
+                    continue;
+                }
             }
 
             HINTERNET hRequest = WinHttpOpenRequest(hConnect,
@@ -3505,6 +3717,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 closeHandles();
                 return {};
             }
+            ++attempt;
         }
 
         closeHandles();
@@ -3573,7 +3786,112 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return actorFormIdNameMismatch ? 0 : line.actorFormId;
     }
 
-    static bool ShouldDropLineBeforePlayback(const ScriptLine& line, std::string* reason = nullptr) {
+    // Require a current-scene actor before binding queued dialogue to a reference.
+    static bool IsLivePlaybackSpeaker(uint32_t formId,
+                                      const std::string& expectedName,
+                                      std::string* reason = nullptr) {
+        if (formId == 0) {
+            if (reason) {
+                *reason = "speaker form id is unresolved";
+            }
+            return false;
+        }
+
+        const auto position = ActorPositionResolverFNV::ResolveActor(formId);
+        if (!position.resolved) {
+            if (reason) {
+                *reason = "speaker position is unresolved";
+            }
+            return false;
+        }
+        if (!position.actorName.empty() && !EqualsIgnoreCase(position.actorName, expectedName)) {
+            if (reason) {
+                *reason = "speaker form id belongs to a different actor";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsPositionInPlayerScene(position)) {
+            if (reason) {
+                *reason = "speaker is not in the player's current scene";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsActorPositionFresh(formId, kDialogueActorFreshnessMs)) {
+            if (reason) {
+                *reason = "speaker position is stale";
+            }
+            return false;
+        }
+        if (!ActorPositionResolverFNV::IsActorInLatestScan(formId, kDialogueActorLatestScanMs)) {
+            if (reason) {
+                *reason = "speaker is not present in the latest spatial scan";
+            }
+            return false;
+        }
+        if (position.disabledKnown && position.isDisabled) {
+            if (reason) {
+                *reason = "speaker is disabled";
+            }
+            return false;
+        }
+        if (position.deadKnown && position.isDead) {
+            if (reason) {
+                *reason = "speaker is dead";
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    // Rebind once from live conversation state when a queued dynamic reference expires.
+    static bool TryRebindSpeakerForPlayback(ScriptLine& line,
+                                            uint32_t rejectedFormId,
+                                            const std::string& rejectionReason) {
+        struct Candidate {
+            uint32_t formId = 0;
+            const char* source = "";
+        };
+
+        std::vector<Candidate> candidates;
+        if (GameLoop::IsConversationActive() &&
+            EqualsIgnoreCase(GameLoop::GetConversationPartner(), line.actor)) {
+            candidates.push_back({GameLoop::GetConversationPartnerFormId(), "active conversation"});
+        }
+
+        const auto& target = TargetManager::GetCurrentTarget();
+        if (EqualsIgnoreCase(target.name, line.actor)) {
+            candidates.push_back({target.formId, "current target"});
+        }
+
+        for (const auto& position : ActorPositionResolverFNV::GetRecentActorPositions()) {
+            if (position.resolved && EqualsIgnoreCase(position.actorName, line.actor)) {
+                candidates.push_back({position.formId, "spatial scan"});
+            }
+        }
+
+        for (const Candidate& candidate : candidates) {
+            if (candidate.formId == 0 || candidate.formId == rejectedFormId) {
+                continue;
+            }
+            if (!IsLivePlaybackSpeaker(candidate.formId, line.actor)) {
+                continue;
+            }
+
+            line.actorFormId = candidate.formId;
+            Log("SpeakManager: Rebound queued speaker '%s' old=0x%08X new=0x%08X reason='%s' source='%s'",
+                line.actor.c_str(),
+                rejectedFormId,
+                candidate.formId,
+                rejectionReason.c_str(),
+                candidate.source);
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool ShouldDropLineBeforePlayback(ScriptLine& line, std::string* reason = nullptr) {
         if (line.runtimeGeneration != 0 && !RuntimeGeneration::IsCurrent(line.runtimeGeneration)) {
             if (reason) {
                 *reason = "runtime generation changed before playback";
@@ -3582,14 +3900,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         if (!IsActorDialogueLine(line)) {
             return false;
-        }
-
-        const uint32_t speakerFormId = ResolveSpeakerFormId(line);
-        if (speakerFormId == 0) {
-            if (reason) {
-                *reason = "speaker form id is unresolved";
-            }
-            return true;
         }
 
         const std::string currentSceneKey = CurrentPlayerSceneKey();
@@ -3603,44 +3913,19 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return true;
         }
 
-        const auto position = ActorPositionResolverFNV::ResolveActor(speakerFormId);
-        if (!position.resolved) {
-            if (reason) {
-                *reason = "speaker position is unresolved";
+        const uint32_t speakerFormId = ResolveSpeakerFormId(line);
+        std::string speakerReason;
+        if (!IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
+            if (TryRebindSpeakerForPlayback(line, speakerFormId, speakerReason)) {
+                return false;
             }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsPositionInPlayerScene(position)) {
             if (reason) {
-                *reason = "speaker is not in the player's current scene";
-            }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsActorPositionFresh(speakerFormId, kDialogueActorFreshnessMs)) {
-            if (reason) {
-                *reason = "speaker position is stale";
-            }
-            return true;
-        }
-        if (!ActorPositionResolverFNV::IsActorInLatestScan(speakerFormId, kDialogueActorLatestScanMs)) {
-            if (reason) {
-                *reason = "speaker is not present in the latest spatial scan";
-            }
-            return true;
-        }
-        if (position.disabledKnown && position.isDisabled) {
-            if (reason) {
-                *reason = "speaker is disabled";
-            }
-            return true;
-        }
-        if (position.deadKnown && position.isDead) {
-            if (reason) {
-                *reason = "speaker is dead";
+                *reason = speakerReason;
             }
             return true;
         }
 
+        line.actorFormId = speakerFormId;
         return false;
     }
 
@@ -3651,15 +3936,51 @@ static uint32_t g_faceTargetTargetFormId = 0;
         uint32_t targetFormId = 0;
     };
 
+    static uint32_t ResolveRechatHintFormId(const std::string& hint) {
+        const std::string cleanHint = Trim(hint);
+        if (cleanHint.empty()) {
+            return 0;
+        }
+        if (IsPlayerHint(cleanHint)) {
+            return 0x00000014;
+        }
+
+        const uint32_t agentFormId = AgentManager::FindAgentFormIdByName(cleanHint);
+        return agentFormId;
+    }
+
+    static uint32_t ResolveValidatedRechatFormId(const std::string& hint,
+                                                 uint32_t suppliedFormId,
+                                                 uint32_t speakerFormId) {
+        const std::string cleanHint = Trim(hint);
+        if (cleanHint.empty()) {
+            return 0;
+        }
+
+        if (suppliedFormId == 0 || suppliedFormId == speakerFormId) {
+            return ResolveRechatHintFormId(cleanHint);
+        }
+
+        if (IsPlayerHint(cleanHint)) {
+            return suppliedFormId == 0x00000014 ? suppliedFormId : 0x00000014;
+        }
+
+        const std::string suppliedActorName = AgentManager::GetAgentName(suppliedFormId);
+        if (!suppliedActorName.empty() && !EqualsIgnoreCase(suppliedActorName, cleanHint)) {
+            Log("SpeakManager: Ignoring mismatched rechat form id 0x%08X for hint %s; resolved actor is %s",
+                suppliedFormId, cleanHint.c_str(), suppliedActorName.c_str());
+            return ResolveRechatHintFormId(cleanHint);
+        }
+
+        return suppliedFormId;
+    }
+
     static std::vector<std::string> BuildRechatAudienceNames(const std::string& speaker,
                                                              const std::string& listenerHint,
                                                              const std::string& targetHint,
                                                              uint32_t speakerFormId) {
         std::vector<std::string> names;
         std::set<std::string> seen;
-
-        (void)listenerHint;
-        (void)targetHint;
 
         auto speakerPosition = ActorPositionResolverFNV::ResolveActor(speakerFormId);
         if (!speakerPosition.resolved) {
@@ -3675,6 +3996,31 @@ static uint32_t g_faceTargetTargetFormId = 0;
         };
 
         std::vector<AudienceCandidate> candidates;
+        auto appendHintedActor = [&](const std::string& hint) {
+            const uint32_t formId = ResolveRechatHintFormId(hint);
+            if (formId == 0 || formId == 0x00000014 || formId == speakerFormId) {
+                return;
+            }
+
+            const auto position = ActorPositionResolverFNV::ResolveActor(formId);
+            if (!IsRechatPositionEligible(position)) {
+                return;
+            }
+
+            const auto spatial = SpatialAwarenessFNV::Evaluate(speakerPosition, position);
+            if (!spatial.canCommunicate) {
+                return;
+            }
+
+            const std::string registeredName = AgentManager::GetAgentName(formId);
+            AppendUniqueAudienceName(names, seen,
+                registeredName.empty() ? Trim(hint) : registeredName);
+        };
+
+        // Preserve the response's intended listener before adding ambient candidates.
+        appendHintedActor(targetHint);
+        appendHintedActor(listenerHint);
+
         const auto playerPosition = ActorPositionResolverFNV::ResolvePlayer();
         if (playerPosition.resolved && playerPosition.formId != speakerFormId) {
             const auto playerSpatial = SpatialAwarenessFNV::Evaluate(speakerPosition, playerPosition);
@@ -3728,83 +4074,19 @@ static uint32_t g_faceTargetTargetFormId = 0;
         target.listenerHint = Trim(line.listenerHint);
         target.targetHint = Trim(line.rechatTargetHint);
 
-        auto player = ActorPositionResolverFNV::ResolvePlayer();
         if (target.listenerHint.empty()) {
             target.listenerHint = Config::playerName.empty() ? "Player" : Config::playerName;
         }
-        if (player.resolved) {
-            target.listenerFormId = player.formId;
+        // Match CHIM: an absent explicit rechat target falls back to the
+        // response line's listener, never the crosshair or nearest actor.
+        if (target.targetHint.empty()) {
+            target.targetHint = target.listenerHint;
         }
 
-        const auto& currentTarget = TargetManager::GetCurrentTarget();
-        if (currentTarget.formId != 0 &&
-            currentTarget.formId != speakerFormId &&
-            AgentManager::IsAIAgent(currentTarget.formId) &&
-            !currentTarget.name.empty() &&
-            ActorPositionResolverFNV::IsActorInPlayerScene(currentTarget.formId)) {
-            std::string reason;
-            if (!IsRechatAgentEligible(currentTarget.formId, currentTarget.name, &reason)) {
-                Log("SpeakManager: Rechat skipped current target %s (0x%08X): %s",
-                    currentTarget.name.c_str(),
-                    currentTarget.formId,
-                    reason.c_str());
-            } else {
-                target.listenerHint = currentTarget.name;
-                target.targetHint = currentTarget.name;
-                target.listenerFormId = currentTarget.formId;
-                target.targetFormId = currentTarget.formId;
-                ActorPositionResolverFNV::RememberActorPosition(
-                    ActorPositionResolverFNV::ResolveActor(currentTarget.formId));
-                return target;
-            }
-        }
-
-        auto speakerPosition = ActorPositionResolverFNV::ResolveActor(speakerFormId);
-        if (!speakerPosition.resolved) {
-            return target;
-        }
-        if (!ActorPositionResolverFNV::IsPositionInPlayerScene(speakerPosition)) {
-            Log("SpeakManager: Rechat target resolution skipped for %s (0x%08X): speaker not in current scene",
-                line.actor.c_str(), speakerFormId);
-            return target;
-        }
-
-        const auto agents = AgentManager::GetRegisteredAgentSnapshot();
-        float bestDistance = std::numeric_limits<float>::max();
-        std::pair<uint32_t, std::string> bestAgent{ 0, "" };
-
-        for (const auto& agent : agents) {
-            if (agent.first == 0 || agent.first == speakerFormId || agent.second.empty()) {
-                continue;
-            }
-
-            auto candidate = ActorPositionResolverFNV::ResolveActor(agent.first);
-            if (!candidate.resolved) {
-                continue;
-            }
-
-            if (!IsRechatPositionEligible(candidate)) {
-                continue;
-            }
-
-            const auto spatial = SpatialAwarenessFNV::Evaluate(speakerPosition, candidate);
-            if (!spatial.canCommunicate) {
-                continue;
-            }
-
-            const float distance = DistanceBetween(candidate.position, speakerPosition.position);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                bestAgent = agent;
-            }
-        }
-
-        if (bestAgent.first != 0) {
-            target.listenerHint = bestAgent.second;
-            target.targetHint = bestAgent.second;
-            target.listenerFormId = bestAgent.first;
-            target.targetFormId = bestAgent.first;
-        }
+        target.listenerFormId = ResolveValidatedRechatFormId(
+            target.listenerHint, line.listenerFormId, speakerFormId);
+        target.targetFormId = ResolveValidatedRechatFormId(
+            target.targetHint, line.rechatTargetFormId, speakerFormId);
 
         return target;
     }
@@ -3933,13 +4215,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return false;
         }
         const uint32_t speakerFormId = ResolveSpeakerFormId(finishedLine);
-        if (ActionManager::HasPendingPostDialogueActionForSpeaker(speaker, speakerFormId)) {
-            Log("SpeakManager: Rechat skipped for %s trigger=%s because a post-dialogue action is pending",
-                speaker.c_str(), trigger);
-            WriteRechatStatus("skipped", speaker, trigger, "post_dialogue_action_pending");
-            return false;
-        }
-
         const HTTPManager::QueueStatus httpStatus = HTTPManager::GetQueueStatus();
         const bool httpQueueDrained = !httpStatus.streamInProgress && httpStatus.httpResponsesQueued == 0;
         const int queuedLines = CountItems();
@@ -4200,11 +4475,13 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     static bool ShouldPauseDialogueForMenu() {
         const auto& state = GameLoop::GetGameState();
-        return Config::pauseDialogueOnMenu && state.isPaused;
+        return Config::pauseDialogueOnMenu &&
+            (state.isPaused || GameLoop::IsTextInputMenuActiveOrRecentlyClosed());
     }
 
     // Functions required by GameLoop
     void UpdatePlaybackFrame() {
+        ProcessPendingLipSyncResets();
         UpdatePlayerTextOnlySubtitle();
         if (CancelDialogueIfPlayerSceneChanged()) {
             return;
@@ -4218,7 +4495,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 if (!g_playbackPausedForMenu) {
                     AudioManager::Pause();
                     g_playbackPausedForMenu = true;
-                    Log("SpeakManager: Paused AI dialogue because menu/Pip-Boy is open "
+                    Log("SpeakManager: Paused AI dialogue because a blocking menu/chatbox is open "
                         "(paused=%d inMenu=%d)",
                         state.isPaused ? 1 : 0,
                         state.isInMenu ? 1 : 0);
@@ -4229,7 +4506,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_playbackPausedForMenu) {
                 AudioManager::Resume();
                 g_playbackPausedForMenu = false;
-                Log("SpeakManager: Resumed AI dialogue after menu/Pip-Boy closed");
+                Log("SpeakManager: Resumed AI dialogue after blocking menu/chatbox closed");
             }
 
             UpdateCurrentSpatialPlayback();
@@ -4244,6 +4521,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void ProcessQueue() {
         UpdatePlayerTextOnlySubtitle();
+        if (UpdateNpcTextOnlyFallback()) {
+            return;
+        }
         LogQueueStatusIfNeeded();
         LogDialogueGuardStatusIfChanged();
         if (CancelDialogueIfPlayerSceneChanged()) {
@@ -4257,52 +4537,24 @@ static uint32_t g_faceTargetTargetFormId = 0;
             ScriptLine finishedLine = g_currentPlaybackLine;
             g_playbackCompleted.fetch_add(1, std::memory_order_relaxed);
             const bool rechatAlreadyLaunched = g_currentPlaybackRechatLaunched;
-            SendDeliveryState(finishedLine, "spoken");
+            if (!finishedLine.textOnlyFallback) {
+                SendDeliveryState(finishedLine, "spoken");
+            }
             g_dialogueGuardHoldUntil = std::chrono::steady_clock::now() + kVanillaDialogueGuardTail;
-            StopLipSync(true);
+            FinalizeLipSync("playback_finished");
             ClearFaceTargetBridge();
             g_currentPlaybackLine = ScriptLine{};
             g_currentPlaybackLineActive = false;
             g_currentPlaybackRechatLaunched = false;
+            g_currentPlaybackIsHeadVoice = false;
             g_currentSpeakerFormId = 0;
             g_currentSpeaker.clear();
             AudioManager::Set3DPlaybackEnabled(false);
             AudioManager::SetVolume(GetBaseVoiceVolume());
             ClearSubtitleBridge();
             ClearDialogueGuardBridge();
-            const HTTPManager::QueueStatus httpStatusForActions = HTTPManager::GetQueueStatus();
-            const bool responseStreamDrainedForActions =
-                !httpStatusForActions.streamInProgress &&
-                httpStatusForActions.httpResponsesQueued == 0 &&
-                httpStatusForActions.pendingHttpTasks == 0 &&
-                httpStatusForActions.activeHttpTasks == 0;
-            const int queuedLinesForActions = CountItems();
-            const int pendingAudioForActions = PendingAudioWorkCount();
-            const bool speechQueueDrainedForActions =
-                queuedLinesForActions == 0 &&
-                pendingAudioForActions == 0;
-            const bool flushedPostDialogueActions =
-                finishedLine.isFinalResponseLine &&
-                responseStreamDrainedForActions &&
-                speechQueueDrainedForActions &&
-                ActionManager::FlushPostDialogueActionsForSpeaker(finishedLine.actor,
-                                                                  finishedLine.actorFormId,
-                                                                  "SpeakManager");
-            if (finishedLine.isFinalResponseLine &&
-                (!responseStreamDrainedForActions || !speechQueueDrainedForActions) &&
-                ActionManager::HasPendingPostDialogueActionForSpeaker(finishedLine.actor,
-                                                                      finishedLine.actorFormId)) {
-                Log("SpeakManager: Holding post-dialogue action for %s because response/speech queue is not drained "
-                    "(http_stream=%d http_tasks=%zu/%zu http_queued=%zu dialogue=%d pendingAudio=%d)",
-                    finishedLine.actor.c_str(),
-                    httpStatusForActions.streamInProgress ? 1 : 0,
-                    httpStatusForActions.activeHttpTasks,
-                    httpStatusForActions.pendingHttpTasks,
-                    httpStatusForActions.httpResponsesQueued,
-                    queuedLinesForActions,
-                    pendingAudioForActions);
-            }
-            if (!rechatAlreadyLaunched && !flushedPostDialogueActions) {
+            if (!finishedLine.textOnlyFallback &&
+                !rechatAlreadyLaunched) {
                 MaybeLaunchRechatAfterPlayback(finishedLine);
             }
         }
@@ -4316,7 +4568,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             }
             if (!g_playbackPausedForMenu) {
                 g_playbackPausedForMenu = true;
-                Log("SpeakManager: Holding AI dialogue because menu/Pip-Boy is open "
+                Log("SpeakManager: Holding AI dialogue because a blocking menu/chatbox is open "
                     "(paused=%d inMenu=%d)",
                     state.isPaused ? 1 : 0,
                     state.isInMenu ? 1 : 0);
@@ -4325,7 +4577,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         if (g_playbackPausedForMenu && !audioPlaying && !audioPaused) {
             g_playbackPausedForMenu = false;
-            Log("SpeakManager: Releasing held AI dialogue after menu/Pip-Boy closed");
+            Log("SpeakManager: Releasing held AI dialogue after blocking menu/chatbox closed");
         }
 
         PendingAudio readyAudio;
@@ -4352,6 +4604,19 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 UpdatePlaybackFrame();
                 return;
             }
+            readyAudio.actorFormId = readyAudio.line.actorFormId;
+
+            if (readyAudio.textOnlyFallback) {
+                g_currentSpeaker = readyAudio.speaker;
+                g_currentSpeakerFormId = readyAudio.actorFormId;
+                g_currentPlaybackLine = readyAudio.line;
+                g_currentPlaybackLineActive = true;
+                g_currentPlaybackRechatLaunched = false;
+                StartDialogueGuardBridge(g_currentPlaybackLine);
+                StartNpcTextOnlyFallback(g_currentPlaybackLine);
+                g_isProcessing = false;
+                return;
+            }
 
             Log("SpeakManager: Playing audio for speaker '%s' (%zu bytes)",
                 readyAudio.speaker.c_str(), readyAudio.audioData.size());
@@ -4363,10 +4628,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 g_currentPlaybackLine = readyAudio.line;
                 g_currentPlaybackLineActive = true;
                 g_currentPlaybackRechatLaunched = false;
+                g_currentPlaybackIsHeadVoice = HeadVoiceVolumeUtils::IsHeadVoice(
+                    IsNarratorLine(g_currentPlaybackLine),
+                    IsPlayerTtsLine(g_currentPlaybackLine));
                 g_lastSpatialPlaybackUpdateTime = {};
                 g_lastSpatialPlaybackSpeakerFormId = 0;
                 AudioManager::Set3DPlaybackEnabled(false);
-                AudioManager::SetVolume(GetBaseVoiceVolume());
+                AudioManager::SetVolume(GetCurrentLineVoiceVolume());
+                if (g_currentPlaybackIsHeadVoice) {
+                    Log("SpeakManager: Applying narrator/player TTS volume %.0f%% to speaker '%s'",
+                        Config::headVoiceVolume,
+                        g_currentSpeaker.c_str());
+                }
                 StartDialogueGuardBridge(g_currentPlaybackLine);
                 StartFaceTargetBridge(g_currentPlaybackLine);
                 if (AudioManager::Play()) {
@@ -4385,11 +4658,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     Log("SpeakManager: AudioManager::Play failed for speaker '%s'",
                         g_currentSpeaker.c_str());
                     SendDeliveryState(g_currentPlaybackLine, "failed");
-                    StopLipSync(true);
+                    FinalizeLipSync("audio_play_failed");
                     ClearFaceTargetBridge();
                     g_currentPlaybackLine = ScriptLine{};
                     g_currentPlaybackLineActive = false;
                     g_currentPlaybackRechatLaunched = false;
+                    g_currentPlaybackIsHeadVoice = false;
                     AudioManager::Set3DPlaybackEnabled(false);
                     AudioManager::SetVolume(GetBaseVoiceVolume());
                     ClearSubtitleBridge();
@@ -4447,10 +4721,6 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
-        if (MaybeLaunchRechatForLine(item, "audio_prepare", true, false)) {
-            item.rechatLaunched = true;
-        }
-
         {
             std::lock_guard<std::mutex> pendingLock(g_pendingMutex);
             ++g_downloadsInProgress;
@@ -4466,7 +4736,11 @@ static uint32_t g_faceTargetTargetFormId = 0;
         // legacy text hash for locally queued/debug lines.
         std::string textHash = item.ttsCacheKey.empty() ? Misc::MD5Hash(item.text) : item.ttsCacheKey;
         const uint64_t audioGeneration = g_audioGeneration.load();
-        const int maxHttpAttempts = IsPlayerTtsLine(item) ? 4 : 20;
+        const bool isPlayerTts = IsPlayerTtsLine(item);
+        // Local voice-clone generation can legitimately take longer than ten
+        // seconds. Keep polling while the server reports a pending job so the
+        // generated cache file is not discarded just before it becomes ready.
+        const int maxHttpAttempts = isPlayerTts ? 4 : kNpcTtsMaxDownloadAttempts;
         Log("SpeakManager: utterance state=preparing_audio speaker='%s' utterance='%s' cache='%s'",
             item.actor.c_str(),
             item.utteranceId.c_str(),
@@ -4481,7 +4755,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         audioTask.lane = TaskManager::Lane::Audio;
         audioTask.priority = IsPlayerTtsLine(item);
         audioTask.deadlineFromEnqueue = true;
-        audioTask.timeout = IsPlayerTtsLine(item) ? std::chrono::seconds(15) : std::chrono::seconds(45);
+        audioTask.timeout = isPlayerTts ? std::chrono::seconds(15) : kNpcTtsPreparationTimeout;
         audioTask.coalescing = TaskManager::CoalescingPolicy::RejectIfPendingOrActive;
         audioTask.concurrencyLimit = 2;
         const TaskManager::TaskHandle audioTaskHandle = TaskManager::Submit(std::move(audioTask), [item,
@@ -4490,14 +4764,23 @@ static uint32_t g_faceTargetTargetFormId = 0;
                         hash = textHash,
                         localSoundcachePath,
                         generation = audioGeneration,
-                        maxHttpAttempts](const TaskManager::CancellationToken& token) {
+                        maxHttpAttempts,
+                        queryGenerationStatus = !isPlayerTts](const TaskManager::CancellationToken& token) {
             // Create a temporary config-like structure for the download
             Log("SpeakManager: [Thread] Starting TTS download for '%s'", item.actor.c_str());
             std::string path = "/DialecticServer/soundcache/" + hash + ".wav";
             std::vector<uint8_t> audioData = ReadLocalSoundcacheWavWithRetry(localSoundcachePath, hash, generation, token);
             if (audioData.empty()) {
                 Log("SpeakManager: [Thread] Requesting TTS file: %s", path.c_str());
-                audioData = DownloadSoundcacheWavWithRetry(host, port, path, generation, token, maxHttpAttempts);
+                audioData = DownloadSoundcacheWavWithRetry(
+                    host,
+                    port,
+                    path,
+                    hash,
+                    queryGenerationStatus,
+                    generation,
+                    token,
+                    maxHttpAttempts);
             }
 
             if (audioData.empty()) {
@@ -4533,10 +4816,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
                        const std::string& requestId,
                        uint64_t runtimeGeneration,
                        uint32_t listenerFormId,
-                       uint32_t rechatTargetFormId) {
+                       uint32_t rechatTargetFormId,
+                       const std::string& displayName) {
         ScriptLine line;
         line.text = text;
         line.actor = speaker;
+        line.displayName = displayName;
         line.action = "";
         line.actorFormId = actorFormId;
         line.isFinalResponseLine = isFinalResponseLine;
@@ -4579,6 +4864,23 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return;
         }
 
+        bool autonomousResponse = false;
+        {
+            std::lock_guard<std::mutex> lock(g_rechatMutex);
+            autonomousResponse = g_rechatChainAutonomous;
+        }
+        if (autonomousResponse && line.actorFormId != 0) {
+            std::string activityReason;
+            if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(line.actorFormId, &activityReason)) {
+                Log("SpeakManager: Dropping stale autonomous response for %s (0x%08X): %s",
+                    line.actor.c_str(), line.actorFormId, activityReason.c_str());
+                std::lock_guard<std::mutex> lock(g_rechatMutex);
+                g_rechatChainClosed = true;
+                g_pendingRechatRetry = PendingRechatRetry{};
+                return;
+            }
+        }
+
         InsertInQueue(line);
     }
 
@@ -4611,7 +4913,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
         AudioManager::Stop();
         g_playbackPausedForMenu = false;
-        StopLipSync(true);
+        FinalizeLipSync(reason ? reason : "stop_speaking");
         ClearFaceTargetBridge();
         ClearDialogueGuardBridge();
         g_currentPlaybackRechatLaunched = false;
@@ -4660,17 +4962,17 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_currentSpeaker.clear();
         g_currentPlaybackLine = ScriptLine{};
         g_currentPlaybackLineActive = false;
+        g_currentPlaybackIsHeadVoice = false;
         AudioManager::Set3DPlaybackEnabled(false);
         AudioManager::SetVolume(GetBaseVoiceVolume());
         ClearSubtitleBridge();
         ClearPlayerInputTtsGate("stop_speaking");
-        ActionManager::ClearPostDialogueActions();
-
         {
             std::lock_guard<std::mutex> rechatLock(g_rechatMutex);
             g_rechatInFlight = false;
             g_rechatInFlightSpeaker.clear();
             g_rechatChainClosed = false;
+            g_rechatChainAutonomous = false;
             g_rechatChainId.clear();
             g_lastRechatter.clear();
             g_pendingRechatRetry = PendingRechatRetry{};

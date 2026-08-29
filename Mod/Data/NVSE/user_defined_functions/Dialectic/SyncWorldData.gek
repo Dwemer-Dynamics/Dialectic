@@ -5,7 +5,10 @@ int iOption
 array_var aJSON
 
 Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    if eval fValue <= 0
+        return
+    endif
+
     SetINIIntC "Tools:SendWorldData" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    PrintC "[Dialectic] Sending Fallout faction and location info"
     DialecticSyncWorldData
 End

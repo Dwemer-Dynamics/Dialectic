@@ -1,10 +1,10 @@
 int iButton
 
 Begin Function {iButton}
-    if eval iButton < 0 || iButton > 7
+    if eval iButton < 0 || iButton > 8
         return
     endif
 
     WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_mode_select.tmp" 0 "%.0f\n" iButton
-    PrintC "[Dialectic] Mode selection sent."
+    PrintC "[DIALECTIC] Mode selection sent."
 End

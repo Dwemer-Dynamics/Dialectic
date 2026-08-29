@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RuntimeSnapshot {
@@ -48,6 +49,7 @@ struct GameState {
 struct ActorState {
     std::string name;
     std::string raceName;
+    std::string voiceName;
     std::uint32_t formId{0};
     std::uint32_t baseFormId{0};
     std::uint32_t cellFormId{0};
@@ -88,6 +90,7 @@ struct ActorState {
     float y{0.0f};
     float z{0.0f};
     float yaw{0.0f};
+    std::vector<std::pair<std::uint32_t, int>> factions;
     std::vector<EquipmentItem> equipment;
 };
 

@@ -3,32 +3,29 @@
 ; self-rescheduling bridge is started exactly once from this file.
 
 if GetNVSEVersionFull < 6.33
-    PrintC "[Dialectic] xNVSE 6.3.3+ is required for runtime bridges."
+    PrintC "[DIALECTIC] xNVSE 6.3.3+ is required for runtime bridges."
     return
 endif
 
 if GetPluginVersion "JIP LN NVSE" < 57
-    PrintC "[Dialectic] JIP LN NVSE 57+ is required for runtime bridges."
+    PrintC "[DIALECTIC] JIP LN NVSE 57+ is required for runtime bridges."
     return
 endif
 
 if GetPluginVersion "JohnnyGuitarNVSE" < 517
-    PrintC "[Dialectic] JohnnyGuitar NVSE 5.17+ is required for dialogue capture."
+    PrintC "[DIALECTIC] JohnnyGuitar NVSE 5.17+ is required for dialogue capture."
     return
 endif
 
 WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_bootstrap_active.tmp" 0 "active=1\n"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_request.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_action_status.txt" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_halt_actions_status.txt" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_attack_cleanup.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_follow_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_move_state.tmp" 0 "%e"
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_pickup_state.tmp" 0 "%e"
+DialecticClearActorSnapshotRequest
 
 call (CompileScript "Dialectic/RegisterHotkeys.gek")
 call (CompileScript "Dialectic/RegisterAidUseEvents.txt")
+call (CompileScript "Dialectic/RegisterSleepWaitEvents.txt")
+
+SetINIIntC "SleepWaitState:PendingMode" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+SetINIIntC "SleepWaitState:CompletionDelay" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
 
 SetOnDialogTopicEventHandler (CompileScript "Dialectic/DialogueTopicSpeakerHandler.txt") 1
 SetOnNPCResponseEventHandler 1 (CompileScript "Dialectic/DialogueMenuResponseHandler.txt")
@@ -36,6 +33,10 @@ SetEventHandler "OnTopic" (CompileScript "Dialectic/DialogueTopicTextHandler.txt
 SetEventHandler "OnLockPickSuccess" (CompileScript "Dialectic/RpgLockpickSuccessHandler.txt")
 SetEventHandler "ITR:OnDialogueText" (CompileScript "Dialectic/DialogueGuardInterruptHandler.txt")
 SetEventHandler "ITR:OnSoundPlayed" (CompileScript "Dialectic/DialogueGuardSoundHandler.txt")
+SetEventHandler "MCMExtMenuState" (CompileScript "Dialectic/RecordingDeviceMenuState.gek")
+SetEventHandler "MCMExtUpdate" (CompileScript "Dialectic/MCMSettingsUpdated.gek")
+SetEventHandlerAlt "ShowOff:OnPCMiscStatChange" (CompileScript "Dialectic/FalloutStatChanged.gek")
+SetOnMenuClickEventHandler (CompileScript "Dialectic/TextInputCloseClick.txt") 1 "TextEditMenu/NOGLOW_BRANCH/DialecticCloseButton"
 
 if IsComponentLoaded "HUDMainMenu\DialecticPassiveSubtitle"
     UnloadUIComponent "HUDMainMenu\DialecticPassiveSubtitle"
@@ -45,29 +46,26 @@ if IsComponentLoaded "HUDMainMenu\Subtitles\DialecticPassiveSubtitle"
 endif
 InjectUIXML "HUDMainMenu\Subtitles" "data\menus\prefabs\Dialectic\PassiveSubtitle.xml"
 
-; Native-authoritative presentation, game-state, dialogue-guard, and tool-menu
-; paths run inside dialectic.dll. Do not start their old permanent file pollers.
-; The remaining adapters cover script-only game data and rare native fallbacks.
+; Native-authoritative presentation, actions, trade state, game-state,
+; dialogue-guard, and tool-menu paths run inside dialectic.dll.
+; The remaining adapters cover script-only game data and event sources.
 ; Run the voice recovery adapter once so a save made during guarded speech cannot
 ; leave an actor muted after reload.
 CallAfterSeconds 0.50 (CompileScript "Dialectic/DialogueGuardRecoverVoiceTick.txt") 0
+CallAfterSeconds 5.00 (CompileScript "Dialectic/InitializationPromptTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/SpatialScanTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/ActorSnapshotRequestTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/DialogueCaptureTick.txt") 0
-CallAfterSeconds 0.25 (CompileScript "Dialectic/ActionCommandTick.txt") 0
-CallAfterSeconds 0.50 (CompileScript "Dialectic/TradeSessionTick.txt") 1
 CallAfterSeconds 0.50 (CompileScript "Dialectic/NotificationTick.txt") 0
-CallAfterSeconds 0.25 (CompileScript "Dialectic/HaltActionsTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/WorldContextTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/ActivityStatusTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyItemsTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyPoiTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
 CallAfterSeconds 5.00 (CompileScript "Dialectic/ActiveQuestDirectTick.txt") 0
-CallAfterSeconds 5.00 (CompileScript "Dialectic/WorldDataSyncTick.txt") 0
 CallAfterSeconds 2.00 (CompileScript "Dialectic/VoiceSampleUploadTick.txt") 0
+CallAfterSeconds 3.00 (CompileScript "Dialectic/CollectFalloutStats.gek") 0
 CallAfterSeconds 1.00 (CompileScript "Dialectic/RpgEventTick.txt") 0
 CallAfterSeconds 0.25 (CompileScript "Dialectic/TextInputMenuTick.txt") 0
 
-WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_hotkey_bridge_status.txt" 0 "registered=1 source=load_bootstrap\n"
-PrintC "[Dialectic] Registered runtime bridges."
+PrintC "[DIALECTIC] Registered runtime bridges."

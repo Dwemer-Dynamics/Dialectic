@@ -3,11 +3,15 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
+#include <string>
 
 #include "Logger.h"
 
@@ -18,6 +22,7 @@ static bool s_initialized = false;
 static int s_linesSinceFlush = 0;
 static std::chrono::steady_clock::time_point s_lastFlushTime;
 static std::mutex s_logMutex;
+static Logger::Diagnostics s_diagnostics;
 
 static void GetTimestamp(char* buffer, int bufSize) {
     SYSTEMTIME st;
@@ -52,13 +57,15 @@ static void GetGameDir(char* buffer, int bufSize) {
 }
 
 static void WriteLog(int level, const char* msg) {
+    const auto writeStartedAt = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(s_logMutex);
+    const auto lockAcquiredAt = std::chrono::steady_clock::now();
     if (!s_initialized || !s_logFile) return;
     if (level < s_logLevel.load(std::memory_order_relaxed)) return;
     
     char ts[64];
     GetTimestamp(ts, 64);
-    fprintf(s_logFile, "%s %s %s\n", ts, GetLevelStr(level), msg);
+    const int bytesWritten = fprintf(s_logFile, "%s %s %s\n", ts, GetLevelStr(level), msg);
 
     ++s_linesSinceFlush;
     const auto now = std::chrono::steady_clock::now();
@@ -68,8 +75,28 @@ static void WriteLog(int level, const char* msg) {
         now - s_lastFlushTime >= std::chrono::seconds(1);
     if (flushBySeverity || flushByCount || flushByTime) {
         fflush(s_logFile);
+        ++s_diagnostics.flushes;
         s_linesSinceFlush = 0;
         s_lastFlushTime = now;
+    }
+
+    const auto completedAt = std::chrono::steady_clock::now();
+    const auto lockWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        lockAcquiredAt - writeStartedAt).count();
+    const auto writeUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        completedAt - lockAcquiredAt).count();
+    const std::uint64_t safeLockWaitUs = lockWaitUs > 0 ? static_cast<std::uint64_t>(lockWaitUs) : 0;
+    const std::uint64_t safeWriteUs = writeUs > 0 ? static_cast<std::uint64_t>(writeUs) : 0;
+    ++s_diagnostics.linesWritten;
+    if (bytesWritten > 0) {
+        s_diagnostics.bytesWritten += static_cast<std::uint64_t>(bytesWritten);
+    }
+    s_diagnostics.totalLockWaitUs += safeLockWaitUs;
+    s_diagnostics.totalWriteUs += safeWriteUs;
+    s_diagnostics.maxLockWaitUs = (std::max)(s_diagnostics.maxLockWaitUs, safeLockWaitUs);
+    s_diagnostics.maxWriteUs = (std::max)(s_diagnostics.maxWriteUs, safeWriteUs);
+    if (safeLockWaitUs + safeWriteUs >= 2000) {
+        ++s_diagnostics.slowWrites;
     }
 }
 
@@ -79,10 +106,29 @@ void Logger::Initialize() {
     
     char gameDir[MAX_PATH];
     char logPath[MAX_PATH];
+    logPath[0] = '\0';
     
     GetGameDir(gameDir, MAX_PATH);
+
+    char documentsDir[MAX_PATH];
+    if (SUCCEEDED(SHGetFolderPathA(
+            NULL,
+            CSIDL_PERSONAL | CSIDL_FLAG_CREATE,
+            NULL,
+            SHGFP_TYPE_CURRENT,
+            documentsDir))) {
+        std::filesystem::path logDirectory =
+            std::filesystem::path(documentsDir) / "My Games" / "FalloutNV" / "NVSE";
+        std::error_code directoryError;
+        std::filesystem::create_directories(logDirectory, directoryError);
+        const std::string documentsLogPath = (logDirectory / "dialectic.log").string();
+        if (documentsLogPath.size() < MAX_PATH) {
+            strcpy_s(logPath, MAX_PATH, documentsLogPath.c_str());
+            fopen_s(&s_logFile, logPath, "w");
+        }
+    }
     
-    if (gameDir[0] != '\0') {
+    if (!s_logFile && gameDir[0] != '\0') {
         sprintf_s(logPath, MAX_PATH, "%s\\dialectic.log", gameDir);
         fopen_s(&s_logFile, logPath, "w");
     }
@@ -100,6 +146,7 @@ void Logger::Initialize() {
     s_initialized = (s_logFile != NULL);
     s_linesSinceFlush = 0;
     s_lastFlushTime = std::chrono::steady_clock::now();
+    s_diagnostics = {};
     
     if (s_initialized) {
         char ts[64];
@@ -198,4 +245,9 @@ void Logger::LogSection(const char* section) {
         fprintf(s_logFile, "\n======== %s ========\n", section);
         fflush(s_logFile);
     }
+}
+
+Logger::Diagnostics Logger::GetDiagnostics() {
+    std::lock_guard<std::mutex> lock(s_logMutex);
+    return s_diagnostics;
 }

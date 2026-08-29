@@ -1,0 +1,17 @@
+int iButton
+
+Begin Function {iButton}
+    if eval iButton < 0 || iButton > 3
+        return
+    endif
+
+    if eval iButton == 0
+        DialecticOpenModeMenu
+    elseif eval iButton == 1
+        DialecticOpenLLMModelMenu
+    elseif eval iButton == 2
+        DialecticOpenDynamicProfileMenu
+    elseif eval iButton == 3
+        DialecticWaitHereTarget
+    endif
+End

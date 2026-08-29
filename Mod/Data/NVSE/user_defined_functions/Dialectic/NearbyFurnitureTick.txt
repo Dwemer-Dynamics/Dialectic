@@ -15,6 +15,7 @@ int iBaseType
 int iLookingAt
 
 begin function {}
+    DialecticDiagnosticBridgeTick 13
     if MenuMode
         CallAfterSeconds 5.0 (CompileScript "Dialectic/NearbyFurnitureTick.txt") 0
         return

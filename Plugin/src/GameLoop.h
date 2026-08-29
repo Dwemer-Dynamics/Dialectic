@@ -52,6 +52,9 @@ bool IsConversationActive();
 // Get current conversation partner name
 const std::string& GetConversationPartner();
 
+// Get the live reference bound to the current conversation partner
+uint32_t GetConversationPartnerFormId();
+
 // Process voice input (when voice key is held/released)
 void StartVoiceInput();
 void StopVoiceInput();
@@ -61,10 +64,13 @@ bool IsVoiceInputActive();
 void HaltAIActionsNow();
 void RequestTextInputMenuOpen();
 bool IsTextInputMenuActiveOrRecentlyClosed();
+void MarkRuntimeConfigDirty();
+void RequestDialecticControlMenuOpen();
+void RequestControlMenuWaitHere();
 void RequestModeMenuOpen();
 void RequestLLMModelMenuOpen();
+void NoteProfileModelSelection(int slot);
 void RequestDynamicProfileMenuOpen();
-void ManageAIAgents(int action);
 void SubmitCapturedDialogue(const std::string& source,
                             const std::string& speaker,
                             const std::string& speakerRefId,
@@ -74,5 +80,8 @@ void SubmitCapturedDialogue(const std::string& source,
                             bool isPlayerLine,
                             bool menuMode,
                             const std::string& captureId);
+
+// Queue a normalized gameplay event for the existing RPG comment pipeline.
+void QueueRpgCommentEvent(const std::string& eventType, const std::string& eventText);
 
 } // namespace GameLoop

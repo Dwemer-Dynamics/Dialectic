@@ -17,6 +17,8 @@ NPC interaction.
 - [xNVSE 6.3.3 or newer](https://github.com/xNVSE/NVSE/releases).
 - [JIP LN NVSE Plugin 57 or newer](https://www.nexusmods.com/newvegas/mods/58277).
 - [JohnnyGuitar NVSE 5.17 or newer](https://www.nexusmods.com/newvegas/mods/66927).
+- [SUP NVSE 8.55 or newer](https://www.nexusmods.com/newvegas/mods/73160) is
+  required for the optional PipVision screenshot-context hotkey.
 - [ITR NVSE 1.0.0 or newer](https://www.nexusmods.com/newvegas/mods/96922).
   Dialectic uses its dialogue and sound events to capture and suppress vanilla
   dialogue correctly while AI speech is playing.

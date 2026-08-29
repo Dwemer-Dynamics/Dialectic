@@ -217,17 +217,14 @@ bool DispatchPending(std::size_t maxItems) {
                                         line.requestId,
                                         line.runtimeGeneration,
                                         line.listenerFormId,
-                                        line.rechatTargetFormId);
+                                        line.rechatTargetFormId,
+                                        line.displayName);
             continue;
         }
 
         Logger::LogInfo("ResponseQueueFNV: dispatch action source=%s latency_ms=%lld state=dispatching",
             item.source.c_str(),
             static_cast<long long>(dispatchLatencyMs));
-        if (ActionManager::QueuePostDialogueActionJson(
-                item.actionJson, item.source.c_str(), item.runtimeGeneration)) {
-            continue;
-        }
         ActionManager::HandleRoleCommandJson(
             item.actionJson, item.source.c_str(), item.runtimeGeneration);
     }

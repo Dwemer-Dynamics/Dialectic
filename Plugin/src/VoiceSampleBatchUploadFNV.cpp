@@ -1,7 +1,9 @@
 #include "VoiceSampleBatchUploadFNV.h"
+#include "BsaArchiveReader.h"
 #include "HTTPManager.h"
 #include "VoiceSampleOverridesFNV.h"
-#include "Console.h"
+#include "VoiceSampleResolverFNV.h"
+#include "RuntimeSnapshot.h"
 
 #include <algorithm>
 #include <chrono>
@@ -9,14 +11,30 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 void Log(const char* fmt, ...);
 
 namespace VoiceSampleBatchUploadFNV {
     namespace {
-        constexpr auto kBatchTimeout = std::chrono::minutes(5);
+        constexpr auto kBatchTimeout = std::chrono::minutes(14);
+
+        bool IsActiveGameplay() {
+            RuntimeSnapshot::GameState state;
+            return RuntimeSnapshot::TryGetFreshGameState(state, std::chrono::seconds(2)) &&
+                state.inGame && !state.inMenu && !state.paused;
+        }
+
+        void ThrottleBackgroundWork(std::chrono::milliseconds activeGameplayDelay) {
+            if (IsActiveGameplay()) {
+                std::this_thread::sleep_for(activeGameplayDelay);
+            } else {
+                std::this_thread::yield();
+            }
+        }
 
         struct VoiceSampleCandidate {
             std::string voiceType;
@@ -25,6 +43,8 @@ namespace VoiceSampleBatchUploadFNV {
             std::string transcript;
             std::string source;
             uintmax_t fileSize = 0;
+            BsaArchiveReader::Entry archiveEntry;
+            bool hasArchiveEntry = false;
         };
 
         std::string Trim(const std::string& value) {
@@ -62,56 +82,22 @@ namespace VoiceSampleBatchUploadFNV {
             return value;
         }
 
-        std::string BuildOriginalName(const std::string& voiceFile) {
-            std::string path = NormalizePathSeparators(voiceFile);
-            if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-                return path.substr(5);
+        bool ReadCandidateAudio(const VoiceSampleCandidate& candidate, std::string& data) {
+            std::string error;
+            if (VoiceSampleResolverFNV::ReadSource(
+                    candidate.dataPath,
+                    candidate.hasArchiveEntry ? &candidate.archiveEntry : nullptr,
+                    data,
+                    &error)) {
+                return true;
             }
-            if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-                return path;
+            if (candidate.hasArchiveEntry) {
+                Log("[VOICE_BATCH] Could not read archive sample %s from %s: %s",
+                    candidate.originalName.c_str(),
+                    candidate.archiveEntry.archivePath.c_str(),
+                    error.c_str());
             }
-            return "Sound\\Voice\\" + path;
-        }
-
-        std::string BuildDataPath(const std::string& voiceFile) {
-            std::string path = NormalizePathSeparators(voiceFile);
-            if (StartsWithInsensitive(path, "Data\\")) {
-                return path;
-            }
-            if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-                return "Data\\" + path;
-            }
-            return "Data\\Sound\\Voice\\" + path;
-        }
-
-        std::string BuildBundledSamplePath(const std::string& voiceFile) {
-            std::string path = NormalizePathSeparators(voiceFile);
-            if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-                path = path.substr(17);
-            } else if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-                path = path.substr(12);
-            } else if (StartsWithInsensitive(path, "Data\\")) {
-                path = path.substr(5);
-            }
-            return "Data\\Dialectic\\voice_samples\\" + path;
-        }
-
-        bool ReadBinaryFile(const std::string& path, std::string& data) {
-            std::ifstream file(path, std::ios::binary);
-            if (!file.is_open()) {
-                return false;
-            }
-
-            file.seekg(0, std::ios::end);
-            const std::streamoff size = file.tellg();
-            if (size <= 0) {
-                return false;
-            }
-
-            file.seekg(0, std::ios::beg);
-            data.resize(static_cast<size_t>(size));
-            file.read(data.data(), static_cast<std::streamsize>(size));
-            return file.good() || file.gcount() == static_cast<std::streamsize>(size);
+            return false;
         }
 
         bool TimedOut(const std::chrono::steady_clock::time_point& deadline) {
@@ -194,15 +180,67 @@ namespace VoiceSampleBatchUploadFNV {
 
             const bool candidateHasFile = candidate.fileSize > 0;
             const bool existingHasFile = it->second.fileSize > 0;
-            if ((candidateHasFile && !existingHasFile) ||
-                (candidateHasFile && existingHasFile && candidate.fileSize > it->second.fileSize)) {
+            const bool candidateIsLoose = candidateHasFile && !candidate.hasArchiveEntry;
+            const bool existingIsLoose = existingHasFile && !it->second.hasArchiveEntry;
+            if ((candidateIsLoose && !existingIsLoose) ||
+                (candidateHasFile && !existingHasFile) ||
+                (candidateHasFile && existingHasFile && candidateIsLoose == existingIsLoose &&
+                 candidate.fileSize > it->second.fileSize)) {
                 it->second = candidate;
+            }
+        }
+
+        void CollectArchiveCandidates(std::unordered_map<std::string, VoiceSampleCandidate>& candidates,
+                                      int& archiveMappings,
+                                      const std::chrono::steady_clock::time_point& deadline,
+                                      bool& timedOut,
+                                      const std::function<bool()>& cancelRequested) {
+            std::unordered_map<std::string, std::string> requestedVoiceByPath;
+            std::unordered_set<std::string> requestedPaths;
+            for (const auto& pair : candidates) {
+                if (pair.second.fileSize > 0) {
+                    continue;
+                }
+                const std::string normalizedPath = BsaArchiveReader::NormalizeAssetPath(pair.second.originalName);
+                if (!normalizedPath.empty()) {
+                    requestedVoiceByPath[normalizedPath] = pair.first;
+                    requestedPaths.insert(normalizedPath);
+                }
+            }
+            if (requestedPaths.empty()) {
+                return;
+            }
+
+            std::unordered_map<std::string, BsaArchiveReader::Entry> matches;
+            VoiceSampleResolverFNV::ArchiveLookupSummary lookup;
+            VoiceSampleResolverFNV::FindArchiveEntries(
+                requestedPaths, matches, lookup, deadline, cancelRequested);
+            timedOut = lookup.timedOut;
+            Log("[VOICE_BATCH] Archive lookup available=%d scanned=%d cache_hits=%d found=%d timed_out=%d cancelled=%d",
+                lookup.archivesAvailable,
+                lookup.archivesScanned,
+                lookup.cacheHits,
+                lookup.entriesFound,
+                lookup.timedOut ? 1 : 0,
+                lookup.cancelled ? 1 : 0);
+            for (auto& match : matches) {
+                const auto voiceIt = requestedVoiceByPath.find(match.first);
+                if (voiceIt == requestedVoiceByPath.end()) continue;
+                auto candidateIt = candidates.find(voiceIt->second);
+                if (candidateIt == candidates.end() || candidateIt->second.fileSize > 0) continue;
+                candidateIt->second.archiveEntry = std::move(match.second);
+                candidateIt->second.hasArchiveEntry = true;
+                candidateIt->second.fileSize = candidateIt->second.archiveEntry.storedSize;
+                candidateIt->second.source += ":bsa:" +
+                    std::filesystem::path(candidateIt->second.archiveEntry.archivePath).filename().string();
+                ++archiveMappings;
             }
         }
 
         std::unordered_map<std::string, VoiceSampleCandidate> CollectVoiceSampleCandidates(
             int& csvMappings,
             int& looseMappings,
+            int& archiveMappings,
             const std::chrono::steady_clock::time_point& deadline,
             bool& timedOut,
             const std::function<bool()>& cancelRequested) {
@@ -215,12 +253,12 @@ namespace VoiceSampleBatchUploadFNV {
                 if (cancelRequested && cancelRequested()) return candidates;
                 VoiceSampleCandidate candidate;
                 candidate.voiceType = ToLower(Trim(mapping.voiceType));
-                candidate.dataPath = BuildDataPath(mapping.voiceFile);
-                candidate.originalName = BuildOriginalName(mapping.voiceFile);
+                candidate.dataPath = VoiceSampleResolverFNV::BuildDataPath(mapping.voiceFile);
+                candidate.originalName = VoiceSampleResolverFNV::BuildOriginalName(mapping.voiceFile);
                 candidate.transcript = mapping.transcript;
                 candidate.source = "csv:" + mapping.sourceFile;
                 if (!PreferReadablePath(candidate, candidate.dataPath)) {
-                    const std::string bundledPath = BuildBundledSamplePath(mapping.voiceFile);
+                    const std::string bundledPath = VoiceSampleResolverFNV::BuildBundledPath(mapping.voiceFile);
                     if (PreferReadablePath(candidate, bundledPath)) {
                         candidate.source += ":bundled";
                     }
@@ -232,16 +270,19 @@ namespace VoiceSampleBatchUploadFNV {
             std::error_code ec;
             if (!std::filesystem::exists(voiceRoot, ec) || ec) {
                 Log("[VOICE_BATCH] Loose voice root not found: %s", voiceRoot.string().c_str());
-                return candidates;
-            }
-
-            for (std::filesystem::recursive_directory_iterator it(
+            } else {
+                std::size_t scannedEntries = 0;
+                for (std::filesystem::recursive_directory_iterator it(
                      voiceRoot,
                      std::filesystem::directory_options::skip_permission_denied,
                      ec),
                  end;
                  it != end;
                  it.increment(ec)) {
+                ++scannedEntries;
+                if ((scannedEntries % 32) == 0) {
+                    ThrottleBackgroundWork(std::chrono::milliseconds(10));
+                }
                 if (cancelRequested && cancelRequested()) {
                     break;
                 }
@@ -283,41 +324,58 @@ namespace VoiceSampleBatchUploadFNV {
 
                 ++looseMappings;
                 UpsertCandidate(candidates, candidate);
+                }
             }
+
+            CollectArchiveCandidates(candidates, archiveMappings, deadline, timedOut, cancelRequested);
 
             return candidates;
         }
     }
 
     BatchUploadResult SendAllVoiceSamples(BatchUploadSummary& summary,
-                                          const std::function<bool()>& cancelRequested) {
+                                          const std::function<bool()>& cancelRequested,
+                                          const std::function<void(int, int)>& progress) {
         summary = BatchUploadSummary{};
         const auto deadline = std::chrono::steady_clock::now() + kBatchTimeout;
+        Log("[VOICE_BATCH] Request accepted; loading Fallout voice mappings");
+        if (IsActiveGameplay()) {
+            Log("[VOICE_BATCH] Active gameplay detected; disk scanning and uploads will be rate limited");
+        }
 
         bool scanTimedOut = false;
         auto candidates = CollectVoiceSampleCandidates(
             summary.csvMappings,
             summary.looseMappings,
+            summary.archiveMappings,
             deadline,
             scanTimedOut,
             cancelRequested);
         summary.totalMappings = static_cast<int>(candidates.size());
+        if (progress) {
+            progress(0, summary.totalMappings);
+        }
         summary.timedOut = scanTimedOut;
         summary.cancelled = cancelRequested && cancelRequested();
+        Log("[VOICE_BATCH] Candidate scan complete mappings=%d csv=%d loose_files_seen=%d archive_samples=%d timed_out=%d cancelled=%d",
+            summary.totalMappings,
+            summary.csvMappings,
+            summary.looseMappings,
+            summary.archiveMappings,
+            summary.timedOut ? 1 : 0,
+            summary.cancelled ? 1 : 0);
         if (summary.cancelled) return BatchUploadResult::Cancelled;
 
         if (candidates.empty()) {
             Log("[VOICE_BATCH] No Fallout voice sample mappings were loaded");
-            Console::Print("[Dialectic] No voice sample mappings found");
             return summary.timedOut ? BatchUploadResult::TimedOut : BatchUploadResult::NoSamplesUploaded;
         }
 
-        Log("[VOICE_BATCH] Starting upload of %d Fallout voice sample mappings (csv=%d loose_files_seen=%d)",
+        Log("[VOICE_BATCH] Starting upload of %d Fallout voice sample mappings (csv=%d loose_files_seen=%d archive_samples=%d)",
             summary.totalMappings,
             summary.csvMappings,
-            summary.looseMappings);
-        Console::Print("[Dialectic] Uploading Fallout voice samples...");
-
+            summary.looseMappings,
+            summary.archiveMappings);
         std::vector<VoiceSampleCandidate> orderedCandidates;
         orderedCandidates.reserve(candidates.size());
         for (const auto& pair : candidates) {
@@ -329,6 +387,7 @@ namespace VoiceSampleBatchUploadFNV {
             });
 
         for (const auto& candidate : orderedCandidates) {
+            ThrottleBackgroundWork(std::chrono::milliseconds(75));
             if (cancelRequested && cancelRequested()) {
                 summary.cancelled = true;
                 break;
@@ -339,11 +398,14 @@ namespace VoiceSampleBatchUploadFNV {
             }
 
             std::string audioData;
-            if (!ReadBinaryFile(candidate.dataPath, audioData)) {
+            if (!ReadCandidateAudio(candidate, audioData)) {
                 ++summary.missing;
                 Log("[VOICE_BATCH] Missing voice sample for %s: %s",
                     candidate.voiceType.c_str(),
-                    candidate.dataPath.c_str());
+                    candidate.hasArchiveEntry ? candidate.archiveEntry.archivePath.c_str() : candidate.dataPath.c_str());
+                if (progress) {
+                    progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+                }
                 continue;
             }
 
@@ -357,6 +419,9 @@ namespace VoiceSampleBatchUploadFNV {
                 Log("[VOICE_BATCH] Upload failed for %s from %s",
                     candidate.voiceType.c_str(),
                     candidate.originalName.c_str());
+                if (progress) {
+                    progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+                }
                 continue;
             }
 
@@ -366,23 +431,22 @@ namespace VoiceSampleBatchUploadFNV {
                 candidate.originalName.c_str(),
                 candidate.source.c_str(),
                 static_cast<unsigned long long>(candidate.fileSize));
+            if (progress) {
+                progress(summary.uploaded + summary.missing + summary.failed, summary.totalMappings);
+            }
         }
 
-        Log("[VOICE_BATCH] Complete: mappings=%d csv=%d loose_files_seen=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
+        Log("[VOICE_BATCH] Complete: mappings=%d csv=%d loose_files_seen=%d archive_samples=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
             summary.totalMappings,
             summary.csvMappings,
             summary.looseMappings,
+            summary.archiveMappings,
             summary.uploaded,
             summary.missing,
             summary.failed,
             summary.timedOut ? 1 : 0,
             summary.cancelled ? 1 : 0);
         if (summary.cancelled) return BatchUploadResult::Cancelled;
-        Console::Print("[Dialectic] Voice samples: %d uploaded, %d missing, %d failed",
-            summary.uploaded,
-            summary.missing,
-            summary.failed);
-
         if (summary.timedOut) {
             return BatchUploadResult::TimedOut;
         }

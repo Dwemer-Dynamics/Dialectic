@@ -28,6 +28,7 @@ namespace AgentManager {
         std::string name;
         std::string baseid;
         int count;
+        int value;
         bool equipped;
         int type;
         float condition;
@@ -35,7 +36,7 @@ namespace AgentManager {
         std::vector<std::string> mods;
 
         InventoryItem()
-            : count(0), equipped(false), type(0), condition(-1.0f) {}
+            : count(0), value(0), equipped(false), type(0), condition(-1.0f) {}
     };
     
     // Fallout NV NPC data structure
@@ -152,6 +153,7 @@ namespace AgentManager {
     std::string GetAgentName(uint32_t formID);
     uint32_t FindAgentFormIdByName(const std::string& name);
     std::vector<std::pair<uint32_t, std::string>> GetRegisteredAgentSnapshot();
+    void RefreshRegisteredAgentVoices();
     bool SelectLeastBoredNearbyAgent(float maxDistance, uint32_t& outFormID, std::string& outName);
     bool SelectLeastBoredNearbyAgent(
         const std::vector<std::pair<uint32_t, std::string>>& candidates,
@@ -161,6 +163,7 @@ namespace AgentManager {
 
     // Request and wait for script-runner actor snapshots.
     void RequestActorSnapshot(uint32_t refID, const std::string& npcName);
+    void ClearActorSnapshotRequest();
     bool WaitForFreshActorSnapshot(uint32_t expectedRefID, int timeoutMs = 600,
                                    const std::function<bool()>& cancelRequested = {});
     

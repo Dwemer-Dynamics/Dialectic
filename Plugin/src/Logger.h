@@ -2,6 +2,8 @@
 #ifndef DIALECTIC_LOGGER_H
 #define DIALECTIC_LOGGER_H
 
+#include <cstdint>
+
 namespace Logger {
 
 enum class Level {
@@ -10,6 +12,17 @@ enum class Level {
     Info = 2,
     Warning = 3,
     Error = 4
+};
+
+struct Diagnostics {
+    std::uint64_t linesWritten{0};
+    std::uint64_t bytesWritten{0};
+    std::uint64_t flushes{0};
+    std::uint64_t totalWriteUs{0};
+    std::uint64_t maxWriteUs{0};
+    std::uint64_t totalLockWaitUs{0};
+    std::uint64_t maxLockWaitUs{0};
+    std::uint64_t slowWrites{0};
 };
 
 void Initialize();
@@ -23,6 +36,7 @@ void LogError(const char* fmt, ...);
 void Log(Level level, const char* fmt, ...);
 void LogSeparator();
 void LogSection(const char* section);
+Diagnostics GetDiagnostics();
 
 } // namespace Logger
 

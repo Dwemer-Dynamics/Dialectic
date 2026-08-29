@@ -15,6 +15,7 @@ int iPlayerLine
 int iCaptureSeq
 
 begin function {}
+    DialecticDiagnosticBridgeTick 3
     let iMenuMode := 0
     if MenuMode
         let iMenuMode := 1
@@ -126,16 +127,7 @@ begin function {}
 
     let iCaptureSeq += 1
 
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 0 "source=radiant\n"
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "speaker=%z\n" sSpeakerName
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "speaker_refid=%z\n" sSpeakerRef
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "target=%z\n" sTargetName
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "target_refid=%z\n" sTargetRef
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "text=%z\n" sSubtitle
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "is_player_line=%g\n" iPlayerLine
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "menu_mode=%g\n" iMenuMode
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "capture_id=%g\n" iCaptureSeq
-    WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_dialogue_capture.tmp" 1 "end=1\n"
+    DialecticCaptureDialogue "radiant" $sSpeakerName $sSpeakerRef $sTargetName $sTargetRef sSubtitle iPlayerLine iMenuMode iCaptureSeq
 
     sv_Destruct sSubtitle
     sv_Destruct sSpeakerName

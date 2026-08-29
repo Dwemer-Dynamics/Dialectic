@@ -1,0 +1,21 @@
+int iMode
+string_var sPlayerName
+
+begin function {iMode}
+    let sPlayerName := GetName PlayerRef
+    if eval !(sPlayerName) || sv_Length sPlayerName <= 0
+        let sPlayerName := sv_Construct "The Courier"
+    endif
+
+    if eval iMode == 1
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "waitstart|%z waits and time begins to pass\n" sPlayerName
+        SetINIIntC "SleepWaitState:PendingMode" 1 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "SleepWaitState:CompletionDelay" 2 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    elseif eval iMode == 2
+        WriteStringToFile "Data\\NVSE\\Plugins\\dialectic_rpg_events.tmp" 1 "goodnight|%z goes to sleep\n" sPlayerName
+        SetINIIntC "SleepWaitState:PendingMode" 2 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+        SetINIIntC "SleepWaitState:CompletionDelay" 2 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+
+    sv_Destruct sPlayerName
+end

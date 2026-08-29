@@ -5,7 +5,10 @@ int iOption
 array_var aJSON
 
 Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    if eval fValue <= 0
+        return
+    endif
+
     SetINIIntC "Tools:SendVoiceSamples" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
-    PrintC "[Dialectic] Uploading Fallout voice samples"
     DialecticSendAllVoiceSamples
 End

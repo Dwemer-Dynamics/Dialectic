@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace VoiceRecorder {
 
@@ -41,8 +42,9 @@ void StopRecording();
 void Shutdown();
 ServiceStatus GetServiceStatus();
 
-// Resolve the current WinMM capture device name for diagnostics.
+// Resolve the current Windows default capture device name for diagnostics.
 std::string GetCurrentRecordingDeviceName();
+std::string GetCurrentRecordingDeviceDisplayName();
 
 // Open mic monitoring. The monitor releases the capture device before
 // invoking the callback so the full STT recorder can own the microphone.

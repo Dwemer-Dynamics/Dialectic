@@ -2,11 +2,13 @@
 #include "HTTPManager.h"
 #include "Config.h"
 #include "VoiceSampleOverridesFNV.h"
+#include "VoiceSampleResolverFNV.h"
 #include "GameThreadDispatcher.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
 #include "XNVSEAdapter.h"
+#include "PlayerInventoryManagerFNV.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -67,7 +69,12 @@ namespace AgentManager {
     static const char* kActorSnapshotRequestFileName = "dialectic_actor_snapshot_request.tmp";
     static const char* kActorSnapshotStatusFileName = "dialectic_actor_snapshot_status.txt";
 
+    static bool IsPlayerReference(uint32_t refID) {
+        return refID == 0x00000014;
+    }
+
     void Initialize() {
+        ClearActorSnapshotRequest();
         std::lock_guard<std::mutex> lock(g_agentsMutex);
         g_agents.clear();
         g_registeredAgents.clear();
@@ -109,6 +116,8 @@ namespace AgentManager {
         }
         return nullptr;
     }
+
+    static std::string NormalizeName(const std::string& value);
     
     bool IsAIAgent(uint32_t formID) {
         std::lock_guard<std::mutex> lock(g_agentsMutex);
@@ -120,10 +129,38 @@ namespace AgentManager {
     }
 
     void RegisterAIAgent(uint32_t formID, const std::string& name, RegistrationSource source, float distance) {
-        std::lock_guard<std::mutex> lock(g_agentsMutex);
         if (formID == 0) {
             return;
         }
+
+        std::vector<uint32_t> sameNameAgents;
+        {
+            const std::string targetName = NormalizeName(name);
+            std::lock_guard<std::mutex> lock(g_agentsMutex);
+            for (const auto& existing : g_agents) {
+                if (!existing ||
+                    existing->formID == formID ||
+                    targetName.empty() ||
+                    NormalizeName(existing->actorName) != targetName) {
+                    continue;
+                }
+                sameNameAgents.push_back(existing->formID);
+            }
+        }
+        std::vector<uint32_t> deletedSameNameAgents;
+        for (uint32_t existingFormID : sameNameAgents) {
+            RuntimeSnapshot::ActorState actor;
+            if (RuntimeSnapshot::TryGetActor(existingFormID, actor) && actor.deleted) {
+                deletedSameNameAgents.push_back(existingFormID);
+            }
+        }
+        for (uint32_t deletedFormID : deletedSameNameAgents) {
+            Log("AgentManager: Retiring deleted same-name agent replaced by 0x%08X: 0x%08X",
+                formID, deletedFormID);
+            UnregisterAIAgent(deletedFormID);
+        }
+
+        std::lock_guard<std::mutex> lock(g_agentsMutex);
 
         std::shared_ptr<AIAgent> agent = FindAgentLocked(formID);
         if (!agent) {
@@ -243,13 +280,27 @@ namespace AgentManager {
             return 0;
         }
 
-        std::lock_guard<std::mutex> lock(g_agentsMutex);
-        for (const auto& agent : g_agents) {
-            if (agent && NormalizeName(agent->actorName) == target) {
-                return agent->formID;
+        std::vector<uint32_t> matchingFormIDs;
+        {
+            std::lock_guard<std::mutex> lock(g_agentsMutex);
+            for (const auto& agent : g_agents) {
+                if (agent && NormalizeName(agent->actorName) == target) {
+                    matchingFormIDs.push_back(agent->formID);
+                }
             }
         }
-        return 0;
+
+        for (uint32_t formID : matchingFormIDs) {
+            RuntimeSnapshot::ActorState actor;
+            if (RuntimeSnapshot::TryGetActor(formID, actor) &&
+                actor.loaded3D &&
+                !actor.deleted &&
+                !actor.dead) {
+                return formID;
+            }
+        }
+
+        return matchingFormIDs.empty() ? 0 : matchingFormIDs.front();
     }
 
     std::vector<std::pair<uint32_t, std::string>> GetRegisteredAgentSnapshot() {
@@ -603,6 +654,11 @@ namespace AgentManager {
     }
 
     void RequestActorSnapshot(uint32_t refID, const std::string& npcName) {
+        if (IsPlayerReference(refID)) {
+            Log("AgentManager: Refused NPC actor snapshot request for player ref 0x%08X", refID);
+            PlayerInventoryManagerFNV::ForceRefresh("snapshot_request_player_guard", 0);
+            return;
+        }
         RemoveActorSnapshotBridgeFile(kActorSnapshotFileName);
         RemoveActorSnapshotBridgeFile(kActorSnapshotStatusFileName);
 
@@ -631,7 +687,7 @@ namespace AgentManager {
             npcName.c_str(), refID, written);
     }
 
-    static void ClearActorSnapshotRequest() {
+    void ClearActorSnapshotRequest() {
         RemoveActorSnapshotBridgeFile(kActorSnapshotRequestFileName);
     }
 
@@ -981,13 +1037,16 @@ namespace AgentManager {
             data.baseName = formatFormId(nativeActor.baseFormId);
             data.gender = nativeActor.baseType == 0x2A ? (nativeActor.female ? "Female" : "Male") : "";
             data.race = nativeActor.raceName;
+            data.voiceId = nativeActor.voiceName;
             data.voiceFormId = formatFormId(nativeActor.voiceFormId);
+            data.voiceName = nativeActor.voiceName;
             data.level = nativeActor.level;
             data.health = nativeActor.health;
             data.healthMax = nativeActor.healthMax;
             data.actionPoints = nativeActor.actionPoints;
             data.actionPointsMax = nativeActor.actionPointsMax;
             data.scale = nativeActor.scale;
+            data.factions = nativeActor.factions;
 
             data.equipment.reserve(nativeActor.equipment.size());
             for (const auto& nativeItem : nativeActor.equipment) {
@@ -1042,6 +1101,7 @@ namespace AgentManager {
                         item.name = nativeItem.name;
                         item.baseid = formatFormId(nativeItem.baseFormId);
                         item.count = nativeItem.count;
+                        item.value = nativeItem.value;
                         item.equipped = nativeItem.equipped;
                         item.type = nativeItem.type;
                         item.condition = nativeItem.condition;
@@ -1129,77 +1189,6 @@ namespace AgentManager {
         });
     }
 
-    static std::string NormalizeVoicePathSeparators(std::string value) {
-        value = Trim(value);
-        std::replace(value.begin(), value.end(), '/', '\\');
-        return value;
-    }
-
-    static bool StartsWithInsensitive(const std::string& value, const std::string& prefix) {
-        if (value.size() < prefix.size()) {
-            return false;
-        }
-        for (size_t i = 0; i < prefix.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(value[i])) !=
-                std::tolower(static_cast<unsigned char>(prefix[i]))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    static std::string BuildVoiceOriginalName(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-            return path.substr(5);
-        }
-        if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            return path;
-        }
-        return "Sound\\Voice\\" + path;
-    }
-
-    static std::string BuildVoiceDataPath(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\")) {
-            return path;
-        }
-        if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            return "Data\\" + path;
-        }
-        return "Data\\Sound\\Voice\\" + path;
-    }
-
-    static std::string BuildBundledVoiceSamplePath(const std::string& voiceFile) {
-        std::string path = NormalizeVoicePathSeparators(voiceFile);
-        if (StartsWithInsensitive(path, "Data\\Sound\\Voice\\")) {
-            path = path.substr(17);
-        } else if (StartsWithInsensitive(path, "Sound\\Voice\\")) {
-            path = path.substr(12);
-        } else if (StartsWithInsensitive(path, "Data\\")) {
-            path = path.substr(5);
-        }
-        return "Data\\Dialectic\\voice_samples\\" + path;
-    }
-
-    static bool ReadBinaryFile(const std::string& path, std::string& data) {
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open()) {
-            return false;
-        }
-
-        file.seekg(0, std::ios::end);
-        const std::streamoff size = file.tellg();
-        if (size <= 0) {
-            return false;
-        }
-
-        file.seekg(0, std::ios::beg);
-        data.resize(static_cast<size_t>(size));
-        file.read(data.data(), static_cast<std::streamsize>(size));
-        return file.good() || file.gcount() == static_cast<std::streamsize>(size);
-    }
-
     static bool FindVoiceSampleForData(const NPCData& data, VoiceSampleOverridesFNV::VoiceSampleOverride& sample) {
         if (!IsMissingSnapshotValue(data.voiceId) &&
             VoiceSampleOverridesFNV::FindVoiceSampleOverride(data.voiceId, sample)) {
@@ -1230,9 +1219,7 @@ namespace AgentManager {
             return;
         }
 
-        const std::string originalName = BuildVoiceOriginalName(sample.voiceFile);
-        const std::string dataPath = BuildVoiceDataPath(sample.voiceFile);
-        const std::string bundledPath = BuildBundledVoiceSamplePath(sample.voiceFile);
+        const std::string originalName = VoiceSampleResolverFNV::BuildOriginalName(sample.voiceFile);
         const std::string uploadKey = NormalizeName(originalName);
         {
             std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
@@ -1244,20 +1231,25 @@ namespace AgentManager {
 
         const std::string actorName = data.displayName;
         TaskManager::Enqueue("voice_sample", actorName, RuntimeGeneration::Current(), false,
-            std::chrono::seconds(60), [actorName, originalName, dataPath, bundledPath, sample](const TaskManager::CancellationToken& token) {
+            std::chrono::seconds(60), [actorName, originalName, uploadKey, sample](const TaskManager::CancellationToken& token) {
             if (!token.WaitFor(std::chrono::milliseconds(1200))) return;
 
             std::string audioData;
-            std::string sourcePath = dataPath;
-            if (!ReadBinaryFile(sourcePath, audioData)) {
-                sourcePath = bundledPath;
-            }
-            if (audioData.empty() && !ReadBinaryFile(sourcePath, audioData)) {
-                Log("AgentManager: Voice sample file not found or empty for %s: %s",
+            std::string sourcePath;
+            std::string resolveError;
+            if (!VoiceSampleResolverFNV::ResolveAndRead(
+                    sample.voiceFile, audioData, sourcePath, &resolveError)) {
+                Log("AgentManager: Voice sample resolution failed for %s: %s (%s)",
                     actorName.c_str(),
-                    dataPath.c_str());
+                    sample.voiceFile.c_str(),
+                    resolveError.c_str());
+                std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
+                g_attemptedVoiceSampleUploads.erase(uploadKey);
                 return;
             }
+
+            Log("AgentManager: Resolved voice sample for %s from %s (%zu bytes)",
+                actorName.c_str(), sourcePath.c_str(), audioData.size());
 
             const std::string response = HTTPManager::UploadVoiceSample(
                 audioData,
@@ -1266,6 +1258,8 @@ namespace AgentManager {
                 sample.transcript);
             if (response.empty()) {
                 Log("AgentManager: Voice sample upload returned empty response for %s", actorName.c_str());
+                std::lock_guard<std::mutex> lock(g_voiceSampleUploadMutex);
+                g_attemptedVoiceSampleUploads.erase(uploadKey);
             } else {
                 Log("AgentManager: Voice sample upload completed for %s from %s",
                     actorName.c_str(),
@@ -1503,7 +1497,9 @@ namespace AgentManager {
     static std::string FormatInventoryJson(const NPCData& data) {
         std::ostringstream json;
         json << "{";
+        json << "\"schema\":\"dialectic.inventory.v1\",";
         json << "\"type\":\"inventory\",";
+        json << "\"game\":\"fnv\",";
         json << "\"actor_name\":\"" << HTTPManager::EscapeJson(data.displayName) << "\",";
         json << "\"actor_type\":\"npc\",";
         json << "\"refid\":\"";
@@ -1523,6 +1519,7 @@ namespace AgentManager {
             json << "\"name\":\"" << HTTPManager::EscapeJson(item.name) << "\",";
             json << "\"baseid\":\"" << HTTPManager::EscapeJson(item.baseid) << "\",";
             json << "\"count\":" << item.count << ",";
+            json << "\"value\":" << item.value << ",";
             json << "\"equipped\":" << (item.equipped ? "true" : "false") << ",";
             if (item.condition >= 0.0f) {
                 json << "\"condition\":" << item.condition << ",";
@@ -1595,6 +1592,12 @@ namespace AgentManager {
             return;
         }
 
+        if (IsPlayerReference(refID)) {
+            Log("AgentManager: Routed player inventory away from NPC profile snapshot bridge");
+            PlayerInventoryManagerFNV::ForceRefresh("actor_profile_player_guard", 0);
+            return;
+        }
+
         Log("AgentManager: SendActorProfile called for: %s (0x%08X)", npcName.c_str(), refID);
 
         constexpr int kSnapshotTimeoutMs = 600;
@@ -1630,6 +1633,12 @@ namespace AgentManager {
             return;
         }
 
+        if (IsPlayerReference(data.refID)) {
+            Log("AgentManager: Routed player metadata away from NPC profile snapshot bridge");
+            PlayerInventoryManagerFNV::ForceRefresh("actor_metadata_player_guard", 0);
+            return;
+        }
+
         if (data.displayName.empty() || data.refID == 0) {
             Log("AgentManager: Cannot send actor profile metadata, missing name or refid");
             return;
@@ -1648,6 +1657,11 @@ namespace AgentManager {
 
     void RefreshActorMetadata(uint32_t refID, const std::string& npcName) {
         if (!g_initialized || refID == 0) {
+            return;
+        }
+
+        if (IsPlayerReference(refID)) {
+            PlayerInventoryManagerFNV::ForceRefresh("metadata_refresh_player_guard", 0);
             return;
         }
 
@@ -1673,6 +1687,9 @@ namespace AgentManager {
             data.refID = refID;
         }
 
+        SendActorProfileUpdate(data);
+        SendNpcVoiceUpdate(data);
+        SendVoiceSampleUpload(data);
         SendEquipmentUpdate(data);
         SendInventoryUpdate(data);
     }
@@ -1680,6 +1697,11 @@ namespace AgentManager {
     bool RefreshActorMetadataForPrompt(uint32_t refID, const std::string& npcName, int timeoutMs) {
         if (!g_initialized || refID == 0) {
             return false;
+        }
+
+        if (IsPlayerReference(refID)) {
+            PlayerInventoryManagerFNV::MarkDirty("prompt_player_inventory", 0);
+            return true;
         }
 
         (void)timeoutMs;
@@ -1704,6 +1726,42 @@ namespace AgentManager {
         Log("AgentManager: Prompt metadata refresh queued asynchronously for %s (0x%08X) equipment=%zu inventory=%zu",
             data.displayName.c_str(), data.refID, data.equipment.size(), data.inventory.size());
         return true;
+    }
+
+    void RefreshRegisteredAgentVoices() {
+        if (!g_initialized) {
+            return;
+        }
+
+        const auto agents = GetRegisteredAgentSnapshot();
+        std::size_t queued = 0;
+        for (const auto& agent : agents) {
+            const uint32_t refID = agent.first;
+            if (refID == 0 || IsPlayerReference(refID)) {
+                continue;
+            }
+
+            RuntimeSnapshot::ActorState nativeActor;
+            if (!RuntimeSnapshot::TryGetActor(refID, nativeActor)) {
+                continue;
+            }
+
+            NPCData data = CollectNPCDataWithSnapshotPolicy(refID, false, 1000);
+            if (data.displayName.empty()) {
+                data.displayName = agent.second;
+            }
+            if (data.refID == 0) {
+                data.refID = refID;
+            }
+            if (data.voiceId.empty() && data.voiceFormId.empty() && data.voiceName.empty()) {
+                continue;
+            }
+
+            SendNpcVoiceUpdate(data);
+            ++queued;
+        }
+        Log("AgentManager: Refreshed voice mappings for %zu/%zu registered agents after voice sync",
+            queued, agents.size());
     }
 }
 

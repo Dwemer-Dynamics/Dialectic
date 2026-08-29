@@ -42,6 +42,7 @@ struct ActivityStatus {
     bool isSitting = false;
     bool isSleeping = false;
     bool isWeaponDrawn = false;
+    std::chrono::steady_clock::time_point observedAt{};
 };
 
 static constexpr const char* kActivityStatusPath = "Data\\NVSE\\Plugins\\dialectic_activity_status.tmp";
@@ -163,6 +164,7 @@ bool RefreshFromBridge() {
         status.isSitting = ParseBoolFlag(parts[9]);
         status.isSleeping = ParseBoolFlag(parts[10]);
         status.isWeaponDrawn = ParseBoolFlag(parts[11]);
+        status.observedAt = now;
 
         if (!status.refId.empty() && IsUsableActorName(status.actorName)) {
             statuses.push_back(status);
@@ -229,15 +231,19 @@ bool RefreshFromNativeSnapshot() {
         status.isMoving = actor.moving;
         status.isRunning = actor.running;
         status.isSneaking = actor.sneaking;
+        status.isSleeping = actor.sitSleepState >= 6 && actor.sitSleepState <= 10;
+        status.observedAt = std::chrono::steady_clock::now();
 
         const auto bridge = std::find_if(bridgeStatuses.begin(), bridgeStatuses.end(),
             [&status](const ActivityStatus& candidate) {
                 return _stricmp(candidate.refId.c_str(), status.refId.c_str()) == 0;
             });
-        if (bridge != bridgeStatuses.end()) {
+        if (bridge != bridgeStatuses.end() &&
+            bridge->observedAt.time_since_epoch().count() != 0 &&
+            std::chrono::steady_clock::now() - bridge->observedAt <= std::chrono::seconds(5)) {
             status.isUnconscious = bridge->isUnconscious;
             status.isSitting = bridge->isSitting;
-            status.isSleeping = bridge->isSleeping;
+            status.isSleeping = status.isSleeping || bridge->isSleeping;
         }
         statuses.push_back(std::move(status));
     }
@@ -390,6 +396,42 @@ void Update() {
     if (due) {
         SendNow(false);
     }
+}
+
+bool IsAutomaticDialogueAllowed(std::uint32_t formId, std::string* reason) {
+    if (formId == 0) {
+        return true;
+    }
+
+    AutomaticDialogueState state;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        const std::string formattedFormId = FormatFormId(formId);
+        const auto status = std::find_if(g_statuses.begin(), g_statuses.end(), [&formattedFormId](const ActivityStatus& candidate) {
+            return _stricmp(candidate.refId.c_str(), formattedFormId.c_str()) == 0;
+        });
+        if (status == g_statuses.end()) {
+            return true;
+        }
+        if (status->observedAt.time_since_epoch().count() == 0 ||
+            std::chrono::steady_clock::now() - status->observedAt > std::chrono::seconds(5)) {
+            return true;
+        }
+
+        state.available = true;
+        state.dead = status->isDead;
+        state.unconscious = status->isUnconscious;
+        state.sleeping = status->isSleeping;
+    }
+
+    const char* blockReason = AutomaticDialogueBlockReason(state);
+    if (!blockReason) {
+        return true;
+    }
+    if (reason) {
+        *reason = blockReason;
+    }
+    return false;
 }
 
 } // namespace ActivityStatusFNV

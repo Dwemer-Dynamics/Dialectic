@@ -3,6 +3,7 @@
 #include "WorldContextFNV.h"
 
 #include "Config.h"
+#include "GameLoop.h"
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
@@ -34,7 +35,11 @@ static Context g_context;
 static std::chrono::steady_clock::time_point g_lastBridgeReadTime;
 static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::string g_lastSentSignature;
+static std::string g_lastCommentLocation;
 static constexpr auto kBridgeReadInterval = std::chrono::milliseconds(500);
+static bool g_saveLoadPending = false;
+static bool g_saveLoadCompleted = false;
+static uint64_t g_bridgeWriteFloor = 0;
 
 std::string Trim(const std::string& value) {
     const char* whitespace = " \t\r\n";
@@ -85,6 +90,27 @@ std::string ToLower(std::string value) {
 bool IsUnknown(const std::string& value) {
     const std::string lower = ToLower(Trim(value));
     return lower.empty() || lower == "unknown" || lower == "none" || lower == "null";
+}
+
+bool IsCommentableLocation(const std::string& value) {
+    return !IsUnknown(value) && ToLower(Trim(value)) != "unknown location";
+}
+
+void QueueLocationChangedComment(const Context& context) {
+    if (!IsCommentableLocation(context.location)) {
+        return;
+    }
+    if (g_lastCommentLocation.empty()) {
+        g_lastCommentLocation = context.location;
+        return;
+    }
+    if (context.location == g_lastCommentLocation) {
+        return;
+    }
+    const std::string previousLocation = g_lastCommentLocation;
+    g_lastCommentLocation = context.location;
+    GameLoop::QueueRpgCommentEvent("location_changed",
+        "The group entered " + context.location + " after leaving " + previousLocation);
 }
 
 bool ParseBool(const std::string& value, bool fallback = false) {
@@ -145,7 +171,7 @@ long long ParseLongLong(const std::string& value, long long fallback = 0) {
     }
 }
 
-bool GetFileModifiedAgeMs(const char* path, uint64_t& ageMs) {
+bool GetFileModifiedInfo(const char* path, uint64_t& ageMs, uint64_t& modifiedTicks) {
     WIN32_FILE_ATTRIBUTE_DATA attributes = {};
     if (!GetFileAttributesExA(path, GetFileExInfoStandard, &attributes)) {
         return false;
@@ -161,6 +187,7 @@ bool GetFileModifiedAgeMs(const char* path, uint64_t& ageMs) {
     ULARGE_INTEGER modified = {};
     modified.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
     modified.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+    modifiedTicks = modified.QuadPart;
 
     ageMs = current.QuadPart <= modified.QuadPart
         ? 0
@@ -251,8 +278,17 @@ bool RefreshFromBridge() {
     g_lastBridgeReadTime = now;
 
     uint64_t ageMs = 0;
-    if (!GetFileModifiedAgeMs(kWorldContextPath, ageMs) || ageMs > 5000) {
+    uint64_t modifiedTicks = 0;
+    if (!GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks) || ageMs > 5000) {
         return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_contextMutex);
+        if (g_saveLoadPending &&
+            (!g_saveLoadCompleted || modifiedTicks <= g_bridgeWriteFloor)) {
+            return false;
+        }
     }
 
     std::ifstream input(kWorldContextPath, std::ios::binary);
@@ -296,6 +332,12 @@ bool RefreshFromBridge() {
 
     std::lock_guard<std::mutex> lock(g_contextMutex);
     g_context = next;
+    if (g_saveLoadPending) {
+        g_saveLoadPending = false;
+        g_saveLoadCompleted = false;
+        g_bridgeWriteFloor = 0;
+        Logger::LogInfo("WorldContextFNV: accepted fresh post-load bridge gamets=%lld", next.gamets);
+    }
     return next.resolved;
 }
 
@@ -346,10 +388,7 @@ std::string BuildSignature(const Context& context) {
               << context.weather << "|"
               << context.gameYear << "|"
               << context.gameMonth << "|"
-              << context.gameDay << "|"
-              << static_cast<int>(std::floor(context.gameHour * 10.0f)) << "|"
-              << static_cast<int>(std::floor(context.playerX / 256.0f)) << ":"
-              << static_cast<int>(std::floor(context.playerY / 256.0f));
+              << context.gameDay;
     return signature.str();
 }
 
@@ -397,7 +436,7 @@ void SendContext(Context context) {
         const std::string response = HTTPManager::SendJson("gamedata.php", json);
         const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
-        Logger::LogInfo("[PERF] WorldContextFNV send elapsed_ms=%lld bytes=%zu response_empty=%d",
+        Logger::LogDebug("[PERF] WorldContextFNV send elapsed_ms=%lld bytes=%zu response_empty=%d",
             elapsedMs,
             json.size(),
             response.empty() ? 1 : 0);
@@ -426,6 +465,46 @@ long long GetGameTimestamp() {
     return context.gamets;
 }
 
+void BeginSaveLoad() {
+    uint64_t ageMs = 0;
+    uint64_t modifiedTicks = 0;
+    GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks);
+
+    std::lock_guard<std::mutex> lock(g_contextMutex);
+    g_context = {};
+    g_saveLoadPending = true;
+    g_saveLoadCompleted = false;
+    g_bridgeWriteFloor = modifiedTicks;
+    g_lastBridgeReadTime = {};
+    g_lastSendTime = {};
+    g_lastSentSignature.clear();
+    g_lastCommentLocation.clear();
+    Logger::LogInfo("WorldContextFNV: waiting for fresh bridge after save load");
+}
+
+void CompleteSaveLoad(bool succeeded) {
+    uint64_t ageMs = 0;
+    uint64_t modifiedTicks = 0;
+    GetFileModifiedInfo(kWorldContextPath, ageMs, modifiedTicks);
+
+    std::lock_guard<std::mutex> lock(g_contextMutex);
+    if (!succeeded) {
+        g_saveLoadPending = false;
+        g_saveLoadCompleted = false;
+        g_bridgeWriteFloor = 0;
+        g_lastBridgeReadTime = {};
+        Logger::LogWarning("WorldContextFNV: save load failed; cancelled post-load bridge gate");
+        return;
+    }
+
+    g_context = {};
+    g_saveLoadPending = true;
+    g_saveLoadCompleted = true;
+    g_bridgeWriteFloor = (std::max)(g_bridgeWriteFloor, modifiedTicks);
+    g_lastBridgeReadTime = {};
+    Logger::LogInfo("WorldContextFNV: save load completed; awaiting post-load bridge write");
+}
+
 void SendNow(bool force) {
     if (!Config::worldContextEnabled) {
         return;
@@ -438,7 +517,7 @@ void SendNow(bool force) {
         std::lock_guard<std::mutex> lock(g_contextMutex);
         context = g_context;
     }
-    if (!context.resolved) {
+    if (!context.resolved || context.gamets <= 0) {
         return;
     }
 
@@ -452,6 +531,7 @@ void SendNow(bool force) {
     g_lastSendTime = now;
     g_lastSentSignature = signature;
     SendContext(context);
+    QueueLocationChangedComment(context);
 }
 
 void Update() {
@@ -474,7 +554,7 @@ void Update() {
         std::lock_guard<std::mutex> lock(g_contextMutex);
         context = g_context;
     }
-    if (!context.resolved) {
+    if (!context.resolved || context.gamets <= 0) {
         return;
     }
 
@@ -484,6 +564,7 @@ void Update() {
         g_lastSendTime = now;
         g_lastSentSignature = signature;
         SendContext(context);
+        QueueLocationChangedComment(context);
     }
 }
 

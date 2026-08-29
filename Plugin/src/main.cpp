@@ -45,20 +45,27 @@
 #include "InputManager.h"
 #include "TargetManager.h"
 #include "ActivationManager.h"
+#include "ActionManager.h"
 #include "GameLoop.h"
 #include "WorldDataSyncFNV.h"
 #include "VoiceSampleBatchUploadFNV.h"
 #include "ImportDataSyncFNV.h"
+#include "ServerPluginSync.h"
 #include "QuestJournalFNV.h"
+#include "PlayerInventoryManagerFNV.h"
+#include "FalloutStatsManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
+#include "VoiceRecorder.h"
+#include "Console.h"
+#include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.0"
+#define DIALECTIC_VERSION "1.0.0"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
-#define DIALECTIC_PLUGIN_INFO_VERSION 500
+#define DIALECTIC_PLUGIN_INFO_VERSION 10000
 #endif
 
 // Global variables
@@ -88,13 +95,6 @@ static void DeleteBridgeFileEverywhere(const char* fileName) {
 static void ClearStartupBridgeState() {
     static constexpr const char* files[] = {
         "dialectic_bootstrap_active.tmp",
-        "dialectic_action_request.tmp",
-        "dialectic_action_status.txt",
-        "dialectic_attack_state.tmp",
-        "dialectic_attack_cleanup.tmp",
-        "dialectic_follow_state.tmp",
-        "dialectic_move_state.tmp",
-        "dialectic_pickup_state.tmp",
         "dialectic_open_text_input.tmp",
         "dialectic_open_mode_menu.tmp",
         "dialectic_open_llm_model_menu.tmp",
@@ -105,12 +105,8 @@ static void ClearStartupBridgeState() {
         "dialectic_mode_menu_status.tmp",
         "dialectic_llm_model_menu_status.tmp",
         "dialectic_dynamic_profile_menu_status.tmp",
-        "dialectic_halt_actions.tmp",
-        "dialectic_halt_actions_status.txt",
         "dialectic_subtitle.txt",
         "dialectic_subtitle_status.txt",
-        "dialectic_lipsync_command.txt",
-        "dialectic_lipsync_ref.txt",
         "dialectic_lipsync_status.txt"
     };
 
@@ -196,6 +192,11 @@ static ParamInfo kParams_Integer[1] = {
     { "value", kParamType_Integer, 0 }
 };
 
+static ParamInfo kParams_TwoIntegers[2] = {
+    { "stat code", kParamType_Integer, 0 },
+    { "value", kParamType_Integer, 0 }
+};
+
 static std::string NormalizeConfigName(const char* value) {
     if (!value) {
         return "";
@@ -220,10 +221,12 @@ static const char* CanonicalHotkeyKey(const std::string& normalizedKey) {
     if (normalizedKey == "manualactivate" || normalizedKey == "manualactivatenpc") { return "ManualActivate"; }
     if (normalizedKey == "openmenu") { return "OpenMenu"; }
     if (normalizedKey == "quickcommand") { return "QuickCommand"; }
+    if (normalizedKey == "dialecticcontrol") { return "DialecticControl"; }
     if (normalizedKey == "dynamicprofilemenu") { return "DynamicProfileMenu"; }
     if (normalizedKey == "togglemodes") { return "ToggleModes"; }
     if (normalizedKey == "togglellmmodel") { return "ToggleLLMModel"; }
     if (normalizedKey == "openmicmute") { return "OpenMicMute"; }
+    if (normalizedKey == "pipvision") { return "PipVision"; }
     return nullptr;
 }
 
@@ -232,23 +235,6 @@ static int GetRawHotkeyScanCode(const char* key) {
         return 0;
     }
     return Config::ReadINIInt("Hotkeys", key, 0);
-}
-
-static bool RawHotkeyMatches(const char* key, int scanCode) {
-    const int configured = GetRawHotkeyScanCode(key);
-    return configured > 0 && scanCode == configured;
-}
-
-static void WriteHotkeyDiagnostic(const char* handler, int scanCode, int configured, const char* status) {
-    std::ofstream out("Data\\NVSE\\Plugins\\dialectic_hotkey_diagnostics.txt", std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        return;
-    }
-
-    out << "handler=" << (handler ? handler : "") << "\n";
-    out << "key=" << scanCode << "\n";
-    out << "configured=" << configured << "\n";
-    out << "status=" << (status ? status : "") << "\n";
 }
 
 static bool GetRawHotkeyConfigValue(const std::string& normalizedKey, double fallback, double& outValue) {
@@ -274,20 +260,6 @@ static bool SetRawHotkeyConfigValue(const std::string& normalizedKey, int scanCo
     return true;
 }
 
-static bool IsDuplicateHotkeyInvocation(int scanCode) {
-    static int s_lastScanCode = 0;
-    static DWORD s_lastTick = 0;
-
-    const DWORD now = GetTickCount();
-    if (scanCode == s_lastScanCode && (now - s_lastTick) < 250) {
-        return true;
-    }
-
-    s_lastScanCode = scanCode;
-    s_lastTick = now;
-    return false;
-}
-
 static bool GetDialecticConfigValue(const char* section, const char* key, double fallback, double& outValue) {
     const std::string s = NormalizeConfigName(section);
     const std::string k = NormalizeConfigName(key);
@@ -308,16 +280,8 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
             outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC);
             return true;
         }
-        if (k == "dynamicprofilemenu") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu);
-            return true;
-        }
-        if (k == "togglemodes") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes);
-            return true;
-        }
-        if (k == "togglellmmodel") {
-            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel);
+        if (k == "dialecticcontrol") {
+            outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl);
             return true;
         }
     }
@@ -329,7 +293,6 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "animationresolution") { outValue = Config::animationResolution; return true; }
         if (k == "animationintensity") { outValue = Config::animationIntensity; return true; }
         if (k == "enable3dplayback" || k == "playback3d") { outValue = Config::audio3DPlaybackEnabled ? 1.0 : 0.0; return true; }
-        if (k == "camerabasedaudio" || k == "camerabased") { outValue = Config::audioCameraBased ? 1.0 : 0.0; return true; }
         if (k == "panstrength" || k == "3dpanstrength") { outValue = Config::audio3DPanStrength; return true; }
         if (k == "invertheading") { outValue = Config::audioInvertHeading ? 1.0 : 0.0; return true; }
         if (k == "distancescale" || k == "voicedistancescale") { outValue = Config::audioDistanceScale; return true; }
@@ -383,9 +346,7 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "togglevoice") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleVoice); return true; }
         if (k == "openmicmute") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::OpenMicMute); return true; }
         if (k == "manualactivate" || k == "manualactivatenpc") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ManualActivateNPC); return true; }
-        if (k == "dynamicprofilemenu") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DynamicProfileMenu); return true; }
-        if (k == "togglemodes") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleModes); return true; }
-        if (k == "togglellmmodel") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::ToggleLLMModel); return true; }
+        if (k == "dialecticcontrol") { outValue = InputManager::GetHotkey(InputManager::HotkeyAction::DialecticControl); return true; }
     }
 
     if (s == "rechat") {
@@ -447,7 +408,6 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
         else if (k == "animationresolution") { Config::animationResolution = static_cast<int>(value); changed = true; }
         else if (k == "animationintensity") { Config::animationIntensity = static_cast<float>(value); changed = true; }
         else if (k == "enable3dplayback" || k == "playback3d") { Config::audio3DPlaybackEnabled = enabled; changed = true; }
-        else if (k == "camerabasedaudio" || k == "camerabased") { Config::audioCameraBased = enabled; changed = true; }
         else if (k == "playback2d" || k == "force2d") { Config::audio3DPlaybackEnabled = !enabled; changed = true; }
         else if (k == "panstrength" || k == "3dpanstrength") { Config::audio3DPanStrength = static_cast<float>(value); changed = true; }
         else if (k == "invertheading") { Config::audioInvertHeading = enabled; changed = true; }
@@ -510,7 +470,7 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
     } else if (s == "narrator") {
         if (k == "mode") { Config::narratorModeEnabled = enabled; changed = true; }
     } else if (s == "modes") {
-        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 7); changed = true; }
+        if (k == "currentindex") { Config::currentModeIndex = std::clamp(static_cast<int>(value), 0, 8); changed = true; }
     }
 
     if (!changed) {
@@ -564,12 +524,12 @@ static bool ResolveDialecticSettingId(int settingId, DialecticSettingRef& outSet
         case 50: outSetting = { "Audio", "VoiceVolume" }; return true;
         case 51: outSetting = { "Audio", "PanStrength" }; return true;
         case 52: outSetting = { "Audio", "DistanceScale" }; return true;
-        case 53: outSetting = { "Audio", "CameraBasedAudio" }; return true;
         case 60: outSetting = { "Distance", "ActivatingNpcInterior" }; return true;
         case 61: outSetting = { "Distance", "ActivatingNpcExterior" }; return true;
         case 62: outSetting = { "SpatialAudio", "InteriorHearingDistance" }; return true;
         case 63: outSetting = { "SpatialAudio", "ExteriorHearingDistance" }; return true;
         case 64: outSetting = { "SpatialAudio", "AutoHearingDistance" }; return true;
+        case 65: outSetting = { "Hotkeys", "PipVision" }; return true;
         default:
             outSetting = { "", "" };
             return false;
@@ -703,6 +663,14 @@ static bool ExtractIntegerArgs(COMMAND_ARGS, int* value) {
     return g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList, value);
 }
 
+static bool ExtractTwoIntegerArgs(COMMAND_ARGS, int* first, int* second) {
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx) {
+        return false;
+    }
+    return g_scriptInterface->ExtractArgsEx(
+        paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList, first, second);
+}
+
 static std::string TrimBridgeValue(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char c) {
         return !std::isspace(c);
@@ -733,6 +701,22 @@ static std::string NormalizeBridgeValue(std::string value) {
 }
 
 static std::string EscapeBridgeJson(const std::string& input);
+
+// Mirror LLM slot picks locally so DIALECTIC Control can advertise the effective model.
+static void CaptureSetConfSideEffects(const std::string& payload) {
+    const size_t atPos = payload.find('@');
+    if (atPos == std::string::npos) {
+        return;
+    }
+    if (TrimBridgeValue(payload.substr(0, atPos)) != "dialectic_profile_model") {
+        return;
+    }
+    try {
+        GameLoop::NoteProfileModelSelection(std::stoi(TrimBridgeValue(payload.substr(atPos + 1))));
+    } catch (...) {
+        Logger::LogWarning("DialecticSendSetConf: unreadable LLM model slot in payload");
+    }
+}
 
 static std::string NormalizeSetConfPayload(std::string payload) {
     payload = NormalizeBridgeValue(std::move(payload));
@@ -842,9 +826,6 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
               PASS_COMMAND_ARGS,
               &speakerRef,
               &topicOrInfo)) {
-        WriteTextFile(
-            "Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp",
-            "source=topic_prompt_command\nstate=extract_args_failed\n");
         Logger::LogWarning("Dialectic dialogue prompt command failed to extract arguments");
         return true;
     }
@@ -853,18 +834,7 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
     const void* targetRef = speakerRef ? speakerRef : thisObj;
     XNVSEAdapter::CaptureNativeDialoguePrompt(targetRef, topicOrInfo, capture);
 
-    std::ostringstream debug;
-    debug << "source=topic_prompt_command\n";
-    debug << "topic_refid=" << FormatHex(capture.topicFormId) << "\n";
-    debug << "parent_topic_refid=" << FormatHex(capture.parentTopicFormId) << "\n";
-    debug << "form_type=0x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-          << static_cast<int>(capture.formType) << "\n";
-    debug << "prompt_source=" << capture.source << "\n";
-    debug << "prompt=" << capture.prompt << "\n";
-
     if (capture.prompt.empty()) {
-        debug << "state=empty_prompt\n";
-        WriteTextFile("Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp", debug.str());
         Logger::LogInfo("Dialogue prompt capture found no prompt for topic/info 0x%08X type=0x%02X",
             capture.topicFormId, capture.formType);
         return true;
@@ -889,12 +859,6 @@ static bool Cmd_DialecticCaptureDialoguePrompt_Execute(COMMAND_ARGS) {
         capture.topicFormId,
         capture.source,
         capture.parentTopicFormId);
-
-    debug << "state=" << (emitted ? "emit_prompt" : "write_failed") << "\n";
-    debug << "speaker=Player\n";
-    debug << "target=" << targetName << "\n";
-    debug << "target_refid=" << FormatHex(targetFormId) << "\n";
-    WriteTextFile("Data\\NVSE\\Plugins\\dialectic_dialogue_prompt_debug.tmp", debug.str());
 
     if (emitted) {
         Logger::LogInfo("Captured dialogue menu player prompt via topic info 0x%08X: %s",
@@ -1004,11 +968,8 @@ static bool Cmd_DialecticSetConfigFloat_Execute(COMMAND_ARGS) {
 }
 
 static bool Cmd_DialecticReloadConfig_Execute(COMMAND_ARGS) {
-    Config::Load();
-    if (g_subsystemsInitialized) {
-        InputManager::LoadConfig();
-    }
-    Logger::LogInfo("Dialectic config reloaded from NVSE command");
+    GameLoop::MarkRuntimeConfigDirty();
+    Logger::LogInfo("Dialectic runtime config reload queued from NVSE command");
     *result = 1;
     return true;
 }
@@ -1046,21 +1007,43 @@ bool Dialectic_RequestVoiceSampleBatch(const char* source) {
 
     if (TaskManager::Enqueue("voice_sample_batch", "all_voice_samples", 0, false,
         std::chrono::minutes(15), [](const TaskManager::CancellationToken& token) {
-        VoiceSampleBatchUploadFNV::BatchUploadSummary summary;
-        const auto uploadResult = VoiceSampleBatchUploadFNV::SendAllVoiceSamples(summary,
-            [&token]() { return token.IsCancellationRequested(); });
-        Logger::LogInfo(
-            "DialecticSendAllVoiceSamples result=%d mappings=%d uploaded=%d missing=%d failed=%d timedOut=%d",
-            static_cast<int>(uploadResult),
-            summary.totalMappings,
-            summary.uploaded,
-            summary.missing,
-            summary.failed,
-            summary.timedOut ? 1 : 0);
+        Logger::LogInfo("DialecticSendAllVoiceSamples worker started");
+        try {
+            VoiceSampleBatchUploadFNV::BatchUploadSummary summary;
+            const auto uploadResult = VoiceSampleBatchUploadFNV::SendAllVoiceSamples(summary,
+                [&token]() { return token.IsCancellationRequested(); },
+                [](int completed, int total) {
+                    DialecticInitialization::ReportVoiceProgress(
+                        static_cast<std::size_t>(completed), static_cast<std::size_t>(total));
+                });
+            Logger::LogInfo(
+                "DialecticSendAllVoiceSamples result=%d mappings=%d csv=%d archive=%d uploaded=%d missing=%d failed=%d timedOut=%d cancelled=%d",
+                static_cast<int>(uploadResult),
+                summary.totalMappings,
+                summary.csvMappings,
+                summary.archiveMappings,
+                summary.uploaded,
+                summary.missing,
+                summary.failed,
+                summary.timedOut ? 1 : 0,
+                summary.cancelled ? 1 : 0);
+            if (uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success || summary.uploaded > 0) {
+                AgentManager::RefreshRegisteredAgentVoices();
+            }
+            const bool success = uploadResult == VoiceSampleBatchUploadFNV::BatchUploadResult::Success &&
+                summary.failed == 0 && !summary.timedOut && !summary.cancelled;
+            DialecticInitialization::ReportVoiceFinished(success);
+        } catch (...) {
+            g_voiceSampleBatchRunning = false;
+            DialecticInitialization::ReportVoiceFinished(false);
+            Logger::LogError("DialecticSendAllVoiceSamples worker failed with an exception");
+            throw;
+        }
         g_voiceSampleBatchRunning = false;
     }) == 0) {
         g_voiceSampleBatchRunning = false;
         Logger::LogWarning("DialecticSendAllVoiceSamples could not queue background task");
+        DialecticInitialization::ReportVoiceFinished(false);
         return false;
     }
 
@@ -1075,6 +1058,75 @@ static bool Cmd_DialecticSendAllVoiceSamples_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticInitialize_Execute(COMMAND_ARGS) {
+    if (!DialecticInitialization::TryBegin()) {
+        Logger::LogInfo("DIALECTIC initialization request ignored; initialization is already active");
+        *result = 1;
+        return true;
+    }
+
+    WorldDataSyncFNV::RequestSync();
+    Dialectic_RequestVoiceSampleBatch("DIALECTIC initialization");
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticGetRecordingDeviceCount_Execute(COMMAND_ARGS) {
+    // Deprecated ABI slot. Device selection was removed; Dialectic follows the
+    // Windows default recording endpoint like CHIM.
+    *result = 0;
+    return true;
+}
+
+static bool Cmd_DialecticGetRecordingDeviceName_Execute(COMMAND_ARGS) {
+    int index = -1;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &index) || index < 0) {
+        return true;
+    }
+
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, "");
+}
+
+static bool Cmd_DialecticGetCurrentRecordingDevice_Execute(COMMAND_ARGS) {
+    *result = 0;
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    const std::string current = VoiceRecorder::GetCurrentRecordingDeviceDisplayName();
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, current.c_str());
+}
+
+static bool Cmd_DialecticSetRecordingDevice_Execute(COMMAND_ARGS) {
+    int index = -1;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &index) || index < 0) {
+        return true;
+    }
+    if (!g_stringVarInterface || !g_stringVarInterface->Assign) {
+        return true;
+    }
+    const std::string current = VoiceRecorder::GetCurrentRecordingDeviceDisplayName();
+    return g_stringVarInterface->Assign(PASS_COMMAND_ARGS, current.c_str());
+}
+
+static bool Cmd_DialecticUpdateFalloutStat_Execute(COMMAND_ARGS) {
+    int statCode = -1;
+    int value = 0;
+    *result = 0;
+    if (!ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &statCode, &value)) {
+        return true;
+    }
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    *result = FalloutStatsManagerFNV::UpdateStat(statCode, value) ? 1 : 0;
+    return true;
+}
+
 static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
     char payloadBuffer[1024] = {};
     *result = 0;
@@ -1083,11 +1135,14 @@ static bool Cmd_DialecticSendSetConf_Execute(COMMAND_ARGS) {
         return true;
     }
 
-    std::string payload = NormalizeSetConfPayload(payloadBuffer);
+    const std::string rawPayload = NormalizeBridgeValue(payloadBuffer);
+    std::string payload = NormalizeSetConfPayload(rawPayload);
     if (payload.empty()) {
         Logger::LogWarning("DialecticSendSetConf called with empty payload");
         return true;
     }
+
+    CaptureSetConfSideEffects(rawPayload);
 
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
@@ -1157,17 +1212,42 @@ static bool Cmd_DialecticOpenDynamicProfileMenu_Execute(COMMAND_ARGS) {
     return true;
 }
 
-static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
-    int action = -1;
-    *result = 0;
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
-        Logger::LogWarning("DialecticManageAIAgents failed to extract action");
-        return true;
-    }
+static bool Cmd_DialecticWaitHereTarget_Execute(COMMAND_ARGS) {
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
     }
-    GameLoop::ManageAIAgents(action);
+    GameLoop::RequestControlMenuWaitHere();
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticDeprecatedManageAIAgents_Execute(COMMAND_ARGS) {
+    *result = 0;
+    return true;
+}
+
+static bool Cmd_DialecticDiagnosticBridgeTick_Execute(COMMAND_ARGS) {
+    int bridgeId = 0;
+    *result = 0;
+    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &bridgeId)) {
+        return true;
+    }
+    FNVRuntime::RecordScriptBridgeTick(bridgeId > 0 ? static_cast<std::uint32_t>(bridgeId) : 0);
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticClearActorSnapshotRequest_Execute(COMMAND_ARGS) {
+    AgentManager::ClearActorSnapshotRequest();
+    *result = 1;
+    return true;
+}
+
+static bool Cmd_DialecticMarkPlayerInventoryDirty_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) {
+        InitializeSubsystems();
+    }
+    PlayerInventoryManagerFNV::MarkDirty("script_event", 200);
     *result = 1;
     return true;
 }
@@ -1175,119 +1255,30 @@ static bool Cmd_DialecticManageAIAgents_Execute(COMMAND_ARGS) {
 static bool Cmd_DialecticHandleHaltHotkey_Execute(COMMAND_ARGS) {
     int scanCode = 0;
     *result = 0;
-
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
-        WriteHotkeyDiagnostic("halt", 0, GetRawHotkeyScanCode("StopTalking"), "extract_failed");
-        return true;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, true) ? 1 : 0;
     }
-
-    const int configured = GetRawHotkeyScanCode("StopTalking");
-    Logger::LogInfo("GameLoop: Halt hotkey bridge scan=%d configured=%d", scanCode, configured);
-
-    if (scanCode <= 0) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "invalid_key");
-        return true;
-    }
-
-    if (configured <= 0) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "unbound");
-        Logger::LogInfo("GameLoop: Halt AI Actions ignored because StopTalking is unbound");
-        return true;
-    }
-
-    if (scanCode != configured) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "mismatch");
-        Logger::LogInfo("GameLoop: Halt AI Actions ignored because key %d does not match configured %d",
-                        scanCode,
-                        configured);
-        return true;
-    }
-
-    if (IsDuplicateHotkeyInvocation(scanCode)) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "duplicate");
-        return true;
-    }
-
-    if (scanCode == 1 || scanCode == 15) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "blocked_menu_key");
-        Logger::LogWarning("GameLoop: Ignoring Halt AI Actions because StopTalking is mapped to a game menu scan code (%d)", scanCode);
-        return true;
-    }
-
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-
-    if (GameLoop::IsTextInputMenuActiveOrRecentlyClosed()) {
-        WriteHotkeyDiagnostic("halt", scanCode, configured, "chatbox_active");
-        Logger::LogInfo("GameLoop: Ignoring Halt AI Actions while chatbox is active or just submitted");
-        return true;
-    }
-
-    WriteHotkeyDiagnostic("halt", scanCode, configured, "matched");
-    Logger::LogInfo("GameLoop: Halt AI Actions hotkey pressed via dedicated xNVSE scan code %d", scanCode);
-    GameLoop::HaltAIActionsNow();
-    *result = 1;
     return true;
 }
 
 static bool Cmd_DialecticHandleHotkey_Execute(COMMAND_ARGS) {
     int scanCode = 0;
     *result = 0;
-
-    if (!ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
-        return true;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, true) ? 1 : 0;
     }
+    return true;
+}
 
-    if (scanCode <= 0) {
-        return true;
+static bool Cmd_DialecticHandleHotkeyUp_Execute(COMMAND_ARGS) {
+    int scanCode = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &scanCode)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = InputManager::HandleScanCodeEvent(scanCode, false) ? 1 : 0;
     }
-
-    if (!g_subsystemsInitialized) {
-        InitializeSubsystems();
-    }
-
-    if (RawHotkeyMatches("TalkToNPC", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: Chatbox hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestTextInputMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("ToggleModes", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: ToggleModes hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestModeMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("ToggleLLMModel", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: ToggleLLMModel hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestLLMModelMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    if (RawHotkeyMatches("DynamicProfileMenu", scanCode)) {
-        if (IsDuplicateHotkeyInvocation(scanCode)) {
-            return true;
-        }
-        Logger::LogInfo("GameLoop: DynamicProfileMenu hotkey pressed via xNVSE scan code %d", scanCode);
-        GameLoop::RequestDynamicProfileMenuOpen();
-        *result = 1;
-        return true;
-    }
-
-    WriteHotkeyDiagnostic("generic", scanCode, 0, "unmatched");
     return true;
 }
 
@@ -1350,102 +1341,153 @@ static bool Cmd_DialecticSetConfigFloatById_Execute(COMMAND_ARGS) {
 }
 
 static CommandInfo kCommandInfo_DialecticGetConfigInt = {
-    "DialecticGetConfigInt", "", 0, "Gets a Dialectic integer INI setting.", 0, 3,
+    "DialecticGetConfigInt", "", 0, "Gets a DIALECTIC integer INI setting.", 0, 3,
     kParams_ConfigStringsFallbackInt, Cmd_DialecticGetConfigInt_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigInt = {
-    "DialecticSetConfigInt", "", 0, "Sets a Dialectic integer INI setting.", 0, 3,
+    "DialecticSetConfigInt", "", 0, "Sets a DIALECTIC integer INI setting.", 0, 3,
     kParams_ConfigStringsValueInt, Cmd_DialecticSetConfigInt_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigFloat = {
-    "DialecticGetConfigFloat", "", 0, "Gets a Dialectic float INI setting.", 0, 3,
+    "DialecticGetConfigFloat", "", 0, "Gets a DIALECTIC float INI setting.", 0, 3,
     kParams_ConfigStringsFallbackFloat, Cmd_DialecticGetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigFloat = {
-    "DialecticSetConfigFloat", "", 0, "Sets a Dialectic float INI setting.", 0, 3,
+    "DialecticSetConfigFloat", "", 0, "Sets a DIALECTIC float INI setting.", 0, 3,
     kParams_ConfigStringsValueFloat, Cmd_DialecticSetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticReloadConfig = {
-    "DialecticReloadConfig", "", 0, "Reloads Dialectic INI settings.", 0, 0,
+    "DialecticReloadConfig", "", 0, "Reloads DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticReloadConfig_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSaveConfig = {
-    "DialecticSaveConfig", "", 0, "Saves Dialectic INI settings.", 0, 0,
+    "DialecticSaveConfig", "", 0, "Saves DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticSaveConfig_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSyncWorldData = {
-    "DialecticSyncWorldData", "", 0, "Syncs Fallout factions and locations to DialecticServer.", 0, 0,
+    "DialecticSyncWorldData", "", 0, "Syncs Fallout factions and locations to the DIALECTIC Server.", 0, 0,
     nullptr, Cmd_DialecticSyncWorldData_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSendAllVoiceSamples = {
-    "DialecticSendAllVoiceSamples", "", 0, "Uploads configured Fallout voice samples to DialecticServer.", 0, 0,
+    "DialecticSendAllVoiceSamples", "", 0, "Uploads configured Fallout voice samples to the DIALECTIC Server.", 0, 0,
     nullptr, Cmd_DialecticSendAllVoiceSamples_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticInitialize = {
+    "DialecticInitialize", "", 0, "Initializes DIALECTIC voice samples, factions, and locations.", 0, 0,
+    nullptr, Cmd_DialecticInitialize_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetRecordingDeviceCount = {
+    "DialecticGetRecordingDeviceCount", "", 0, "Deprecated recording-device selector ABI slot.", 0, 0,
+    nullptr, Cmd_DialecticGetRecordingDeviceCount_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetRecordingDeviceName = {
+    "DialecticGetRecordingDeviceName", "", 0, "Deprecated recording-device selector ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticGetRecordingDeviceName_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetCurrentRecordingDevice = {
+    "DialecticGetCurrentRecordingDevice", "", 0, "Returns the active Windows recording device name.", 0, 0,
+    nullptr, Cmd_DialecticGetCurrentRecordingDevice_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSetRecordingDevice = {
+    "DialecticSetRecordingDevice", "", 0, "Deprecated recording-device selector ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticSetRecordingDevice_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticSendSetConf = {
-    "DialecticSendSetConf", "", 0, "Sends a DialecticServer setconf payload.", 0, 1,
+    "DialecticSendSetConf", "", 0, "Sends a DIALECTIC Server setconf payload.", 0, 1,
     kParams_SetConfPayload, Cmd_DialecticSendSetConf_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticUpdateActiveQuest = {
-    "DialecticUpdateActiveQuest", "", 0, "Sends the currently selected Fallout quest to DialecticServer.", 0, 3,
+    "DialecticUpdateActiveQuest", "", 0, "Sends the currently selected Fallout quest to the DIALECTIC Server.", 0, 3,
     kParams_ActiveQuestUpdate, Cmd_DialecticUpdateActiveQuest_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenModeMenu = {
-    "DialecticOpenModeMenu", "", 0, "Requests the Dialectic mode selector menu.", 0, 0,
+    "DialecticOpenModeMenu", "", 0, "Requests the DIALECTIC mode selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenModeMenu_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenLLMModelMenu = {
-    "DialecticOpenLLMModelMenu", "", 0, "Requests the Dialectic LLM model selector menu.", 0, 0,
+    "DialecticOpenLLMModelMenu", "", 0, "Requests the DIALECTIC LLM model selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenLLMModelMenu_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticOpenDynamicProfileMenu = {
-    "DialecticOpenDynamicProfileMenu", "", 0, "Requests the Dialectic dynamic profile selector menu.", 0, 0,
+    "DialecticOpenDynamicProfileMenu", "", 0, "Requests the DIALECTIC dynamic profile selector menu.", 0, 0,
     nullptr, Cmd_DialecticOpenDynamicProfileMenu_Execute, nullptr, nullptr, 0
 };
 
-static CommandInfo kCommandInfo_DialecticManageAIAgents = {
-    "DialecticManageAIAgents", "", 0, "Runs an in-game Dialectic AI Agent management operation.", 0, 1,
-    kParams_Integer, Cmd_DialecticManageAIAgents_Execute, nullptr, nullptr, 0
+static CommandInfo kCommandInfo_DialecticWaitHereTarget = {
+    "DialecticWaitHereTarget", "", 0, "Applies Wait Here to the NPC captured by DIALECTIC Control.", 0, 0,
+    nullptr, Cmd_DialecticWaitHereTarget_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticDeprecatedManageAIAgents = {
+    "DialecticManageAIAgents", "", 0, "Deprecated AI Agent MCM ABI slot.", 0, 1,
+    kParams_Integer, Cmd_DialecticDeprecatedManageAIAgents_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticDiagnosticBridgeTick = {
+    "DialecticDiagnosticBridgeTick", "", 0, "Records a lightweight DIALECTIC script-bridge diagnostic tick.", 0, 1,
+    kParams_Integer, Cmd_DialecticDiagnosticBridgeTick_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticClearActorSnapshotRequest = {
+    "DialecticClearActorSnapshotRequest", "", 0, "Acknowledges and removes DIALECTIC actor snapshot bridge requests.", 0, 0,
+    nullptr, Cmd_DialecticClearActorSnapshotRequest_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticMarkPlayerInventoryDirty = {
+    "DialecticMarkPlayerInventoryDirty", "", 0,
+    "Queues a coalesced native refresh of the player's DIALECTIC inventory.", 0, 0,
+    nullptr, Cmd_DialecticMarkPlayerInventoryDirty_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHotkey = {
-    "DialecticHandleHotkey", "", 0, "Routes a raw xNVSE/Fallout scan-code hotkey through Dialectic.", 0, 1,
+    "DialecticHandleHotkey", "", 0, "Queues a configured DIALECTIC hotkey scan-code press.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHotkey_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticHandleHaltHotkey = {
-    "DialecticHandleHaltHotkey", "", 0, "Routes the configured Halt AI Actions xNVSE hotkey through Dialectic.", 0, 1,
+    "DialecticHandleHaltHotkey", "", 0, "Compatibility alias for a configured hotkey scan-code press.", 0, 1,
     kParams_Integer, Cmd_DialecticHandleHaltHotkey_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticHandleHotkeyUp = {
+    "DialecticHandleHotkeyUp", "", 0, "Releases a configured DIALECTIC hotkey scan code.", 0, 1,
+    kParams_Integer, Cmd_DialecticHandleHotkeyUp_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticGetConfigIntById = {
-    "DialecticGetConfigIntById", "", 0, "Gets a Dialectic integer INI setting by stable MCM id.", 0, 2,
+    "DialecticGetConfigIntById", "", 0, "Gets a DIALECTIC integer INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdFallbackInt, Cmd_DialecticGetConfigIntById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigIntById = {
-    "DialecticSetConfigIntById", "", 0, "Sets a Dialectic integer INI setting by stable MCM id.", 0, 2,
+    "DialecticSetConfigIntById", "", 0, "Sets a DIALECTIC integer INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdValueInt, Cmd_DialecticSetConfigIntById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticGetConfigFloatById = {
-    "DialecticGetConfigFloatById", "", 0, "Gets a Dialectic float INI setting by stable MCM id.", 0, 2,
+    "DialecticGetConfigFloatById", "", 0, "Gets a DIALECTIC float INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdFallbackFloat, Cmd_DialecticGetConfigFloatById_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSetConfigFloatById = {
-    "DialecticSetConfigFloatById", "", 0, "Sets a Dialectic float INI setting by stable MCM id.", 0, 2,
+    "DialecticSetConfigFloatById", "", 0, "Sets a DIALECTIC float INI setting by stable MCM id.", 0, 2,
     kParams_ConfigIdValueFloat, Cmd_DialecticSetConfigFloatById_Execute, nullptr, nullptr, 0
 };
 
@@ -1455,8 +1497,13 @@ static CommandInfo kCommandInfo_DialecticCaptureDialoguePrompt = {
 };
 
 static CommandInfo kCommandInfo_DialecticCaptureDialogue = {
-    "DialecticCaptureDialogue", "", 0, "Submits captured Fallout dialogue directly to the Dialectic runtime.", 0, 9,
+    "DialecticCaptureDialogue", "", 0, "Submits captured Fallout dialogue directly to the DIALECTIC runtime.", 0, 9,
     kParams_CapturedDialogue, Cmd_DialecticCaptureDialogue_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticUpdateFalloutStat = {
+    "DialecticUpdateFalloutStat", "", 0, "Submits one changed Fallout player stat.", 0, 2,
+    kParams_TwoIntegers, Cmd_DialecticUpdateFalloutStat_Execute, nullptr, nullptr, 0
 };
 
 static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
@@ -1464,6 +1511,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
     nvse->SetOpcodeBase(kDialecticOpcodeBase);
 
     CommandInfo* commands[] = {
+        // This list is an append-only ABI. Inserting commands shifts xNVSE opcodes
+        // and makes already-compiled scripts invoke the wrong native function.
         &kCommandInfo_DialecticGetConfigInt,
         &kCommandInfo_DialecticSetConfigInt,
         &kCommandInfo_DialecticGetConfigFloat,
@@ -1483,13 +1532,31 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticOpenModeMenu,
         &kCommandInfo_DialecticOpenLLMModelMenu,
         &kCommandInfo_DialecticOpenDynamicProfileMenu,
-        &kCommandInfo_DialecticManageAIAgents,
+        &kCommandInfo_DialecticDeprecatedManageAIAgents,
+        &kCommandInfo_DialecticDiagnosticBridgeTick,
+        &kCommandInfo_DialecticClearActorSnapshotRequest,
+        &kCommandInfo_DialecticMarkPlayerInventoryDirty,
         &kCommandInfo_DialecticHandleHotkey,
-        &kCommandInfo_DialecticHandleHaltHotkey
+        &kCommandInfo_DialecticHandleHaltHotkey,
+        &kCommandInfo_DialecticGetRecordingDeviceCount,
+        &kCommandInfo_DialecticGetRecordingDeviceName,
+        &kCommandInfo_DialecticGetCurrentRecordingDevice,
+        &kCommandInfo_DialecticSetRecordingDevice,
+        &kCommandInfo_DialecticUpdateFalloutStat,
+        &kCommandInfo_DialecticHandleHotkeyUp,
+        &kCommandInfo_DialecticInitialize,
+        &kCommandInfo_DialecticWaitHereTarget
     };
 
     for (CommandInfo* command : commands) {
-        if (nvse->RegisterCommand(command)) {
+        const bool returnsString =
+            command == &kCommandInfo_DialecticGetRecordingDeviceName ||
+            command == &kCommandInfo_DialecticGetCurrentRecordingDevice ||
+            command == &kCommandInfo_DialecticSetRecordingDevice;
+        const bool registered = returnsString
+            ? nvse->RegisterTypedCommand(command, kRetnType_String)
+            : nvse->RegisterCommand(command);
+        if (registered) {
             Logger::LogInfo("Registered NVSE command: %s", command->longName);
         } else {
             Logger::LogWarning("Failed to register NVSE command: %s", command->longName);
@@ -1508,7 +1575,7 @@ void Log(const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
-    Logger::LogInfo(buffer);
+    Logger::LogInfo("%s", buffer);
 }
 
 // Forward declarations from other modules
@@ -1620,6 +1687,8 @@ void InitializeSubsystems() {
                 Logger::LogWarning("Dialectic CSV import data detection could not be queued");
             }
         }
+
+        ScheduleServerPluginSync();
 
         Logger::LogSection("ALL SUBSYSTEMS INITIALIZED");
     }
@@ -1844,11 +1913,8 @@ __declspec(dllexport) int Dialectic_SetConfigInt(const char* section, const char
 
 __declspec(dllexport) void Dialectic_ReloadConfig() {
     try {
-        Config::Load();
-        if (g_subsystemsInitialized) {
-            InputManager::LoadConfig();
-        }
-        Logger::LogInfo("Dialectic config reloaded");
+        GameLoop::MarkRuntimeConfigDirty();
+        Logger::LogInfo("Dialectic runtime config reload queued");
     } catch (...) {
         Logger::LogWarning("Dialectic_ReloadConfig failed");
     }

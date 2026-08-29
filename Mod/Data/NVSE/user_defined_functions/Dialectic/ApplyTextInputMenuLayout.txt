@@ -1,0 +1,30 @@
+float fOkButtonX
+float fCloseButtonWidth
+float fHeadlineWidth
+
+; Adjusts the live tiles of the JIP text input menu after it has been opened.
+; JIP owns Data\NVSE\plugins\textinput\texteditmenu.xml, so nothing here replaces that
+; layout: the menu is only tuned through runtime trait writes plus one injected prefab.
+begin function {}
+    SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/red" 255
+    SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/green" 255
+    SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/blue" 255
+
+    ; Wrap typed text at the panel width (600 wide, 30px inset on each side) so a long
+    ; message flows onto a second line instead of running off the right edge. The input
+    ; box clips and auto-scrolls, so text longer than the visible rows still stays usable.
+    SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_TextInputBox/TEM_InputText/wrapwidth" 540
+
+    if eval !(IsComponentLoaded "TextEditMenu/NOGLOW_BRANCH/DialecticCloseButton")
+        InjectUIXML "TextEditMenu/NOGLOW_BRANCH" "data\menus\prefabs\Dialectic\TextInputCloseButton.xml"
+    endif
+
+    ; JIP stops the bottom frame line short of TEM_OKButton. Pull it back a little further
+    ; so the injected Close button sits in the same gap instead of on top of the line.
+    let fOkButtonX := GetUIFloat "TextEditMenu/NOGLOW_BRANCH/TEM_OKButton/x"
+    let fCloseButtonWidth := GetUIFloat "TextEditMenu/NOGLOW_BRANCH/DialecticCloseButton/width"
+    let fHeadlineWidth := fOkButtonX - fCloseButtonWidth - 30
+    if eval fOkButtonX > 0 && fCloseButtonWidth > 0 && fHeadlineWidth > 0
+        SetUIFloatAlt "TextEditMenu/NOGLOW_BRANCH/TEM_Headline_Bottom_H1/width" fHeadlineWidth
+    endif
+end

@@ -1,0 +1,15 @@
+int iMenuID
+int iTileID
+string_var sTileName
+
+; Fires when the injected Close button in the chatbox is clicked.
+; Cancels the chatbox: the menu is torn down, no text is submitted and no chat request
+; is produced. Registered once from ln_DialecticBootstrap.txt.
+begin Function {iMenuID, iTileID, sTileName}
+    sv_Destruct sTileName
+
+    ; Defer teardown until after this click event returns. Older supported
+    ; JohnnyGuitar versions are not safe when a click handler unloads its own menu.
+    PrintC "[DIALECTIC] Chatbox close requested."
+    CallAfterFrames 1 (CompileScript "Dialectic/TextInputCloseDeferred.txt") 1
+end

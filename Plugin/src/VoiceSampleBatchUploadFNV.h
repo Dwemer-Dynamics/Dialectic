@@ -14,6 +14,7 @@ namespace VoiceSampleBatchUploadFNV {
         int totalMappings = 0;
         int csvMappings = 0;
         int looseMappings = 0;
+        int archiveMappings = 0;
         int uploaded = 0;
         int missing = 0;
         int failed = 0;
@@ -22,5 +23,6 @@ namespace VoiceSampleBatchUploadFNV {
     };
 
     BatchUploadResult SendAllVoiceSamples(BatchUploadSummary& summary,
-        const std::function<bool()>& cancelRequested = {});
+        const std::function<bool()>& cancelRequested = {},
+        const std::function<void(int, int)>& progress = {});
 }

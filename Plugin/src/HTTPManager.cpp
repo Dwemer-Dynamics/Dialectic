@@ -27,7 +27,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "0.5.0"
+#define DIALECTIC_VERSION "1.0.0"
 #endif
 
 #pragma comment(lib, "ws2_32.lib")
@@ -220,6 +220,8 @@ namespace HTTPManager {
                jsonBody.find("\"type\":\"nearby_actors\"") != std::string::npos ||
                jsonBody.find("\"type\":\"nearby_items\"") != std::string::npos ||
                jsonBody.find("\"type\":\"points_of_interest\"") != std::string::npos ||
+               jsonBody.find("\"type\":\"world_factions\"") != std::string::npos ||
+               jsonBody.find("\"type\":\"world_locations\"") != std::string::npos ||
                jsonBody.find("\"type\":\"activity_status_bulk\"") != std::string::npos;
     }
 
@@ -490,18 +492,103 @@ namespace HTTPManager {
         }
     }
 
-    std::string EscapeJson(const std::string& input) {
-        std::string out;
-        out.reserve(input.size());
+    static std::string NormalizeJsonUtf8(const std::string& input) {
+        if (input.empty()) {
+            return {};
+        }
 
-        for (char c : input) {
+        const int utf8Length = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            input.data(),
+            static_cast<int>(input.size()),
+            nullptr,
+            0);
+        if (utf8Length > 0) {
+            return input;
+        }
+
+        UINT sourceCodePage = CP_ACP;
+        int wideLength = MultiByteToWideChar(
+            sourceCodePage,
+            0,
+            input.data(),
+            static_cast<int>(input.size()),
+            nullptr,
+            0);
+        if (wideLength <= 0) {
+            sourceCodePage = 1252;
+            wideLength = MultiByteToWideChar(
+                sourceCodePage,
+                0,
+                input.data(),
+                static_cast<int>(input.size()),
+                nullptr,
+                0);
+        }
+        if (wideLength <= 0) {
+            return {};
+        }
+
+        std::wstring wide(static_cast<size_t>(wideLength), L'\0');
+        MultiByteToWideChar(
+            sourceCodePage,
+            0,
+            input.data(),
+            static_cast<int>(input.size()),
+            wide.data(),
+            wideLength);
+
+        const int convertedLength = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.data(),
+            wideLength,
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+        if (convertedLength <= 0) {
+            return {};
+        }
+
+        std::string converted(static_cast<size_t>(convertedLength), '\0');
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.data(),
+            wideLength,
+            converted.data(),
+            convertedLength,
+            nullptr,
+            nullptr);
+        return converted;
+    }
+
+    std::string EscapeJson(const std::string& input) {
+        const std::string normalized = NormalizeJsonUtf8(input);
+        std::string out;
+        out.reserve(normalized.size());
+
+        for (unsigned char c : normalized) {
             switch (c) {
                 case '"':  out += "\\\""; break;
                 case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b"; break;
+                case '\f': out += "\\f"; break;
                 case '\n': out += "\\n"; break;
                 case '\t': out += "\\t"; break;
                 case '\r': out += "\\r"; break;
-                default:   out += c; break;
+                default:
+                    if (c < 0x20) {
+                        static constexpr char kHex[] = "0123456789abcdef";
+                        out += "\\u00";
+                        out += kHex[(c >> 4) & 0x0F];
+                        out += kHex[c & 0x0F];
+                    } else {
+                        out += static_cast<char>(c);
+                    }
+                    break;
             }
         }
         return out;
@@ -786,9 +873,13 @@ namespace HTTPManager {
         }
         
         const uint64_t generation = g_responseGeneration.load();
-        const bool queueResponse =
-            (eventType != "captured_dialogue" &&
-             eventType != "setconf");
+        const bool eventOnlyResponse =
+            eventType == "captured_dialogue" ||
+            eventType == "setconf" ||
+            eventType == "goodnight" ||
+            eventType == "waitstart" ||
+            eventType == "waitstop";
+        const bool queueResponse = !eventOnlyResponse;
         if (queueResponse) {
             ResponseQueueFNV::SetActiveGeneration(generation, eventType.c_str());
         }
@@ -828,7 +919,10 @@ namespace HTTPManager {
                 Log("HTTPManager: Received response: %s", 
                     response.length() > 100 ? response.substr(0, 100).c_str() : response.c_str());
                 if (!queueResponse) {
-                    if (eventType == "setconf") {
+                    if (eventType == "setconf" ||
+                        eventType == "goodnight" ||
+                        eventType == "waitstart" ||
+                        eventType == "waitstop") {
                         const uint64_t commandGeneration = g_responseGeneration.load();
                         ResponseRouter::ProcessJsonActionsOnly(
                             response,
@@ -1819,6 +1913,146 @@ namespace HTTPManager {
         }
     }
 
+    std::string UploadPipVisionImage(const std::string& imageData,
+                                     const std::string& metadataJson,
+                                     const std::string& fileName,
+                                     const TaskManager::CancellationToken* token) {
+        if (!g_initialized || imageData.empty() || metadataJson.empty()) {
+            Log("HTTPManager: PipVision upload rejected initialized=%d image_bytes=%zu metadata_bytes=%zu",
+                g_initialized.load() ? 1 : 0, imageData.size(), metadataJson.size());
+            return {};
+        }
+
+        try {
+            std::string serverPath = Config::serverPath;
+            const size_t queryPos = serverPath.find('?');
+            if (queryPos != std::string::npos) serverPath.resize(queryPos);
+            const size_t slashPos = serverPath.find_last_of("/\\");
+            serverPath = slashPos == std::string::npos
+                ? "itt.php"
+                : serverPath.substr(0, slashPos + 1) + "itt.php";
+            if (serverPath.empty() || serverPath.front() != '/') serverPath.insert(serverPath.begin(), '/');
+
+            const std::string safeFileName = fileName.empty() ? "pipvision_capture.jpg" : fileName;
+            const std::string boundary = "----DialecticPipVisionBoundary7MA4YWxk";
+            const std::string metadataPart =
+                "--" + boundary + "\r\n"
+                "Content-Disposition: form-data; name=\"metadata\"\r\n"
+                "Content-Type: application/json; charset=utf-8\r\n\r\n" +
+                metadataJson + "\r\n";
+            const std::string fileHeader =
+                "--" + boundary + "\r\n"
+                "Content-Disposition: form-data; name=\"file\"; filename=\"" + safeFileName + "\"\r\n"
+                "Content-Type: image/jpeg\r\n\r\n";
+            const std::string closing = "\r\n--" + boundary + "--\r\n";
+
+            std::vector<char> body;
+            body.reserve(metadataPart.size() + fileHeader.size() + imageData.size() + closing.size());
+            body.insert(body.end(), metadataPart.begin(), metadataPart.end());
+            body.insert(body.end(), fileHeader.begin(), fileHeader.end());
+            body.insert(body.end(), imageData.begin(), imageData.end());
+            body.insert(body.end(), closing.begin(), closing.end());
+            if (body.size() > static_cast<std::size_t>(MAXDWORD)) {
+                Log("HTTPManager: PipVision multipart body is too large");
+                return {};
+            }
+
+            const std::wstring wideServer(Config::serverHost.begin(), Config::serverHost.end());
+            const std::wstring widePath(serverPath.begin(), serverPath.end());
+            const std::string headers = "Content-Type: multipart/form-data; boundary=" + boundary +
+                "\r\nAccept: application/json";
+            const std::wstring wideHeaders(headers.begin(), headers.end());
+
+            HINTERNET session = WinHttpOpen(L"Dialectic PipVision/" DIALECTIC_VERSION,
+                WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                WINHTTP_NO_PROXY_NAME,
+                WINHTTP_NO_PROXY_BYPASS,
+                0);
+            if (!session) return {};
+
+            HINTERNET connection = WinHttpConnect(session, wideServer.c_str(), Config::serverPort, 0);
+            if (!connection) {
+                WinHttpCloseHandle(session);
+                return {};
+            }
+
+            HINTERNET request = WinHttpOpenRequest(connection, L"POST", widePath.c_str(), nullptr,
+                WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+            if (!request) {
+                WinHttpCloseHandle(connection);
+                WinHttpCloseHandle(session);
+                return {};
+            }
+
+            auto interruptibleRequest = std::make_shared<std::atomic<HINTERNET>>(request);
+            if (token) {
+                token->SetInterrupt([interruptibleRequest]() {
+                    HINTERNET handle = interruptibleRequest->exchange(nullptr);
+                    if (handle) WinHttpCloseHandle(handle);
+                });
+            }
+            const auto closeRequest = [&]() {
+                if (token) token->ClearInterrupt();
+                HINTERNET handle = interruptibleRequest->exchange(nullptr);
+                if (handle) WinHttpCloseHandle(handle);
+            };
+            const auto cleanup = [&]() {
+                closeRequest();
+                WinHttpCloseHandle(connection);
+                WinHttpCloseHandle(session);
+            };
+
+            constexpr int kTimeoutMs = 70000;
+            WinHttpSetTimeouts(request, 15000, 15000, kTimeoutMs, kTimeoutMs);
+            if (!WinHttpAddRequestHeaders(request, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD) ||
+                !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                    body.data(), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0) ||
+                !WinHttpReceiveResponse(request, nullptr)) {
+                Log("HTTPManager: PipVision request failed winhttp_error=%lu", GetLastError());
+                cleanup();
+                return {};
+            }
+
+            DWORD statusCode = 0;
+            DWORD statusSize = sizeof(statusCode);
+            WinHttpQueryHeaders(request,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX,
+                &statusCode,
+                &statusSize,
+                WINHTTP_NO_HEADER_INDEX);
+
+            std::string response;
+            constexpr std::size_t kMaximumResponseBytes = 1024U * 1024U;
+            char buffer[4096];
+            while (!token || !token->IsCancellationRequested()) {
+                DWORD available = 0;
+                if (!WinHttpQueryDataAvailable(request, &available) || available == 0) break;
+                const DWORD toRead = static_cast<DWORD>(std::min<std::size_t>(available, sizeof(buffer)));
+                DWORD bytesRead = 0;
+                if (!WinHttpReadData(request, buffer, toRead, &bytesRead) || bytesRead == 0) break;
+                if (response.size() + bytesRead > kMaximumResponseBytes) {
+                    Log("HTTPManager: PipVision response exceeded 1 MB");
+                    response.clear();
+                    break;
+                }
+                response.append(buffer, bytesRead);
+            }
+            cleanup();
+
+            response = Trim(response);
+            Log("HTTPManager: PipVision endpoint returned HTTP %lu response_bytes=%zu",
+                statusCode, response.size());
+            if (statusCode < 200 || statusCode >= 300) {
+                Log("HTTPManager: PipVision error response: %s", response.substr(0, 500).c_str());
+            }
+            return response;
+        } catch (...) {
+            Log("HTTPManager: Exception in UploadPipVisionImage");
+            return {};
+        }
+    }
+
     // Upload audio WAV data to server for STT transcription
     std::string UploadAudioForSTT(const std::string& wavData,
                                   const TaskManager::CancellationToken* token) {
@@ -1973,6 +2207,7 @@ namespace HTTPManager {
 
             DWORD statusCode = 0;
             DWORD statusSize = sizeof(statusCode);
+            bool sttHttpSuccess = true;
             if (WinHttpQueryHeaders(hRequest,
                                     WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                     WINHTTP_HEADER_NAME_BY_INDEX,
@@ -1981,10 +2216,7 @@ namespace HTTPManager {
                                     WINHTTP_NO_HEADER_INDEX)) {
                 if (statusCode < 200 || statusCode >= 300) {
                     Log("HTTPManager: STT endpoint returned HTTP %lu", statusCode);
-                    closeRequest();
-                    WinHttpCloseHandle(hConnect);
-                    WinHttpCloseHandle(hSession);
-                    return "";
+                    sttHttpSuccess = false;
                 }
             } else {
                 Log("HTTPManager: Could not query STT HTTP status code");
@@ -2033,15 +2265,23 @@ namespace HTTPManager {
 
             if (response.starts_with("{")) {
                 const std::string sttText = Trim(ExtractJsonStringValue(response, "text"));
+                const std::string error = Trim(ExtractJsonStringValue(response, "error"));
                 if (sttText.empty() && response.find("\"ok\":false") != std::string::npos) {
-                    const std::string error = Trim(ExtractJsonStringValue(response, "error"));
                     Log("HTTPManager: STT JSON response failed: %s", error.c_str());
+                }
+                if (!sttHttpSuccess) {
+                    Log("HTTPManager: STT request failed HTTP %lu error=%s",
+                        statusCode, error.empty() ? "unspecified" : error.c_str());
+                    return "";
                 }
                 return sttText;
             }
 
             if (!response.empty()) {
                 Log("HTTPManager: STT service returned non-JSON response");
+            }
+            if (!sttHttpSuccess) {
+                Log("HTTPManager: STT request failed HTTP %lu without a JSON error body", statusCode);
             }
             return "";
 

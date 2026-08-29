@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace XNVSEAdapter {
@@ -29,9 +30,16 @@ enum class LifecycleEvent {
 };
 
 enum class NativeToolMenu {
+    DialecticControl,
     Mode,
     LlmModel,
     DynamicProfile
+};
+
+// Live runtime values advertised directly on tool menu buttons.
+struct NativeToolMenuStatus {
+    std::string chatMode;
+    std::string llmMode;
 };
 
 struct Message {
@@ -39,6 +47,7 @@ struct Message {
     const void* data{nullptr};
     std::uint32_t dataLength{0};
     std::uint32_t formId{0};
+    bool flag{false};
     std::string text;
 };
 
@@ -70,6 +79,15 @@ struct NativeGameState {
     float playerYaw{0.0f};
 };
 
+struct NativePlayerSurvivalState {
+    bool valid{false};
+    bool hardcoreEnabled{false};
+    float hunger{0.0f};
+    float dehydration{0.0f};
+    float sleepDeprivation{0.0f};
+    float radiation{0.0f};
+};
+
 struct NativeEquipmentItem {
     std::string name;
     std::uint32_t baseFormId{0};
@@ -77,9 +95,17 @@ struct NativeEquipmentItem {
     float condition{-1.0f};
 };
 
+struct NativeActorInspection {
+    std::string name;
+    std::string raceName;
+    std::uint32_t formId{0};
+    std::vector<NativeEquipmentItem> equipment;
+};
+
 struct NativeActorState {
     std::string name;
     std::string raceName;
+    std::string voiceName;
     std::uint32_t formId{0};
     std::uint32_t baseFormId{0};
     std::uint32_t cellFormId{0};
@@ -120,6 +146,7 @@ struct NativeActorState {
     float y{0.0f};
     float z{0.0f};
     float yaw{0.0f};
+    std::vector<std::pair<std::uint32_t, int>> factions;
     std::vector<NativeEquipmentItem> equipment;
 };
 
@@ -128,6 +155,7 @@ struct NativeInventoryItem {
     std::uint32_t baseFormId{0};
     std::uint8_t type{0};
     int count{0};
+    int value{0};
     bool equipped{false};
     float condition{-1.0f};
 };
@@ -261,15 +289,22 @@ struct NativePresentationDiagnostics {
 };
 
 using MessageCallback = std::function<void(const Message&)>;
+using PlayerInventoryChangeCallback = std::function<void(const char*)>;
 
 bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCallback callback);
 void Shutdown();
 bool IsInitialized();
 bool HasMessaging();
+void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);
+bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
-bool CaptureNativeActors(std::vector<NativeActorState>& actors);
+// Read the active world camera's normalized forward vector for listener-relative audio.
+bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ);
+bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
+bool CaptureNativeActorInspection(std::uint32_t actorFormId, NativeActorInspection& inspection);
+bool CaptureNativeActors(std::vector<NativeActorState>& actors, bool refreshEquipment = false);
 bool CaptureNativeReferences(std::vector<NativeReferenceState>& references);
 bool CaptureNativeNavScene(NativeNavSceneState& scene);
 bool CaptureNativeQuest(NativeQuestState& quest);
@@ -293,16 +328,25 @@ void InvalidateNativePresentation();
 void InvalidateNativeObjectCache();
 bool ApplyNativeFacing(std::uint32_t speakerFormId, std::uint32_t targetFormId, float yawDegrees);
 bool ClearNativeFacing(std::uint32_t speakerFormId);
-bool OpenNativeToolMenu(NativeToolMenu menu);
+bool OpenNativeToolMenu(NativeToolMenu menu,
+                        const char* titleOverride = nullptr,
+                        const NativeToolMenuStatus* status = nullptr);
+bool ToggleNativePipVisionMenus();
+bool CaptureNativePipVisionScreenshot();
 bool ApplyNativeMfg(std::uint32_t actorFormId, int phoneme, int intensity, bool reset);
 bool ApplyNativeFaceGenLipSync(std::uint32_t actorFormId,
                                int phoneme,
                                int intensity,
                                int decayIntensity,
                                bool reset);
+bool ResetNativeLipSync(std::uint32_t actorFormId);
 bool HaltNativeActor(std::uint32_t actorFormId);
 bool ExecuteSimpleNativeAction(std::uint32_t actorFormId, int actionCode);
 bool ExecuteNativePackageAction(std::uint32_t actorFormId, std::uint32_t targetFormId, int actionCode);
+bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
+                                   int actionCode,
+                                   bool& handled,
+                                   bool& usedCcc);
 bool CaptureNativeCombatActorState(std::uint32_t actorFormId, NativeCombatActorState& state);
 bool ExecuteNativeAttack(std::uint32_t speakerFormId, std::uint32_t targetFormId);
 bool RestoreNativeCombatActorState(const NativeCombatActorState& state);
@@ -311,6 +355,15 @@ bool ExecuteNativeInventoryAction(std::uint32_t speakerFormId,
                                   std::uint32_t itemBaseFormId,
                                   int amount,
                                   int actionCode);
+bool AddNativeItemToActor(std::uint32_t targetFormId,
+                          std::uint32_t itemBaseFormId,
+                          int amount,
+                          std::string& failureReason);
+bool TeleportNativeActor(std::uint32_t targetFormId,
+                         std::uint32_t destinationFormId,
+                         std::string& failureReason);
+bool KillNativeActor(std::uint32_t targetFormId,
+                     std::string& failureReason);
 bool TransferNativeWorldReferenceToActor(std::uint32_t actorFormId,
                                          std::uint32_t itemReferenceFormId);
 bool OpenNativeTeammateContainer(std::uint32_t actorFormId);
