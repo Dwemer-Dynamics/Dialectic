@@ -21,6 +21,7 @@ add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Logger.cpp
     src/ActionManager.cpp
+    src/ExternalEventAPI.cpp
     src/HTTPManager.cpp
     src/ResponseRouter.cpp
     src/ResponseQueueFNV.cpp

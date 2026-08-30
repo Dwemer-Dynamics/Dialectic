@@ -546,6 +546,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
         }
         std::string listenerHint = Trim(ExtractJsonStringValue(lineObject, "listener"));
         std::string rechatTargetHint = Trim(ExtractJsonStringValue(lineObject, "rechat_target"));
+        const uint32_t speakerFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "speaker_formid"));
         const uint32_t listenerFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "listener_formid"));
         const uint32_t rechatTargetFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "rechat_target_formid"));
         message = StripDialogueMetadata(message);
@@ -603,7 +604,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
                 listenerFormId,
                 rechatTargetFormId,
                 responseRechatDepth,
-                ResolveResponseSpeakerFormId(speaker)
+                speakerFormId != 0 ? speakerFormId : ResolveResponseSpeakerFormId(speaker)
             });
 
             if (!isPlayerTextOnly) {

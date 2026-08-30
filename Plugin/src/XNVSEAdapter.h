@@ -291,8 +291,25 @@ struct NativePresentationDiagnostics {
 using MessageCallback = std::function<void(const Message&)>;
 using PlayerInventoryChangeCallback = std::function<void(const char*)>;
 
+enum class PublicDialecticEvent {
+    SpeakExact,
+    Comment,
+    React,
+    Ask,
+    OpenPrompt,
+    Recruit,
+    Dismiss,
+    Wait,
+    Resume
+};
+
+using PublicDialecticEventCallback =
+    std::function<void(PublicDialecticEvent event, std::uint32_t actorFormId, std::string text)>;
+
 bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCallback callback);
 void Shutdown();
+bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
+void UnregisterPublicDialecticEvents();
 bool IsInitialized();
 bool HasMessaging();
 void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);

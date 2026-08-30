@@ -82,3 +82,7 @@ when an NPC is encountered.
 JIP LN runs `Mod/Data/NVSE/Plugins/scripts/ln_DialecticBootstrap.txt` once for
 each new game or loaded save. That script is the single owner of runtime bridge
 registration. Hotkeys are unbound by default and configured through MCM.
+
+Other xNVSE mods can use Dialectic's actor-bound public events for exact TTS,
+contextual speech, reactions, questions, prompt opening, and deterministic
+follower control. See [Public xNVSE Event API](docs/XNVSE_EVENT_API.md).

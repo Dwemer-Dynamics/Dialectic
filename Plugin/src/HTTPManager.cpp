@@ -1380,6 +1380,54 @@ namespace HTTPManager {
         return taskId != 0;
     }
 
+    bool QueueNpcTtsPlay(uint32_t actorFormId,
+                         const std::string& actorName,
+                         const std::string& message) {
+        if (actorFormId == 0 || actorFormId == 0x00000014 || actorName.empty() ||
+            message.empty() || message.size() > 1000) {
+            Log("HTTPManager: rejected invalid external NPC TTS request actor=0x%08X chars=%zu",
+                actorFormId, message.size());
+            return false;
+        }
+
+        std::ostringstream actorId;
+        actorId << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+                << actorFormId << std::dec;
+        std::ostringstream payload;
+        payload << "{"
+                << "\"schema\":\"dialectic.npc_tts.v1\","
+                << "\"request\":\"tts\","
+                << "\"npc\":\"" << EscapeJson(actorName) << "\","
+                << "\"npc_id\":\"" << actorId.str() << "\","
+                << "\"player\":\"" << EscapeJson(CurrentPlayerName()) << "\","
+                << "\"text\":\"" << EscapeJson(message) << "\","
+                << "\"game\":\"fnv\""
+                << "}";
+
+        const std::string jsonBody = FormatEventJson("external_npc_tts", payload.str());
+        const uint64_t generation = g_responseGeneration.load();
+        ResponseQueueFNV::SetActiveGeneration(generation, "external_npc_tts");
+        const uint64_t taskId = EnqueueHttpTask("ExternalNpcTTS",
+            [jsonBody, actorFormId, generation]() {
+                if (generation != g_responseGeneration.load()) {
+                    Log("HTTPManager: skipping stale external NPC TTS actor=0x%08X", actorFormId);
+                    return;
+                }
+                const std::string response = SendJsonRequest("processor/npc_tts_play.php", jsonBody, false);
+                if (generation != g_responseGeneration.load()) {
+                    Log("HTTPManager: dropping stale external NPC TTS response actor=0x%08X", actorFormId);
+                    return;
+                }
+                if (!ProcessJsonResponsePayload(response, "HTTPManager:external-npc-tts", generation) &&
+                    !ProcessFinalJsonResponseIfCurrent(response, generation, "HTTPManager:external-npc-tts-final")) {
+                    Log("HTTPManager: external NPC TTS produced no playable line actor=0x%08X", actorFormId);
+                }
+            }, "external_npc_tts", true);
+        Log("HTTPManager: queued external NPC TTS actor=0x%08X task=%llu",
+            actorFormId, static_cast<unsigned long long>(taskId));
+        return taskId != 0;
+    }
+
     // Functions required by GameLoop
     void SendMessage(const std::string& endpoint, const std::string& data) {
         std::string eventType = "request";

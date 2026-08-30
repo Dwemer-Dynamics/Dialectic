@@ -36,6 +36,7 @@ bool IsCombatDialogueAllowed(uint32_t actorFormId = 0);
 
 // Start AI conversation with targeted NPC
 bool StartConversation();
+bool StartConversationForActor(uint32_t actorFormId, const std::string& actorName, bool notify = false);
 
 // Stop current AI conversation
 void StopConversation();
@@ -63,6 +64,11 @@ bool IsVoiceInputActive();
 // Script command entry points for xNVSE keydown handlers.
 void HaltAIActionsNow();
 void RequestTextInputMenuOpen();
+bool RequestTextInputMenuOpenForActor(uint32_t actorFormId, const std::string& actorName);
+bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text);
+bool RequestExternalComment(uint32_t actorFormId);
+bool RequestExternalReaction(uint32_t actorFormId, const std::string& instruction);
+bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question);
 bool IsTextInputMenuActiveOrRecentlyClosed();
 void MarkRuntimeConfigDirty();
 void RequestDialecticControlMenuOpen();
