@@ -5,10 +5,21 @@
 
 namespace ActionManager {
 
+enum class ExternalFollowerAction {
+    Recruit,
+    Dismiss,
+    Wait,
+    Resume
+};
+
 bool IsActionCommand(const std::string& actionName);
 bool RequestWaitHere(uint32_t actorFormId,
                      const std::string& actorName,
                      const char* source = "ActionManager");
+bool RequestExternalFollowerAction(ExternalFollowerAction action,
+                                   uint32_t actorFormId,
+                                   const std::string& actorName,
+                                   const char* source = "xNVSEEvent");
 bool HandleRoleCommandJson(const std::string& lineObject,
                            const char* source = "ActionManager",
                            uint64_t runtimeGeneration = 0);

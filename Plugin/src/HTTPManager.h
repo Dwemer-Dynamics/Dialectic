@@ -79,6 +79,11 @@ namespace HTTPManager {
 
     // Queue standalone Player TTS without blocking the main inputtext request.
     bool QueuePlayerTtsPlay(const std::string& message);
+
+    // Queue exact actor-bound NPC TTS through the dedicated public API endpoint.
+    bool QueueNpcTtsPlay(uint32_t actorFormId,
+                         const std::string& actorName,
+                         const std::string& message);
     
     // Utility functions
     std::string EscapeJson(const std::string& input);

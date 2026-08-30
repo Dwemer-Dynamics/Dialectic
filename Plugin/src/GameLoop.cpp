@@ -4451,33 +4451,36 @@ void HaltAIActionsNow() {
     Logger::LogInfo("GameLoop: Halt AI Actions completed for %d actor(s)", haltedActors);
 }
 
-bool StartConversation() {
-    const auto& target = TargetManager::GetCurrentTarget();
-    
-    if (!target.isActor || !target.isAlive) {
-        Log("GameLoop: Cannot start conversation - invalid target");
-        Console::Print("[DIALECTIC] Target is not a valid NPC");
+static bool BeginConversationWithActor(uint32_t actorFormId,
+                                       const std::string& actorName,
+                                       bool notify) {
+    if (actorFormId == 0 || actorFormId == 0x00000014 || actorName.empty()) {
+        Logger::LogWarning("GameLoop: Cannot start exact conversation - invalid actor");
+        if (notify) {
+            Console::Print("[DIALECTIC] Target is not a valid NPC");
+        }
         return false;
     }
 
-    if (!EnforceCombatDialogueGate(target.formId, "conversation_start", true)) {
+    if (!EnforceCombatDialogueGate(actorFormId, "conversation_start", notify)) {
         return false;
     }
 
-    if (!IsConversationTargetEligible(target.formId, target.name, true)) {
+    if (!IsConversationTargetEligible(actorFormId, actorName, notify)) {
         return false;
     }
 
-    if (!IsConversationTargetWithinModeRadius(target.formId, target.name, true)) {
+    if (!IsConversationTargetWithinModeRadius(actorFormId, actorName, notify)) {
         return false;
     }
 
-    if (IsConversationTargetOnCooldown(target.formId, target.name, true)) {
+    if (IsConversationTargetOnCooldown(actorFormId, actorName, notify)) {
         return false;
     }
-    
-    g_conversationPartner = target.name;
-    g_conversationPartnerFormId = target.formId;
+
+    TargetManager::SetCurrentTarget(actorFormId, actorName, true);
+    g_conversationPartner = actorName;
+    g_conversationPartnerFormId = actorFormId;
     g_conversationActive = true;
     g_conversationIsNarrator = false;
     RefreshPlayerNameFromGame();
@@ -4504,6 +4507,212 @@ bool StartConversation() {
     
     HTTPManager::SendEvent("conversation_start", payload.str());
     ResetBoredEventTimer("conversation start");
+    return true;
+}
+
+bool StartConversationForActor(uint32_t actorFormId, const std::string& actorName, bool notify) {
+    RuntimeSnapshot::GameState gameState;
+    RuntimeSnapshot::ActorState actor;
+    if (!RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
+        Logger::LogWarning("GameLoop: Exact conversation target is not in the current scene actor=0x%08X",
+            actorFormId);
+        if (notify) {
+            Console::Print("[DIALECTIC] Target is not a valid NPC");
+        }
+        return false;
+    }
+
+    const std::string resolvedName = actor.name.empty() ? actorName : actor.name;
+    return BeginConversationWithActor(actorFormId, resolvedName, notify);
+}
+
+bool StartConversation() {
+    const auto& target = TargetManager::GetCurrentTarget();
+    if (!target.isActor || !target.isAlive) {
+        Log("GameLoop: Cannot start conversation - invalid target");
+        Console::Print("[DIALECTIC] Target is not a valid NPC");
+        return false;
+    }
+    return BeginConversationWithActor(target.formId, target.name, true);
+}
+
+static bool ResolveExternalEventActor(uint32_t actorFormId,
+                                      RuntimeSnapshot::ActorState& actor,
+                                      RuntimeSnapshot::GameState& gameState) {
+    if (actorFormId == 0 || actorFormId == 0x00000014 ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !gameState.inGame || gameState.loadingMenuOpen ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState) ||
+        actor.name.empty() || NPCDetector::IsExcluded(actorFormId, actor.name) ||
+        !IsConversationTargetEligible(actorFormId, actor.name, false, true, actor.creature)) {
+        Logger::LogWarning("[xNVSE event API] actor rejected by exact scene/eligibility gate actor=0x%08X",
+            actorFormId);
+        return false;
+    }
+    return true;
+}
+
+static bool ExternalGeneratedSpeechAllowed(uint32_t actorFormId,
+                                           const RuntimeSnapshot::GameState& gameState) {
+    if (gameState.paused || gameState.inMenu || gameState.dialogueMenuOpen ||
+        IsTextInputMenuActiveOrRecentlyClosed()) {
+        Logger::LogInfo("[xNVSE event API] generated speech rejected because a menu/dialogue is active actor=0x%08X",
+            actorFormId);
+        return false;
+    }
+    if (!EnforceCombatDialogueGate(actorFormId, "external_event", false)) {
+        return false;
+    }
+    std::string activityReason;
+    if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(actorFormId, &activityReason)) {
+        Logger::LogInfo("[xNVSE event API] generated speech rejected by activity gate actor=0x%08X reason=%s",
+            actorFormId, activityReason.c_str());
+        return false;
+    }
+
+    const SpeakManager::QueueStatus speech = SpeakManager::GetQueueStatus();
+    const HTTPManager::QueueStatus http = HTTPManager::GetQueueStatus();
+    if (speech.isProcessing || speech.isPlaying || speech.currentPlaybackLineActive ||
+        speech.dialogueLinesQueued > 0 || speech.ttsDownloadsInProgress > 0 ||
+        speech.ttsTasksPending > 0 || speech.ttsTasksActive > 0 ||
+        speech.preparedAudioCount > 0 || http.streamInProgress ||
+        http.pendingHttpTasks > 0 || http.activeHttpTasks > 0 ||
+        http.httpResponsesQueued > 0) {
+        Logger::LogInfo("[xNVSE event API] generated speech rejected because dialogue pipeline is busy actor=0x%08X",
+            actorFormId);
+        return false;
+    }
+    return true;
+}
+
+static std::string BuildExternalSpeechPayload(const RuntimeSnapshot::ActorState& actor,
+                                              const std::string& request,
+                                              const std::string& instruction,
+                                              const std::string& audienceSnapshot) {
+    RefreshPlayerNameFromGame();
+    const std::string playerName = Config::playerName.empty() ? "Player" : Config::playerName;
+    std::ostringstream payload;
+    payload << "{"
+            << "\"schema\":\"dialectic.external_request.v1\","
+            << "\"request\":\"" << HTTPManager::EscapeJson(request) << "\","
+            << "\"npc\":\"" << HTTPManager::EscapeJson(actor.name) << "\","
+            << "\"npc_id\":\"" << FormatFormIdJsonValue(actor.formId) << "\","
+            << "\"speaker_formid\":\"" << FormatFormIdJsonValue(actor.formId) << "\","
+            << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\",";
+    if (!instruction.empty()) {
+        payload << "\"instruction\":\"" << HTTPManager::EscapeJson(instruction) << "\",";
+    }
+    payload << "\"location\":\"" << HTTPManager::EscapeJson(Misc::GetPlayerLocation()) << "\","
+            << "\"audience_snapshot\":" << audienceSnapshot << ","
+            << "\"game\":\"fnv\""
+            << "}";
+    return payload.str();
+}
+
+bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text) {
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    const std::string exactText = TrimInput(text);
+    if (exactText.empty() || exactText.size() > 1000 ||
+        !ResolveExternalEventActor(actorFormId, actor, gameState)) {
+        Logger::LogWarning("[xNVSE event API] SpeakExact rejected actor=0x%08X chars=%zu",
+            actorFormId, exactText.size());
+        return false;
+    }
+    return HTTPManager::QueueNpcTtsPlay(actorFormId, actor.name, exactText);
+}
+
+bool RequestExternalComment(uint32_t actorFormId) {
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    if (!ResolveExternalEventActor(actorFormId, actor, gameState) ||
+        !ExternalGeneratedSpeechAllowed(actorFormId, gameState)) {
+        return false;
+    }
+    const std::string audience = BuildAudienceSnapshotJson("external_comment");
+    HTTPManager::SendEvent("external_comment",
+        BuildExternalSpeechPayload(actor, "comment", "", audience), audience);
+    return true;
+}
+
+bool RequestExternalReaction(uint32_t actorFormId, const std::string& instruction) {
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    const std::string cleanInstruction = TrimInput(instruction);
+    if (cleanInstruction.empty() || cleanInstruction.size() > 1000 ||
+        !ResolveExternalEventActor(actorFormId, actor, gameState) ||
+        !ExternalGeneratedSpeechAllowed(actorFormId, gameState)) {
+        Logger::LogWarning("[xNVSE event API] React rejected actor=0x%08X chars=%zu",
+            actorFormId, cleanInstruction.size());
+        return false;
+    }
+    const std::string audience = BuildAudienceSnapshotJson("external_reaction");
+    HTTPManager::SendEvent("external_reaction",
+        BuildExternalSpeechPayload(actor, "reaction", cleanInstruction, audience), audience);
+    return true;
+}
+
+bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question) {
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    const std::string cleanQuestion = TrimInput(question);
+    if (cleanQuestion.empty() || cleanQuestion.size() > 1000 ||
+        !ResolveExternalEventActor(actorFormId, actor, gameState)) {
+        Logger::LogWarning("[xNVSE event API] Ask rejected actor=0x%08X chars=%zu",
+            actorFormId, cleanQuestion.size());
+        return false;
+    }
+    if (g_conversationActive &&
+        (g_conversationIsNarrator || g_conversationPartnerFormId != actorFormId)) {
+        Logger::LogInfo("[xNVSE event API] Ask rejected because another actor owns the conversation actor=0x%08X owner=0x%08X",
+            actorFormId, g_conversationPartnerFormId.load());
+        return false;
+    }
+    if (!g_conversationActive && !StartConversationForActor(actorFormId, actor.name, false)) {
+        return false;
+    }
+    SendPlayerMessage(cleanQuestion);
+    return true;
+}
+
+bool RequestTextInputMenuOpenForActor(uint32_t actorFormId, const std::string& actorName) {
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    if (!ResolveExternalEventActor(actorFormId, actor, gameState)) {
+        return false;
+    }
+    if (g_conversationActive &&
+        (g_conversationIsNarrator || g_conversationPartnerFormId != actorFormId)) {
+        Logger::LogInfo("[xNVSE event API] OpenPrompt rejected because another actor owns the conversation actor=0x%08X owner=0x%08X",
+            actorFormId, g_conversationPartnerFormId.load());
+        return false;
+    }
+    if (!EnforceCombatDialogueGate(actorFormId, "external_open_prompt", false) ||
+        IsConversationTargetOnCooldown(actorFormId, actor.name, false)) {
+        return false;
+    }
+
+    const DWORD now = GetTickCount();
+    const DWORD blockUntil = g_textInputMenuBlockUntilTick.load();
+    if (IsTickBefore(now, blockUntil) || g_textInputMenuPending.load()) {
+        Logger::LogInfo("[xNVSE event API] OpenPrompt rejected because text input is pending/debounced");
+        return false;
+    }
+
+    TargetManager::SetCurrentTarget(actorFormId, actor.name.empty() ? actorName : actor.name, true);
+    if (!WriteTextInputTargetHint(actorFormId, actor.name.empty() ? actorName : actor.name)) {
+        return false;
+    }
+    WriteToolBridgeSignal(kOpenTextInputMenuPath, "text_input");
+    g_textInputMenuPending.store(true);
+    g_textInputMenuRequestTick.store(now);
+    Logger::LogInfo("[xNVSE event API] OpenPrompt prepared exact actor=0x%08X name=%s",
+        actorFormId, actor.name.c_str());
     return true;
 }
 

@@ -56,6 +56,7 @@
 #include "FalloutStatsManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
+#include "ExternalEventAPI.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
 #include "DialecticInitialization.h"
@@ -1710,6 +1711,7 @@ __declspec(dllexport) BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, L
             Logger::LogInfo("=== Dialectic DLL Attached ===");
             break;
         case DLL_PROCESS_DETACH:
+            ExternalEventAPI::Shutdown();
             if (g_subsystemsInitialized) {
                 Logger::LogInfo("DLL detaching, shutting down subsystems...");
                 GameLoop::Shutdown();
@@ -1792,6 +1794,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface* nvse) {
     } else {
         Logger::LogWarning("Event Manager Interface not available");
     }
+    ExternalEventAPI::Initialize();
 
     // Query for Array Var interface
     g_arrayInterface = (NVSEArrayVarInterface*)nvse->QueryInterface(kInterface_ArrayVar);

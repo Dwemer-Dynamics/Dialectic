@@ -69,6 +69,7 @@ struct ActionRequest {
     int itemInventoryType = 0;
     uint64_t runtimeGeneration = 0;
     bool narratorAuthority = false;
+    bool emitFuncret = true;
 };
 
 struct NativePackageState {
@@ -882,6 +883,9 @@ std::string ActionTargetLabel(const ActionRequest& request) {
 }
 
 void SendFuncretResult(const ActionRequest& request, const std::string& result) {
+    if (!request.emitFuncret) {
+        return;
+    }
     const std::string target = SanitizeFuncretSegment(ActionTargetLabel(request));
     const std::string speaker = SanitizeFuncretSegment(request.speaker);
     const std::string cleanResult = SanitizeFuncretSegment(result);
@@ -3071,6 +3075,73 @@ bool RequestWaitHere(uint32_t actorFormId,
         Logger::LogWarning("%s: Failed to queue Wait Here actor=0x%08X", sourceName, actorFormId);
     }
     return queued;
+}
+
+bool RequestExternalFollowerAction(ExternalFollowerAction action,
+                                   uint32_t actorFormId,
+                                   const std::string& actorName,
+                                   const char* source) {
+    const char* sourceName = source ? source : "xNVSEEvent";
+    RuntimeSnapshot::GameState gameState;
+    RuntimeSnapshot::ActorState actor;
+    if (actorFormId == 0 || actorFormId == 0x00000014 ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
+        Logger::LogWarning("%s: external follower action rejected by scene gate actor=0x%08X",
+            sourceName, actorFormId);
+        return false;
+    }
+
+    if (action != ExternalFollowerAction::Recruit && !actor.playerTeammate) {
+        Logger::LogWarning("%s: external follower action rejected because actor is not a teammate actor=0x%08X",
+            sourceName, actorFormId);
+        return false;
+    }
+
+    const std::string resolvedName = actor.name.empty() ? actorName : actor.name;
+    if (action == ExternalFollowerAction::Wait) {
+        return RequestWaitHere(actorFormId, resolvedName, sourceName);
+    }
+
+    if (action == ExternalFollowerAction::Resume) {
+        {
+            std::lock_guard<std::mutex> lock(g_nativePackageMutex);
+            const auto tracked = g_nativePackageStates.find(actorFormId);
+            if (tracked == g_nativePackageStates.end() ||
+                tracked->second.request.action != "WaitHere") {
+                Logger::LogWarning("%s: external Resume rejected because actor has no tracked WaitHere state actor=0x%08X",
+                    sourceName, actorFormId);
+                return false;
+            }
+        }
+
+        const std::uint64_t generation = RuntimeGeneration::Current();
+        return GameThreadDispatcher::Enqueue("action", "Resume:" + FormatRefId(actorFormId), generation,
+            [actorFormId, resolvedName, sourceName = std::string(sourceName)]() {
+                if (!XNVSEAdapter::HaltNativeActor(actorFormId)) {
+                    Logger::LogWarning("[NATIVE_ACTION] external Resume failed actor=0x%08X source=%s",
+                        actorFormId, sourceName.c_str());
+                    return;
+                }
+                ClearNativePackageState(actorFormId);
+                Logger::LogInfo("[NATIVE_ACTION] external Resume completed actor=0x%08X name=%s source=%s",
+                    actorFormId, resolvedName.c_str(), sourceName.c_str());
+            });
+    }
+
+    ActionRequest request;
+    request.action = action == ExternalFollowerAction::Recruit ? "Follow" : "StopFollowing";
+    request.speaker = resolvedName;
+    request.speakerFormId = actorFormId;
+    request.runtimeGeneration = RuntimeGeneration::Current();
+    request.emitFuncret = false;
+    if (action == ExternalFollowerAction::Recruit) {
+        request.target = PlayerDisplayNameForAction();
+        request.targetFormId = gameState.playerFormId != 0 ? gameState.playerFormId : 0x00000014;
+    }
+    return ExecuteActionRequest(std::move(request), sourceName);
 }
 
 bool HandleRoleCommandJson(const std::string& lineObject,
