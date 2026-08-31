@@ -76,6 +76,8 @@ struct NativePackageState {
     ActionRequest request;
     std::uint64_t generation{0};
     std::chrono::steady_clock::time_point startedAt{};
+    std::chrono::steady_clock::time_point furnitureActivatedAt{};
+    bool furnitureActivationRequested{false};
 };
 
 struct NativeAttackState {
@@ -3407,7 +3409,14 @@ void UpdateNativePackageStates() {
         std::uint32_t actorFormId{0};
         std::string reason;
     };
+    struct FurnitureActivation {
+        std::uint32_t actorFormId{0};
+        std::uint32_t furnitureFormId{0};
+        float distance{0.0f};
+    };
     std::vector<Cleanup> cleanup;
+    std::vector<FurnitureActivation> furnitureActivations;
+    std::vector<std::uint32_t> completedSeats;
     std::vector<std::uint32_t> deferredCleanup;
     const auto now = std::chrono::steady_clock::now();
     const std::uint64_t generation = RuntimeGeneration::Current();
@@ -3420,7 +3429,7 @@ void UpdateNativePackageStates() {
             }
         }
         for (auto it = g_nativePackageStates.begin(); it != g_nativePackageStates.end();) {
-            const NativePackageState& state = it->second;
+            NativePackageState& state = it->second;
             const std::string& action = state.request.action;
             const bool persistentCompanionState = action == "MakeFollower" || action == "FollowPlayer" ||
                 action == "WaitHere" || action == "Relax";
@@ -3477,6 +3486,41 @@ void UpdateNativePackageStates() {
                 }
             }
 
+            if (!shouldCleanup && action == "TakeASeat") {
+                if (speaker.sitSleepState == 4) {
+                    completedSeats.push_back(it->first);
+                    it = g_nativePackageStates.erase(it);
+                    continue;
+                }
+
+                RuntimeSnapshot::ReferenceState furniture;
+                const bool furnitureReady = state.request.targetFormId != 0 &&
+                    RuntimeSnapshot::TryGetReference(state.request.targetFormId, furniture) &&
+                    furniture.loaded3D && !furniture.deleted && !furniture.taken;
+                if (!furnitureReady) {
+                    shouldCleanup = true;
+                    reason = "furniture_left_scene";
+                } else {
+                    const float dx = speaker.x - furniture.x;
+                    const float dy = speaker.y - furniture.y;
+                    const float dz = speaker.z - furniture.z;
+                    const float distance = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
+                    if (!state.furnitureActivationRequested && distance <= 110.0f) {
+                        state.furnitureActivationRequested = true;
+                        state.furnitureActivatedAt = now;
+                        furnitureActivations.push_back({it->first, state.request.targetFormId, distance});
+                    } else if (state.furnitureActivationRequested &&
+                               now - state.furnitureActivatedAt > std::chrono::seconds(10)) {
+                        shouldCleanup = true;
+                        reason = "seat_activation_timeout";
+                    }
+                }
+                if (!shouldCleanup && now - state.startedAt > std::chrono::minutes(3)) {
+                    shouldCleanup = true;
+                    reason = "timeout";
+                }
+            }
+
             if (shouldCleanup) {
                 cleanup.push_back({it->first, reason});
                 it = g_nativePackageStates.erase(it);
@@ -3496,6 +3540,33 @@ void UpdateNativePackageStates() {
         }
         Logger::LogInfo("[NATIVE_ACTION] deferred package cleanup actor=0x%08X completed",
             actorFormId);
+    }
+
+    for (const FurnitureActivation& item : furnitureActivations) {
+        if (XNVSEAdapter::ActivateNativeFurniture(item.actorFormId, item.furnitureFormId)) {
+            Logger::LogInfo("[NATIVE_ACTION] activated furniture actor=0x%08X target=0x%08X distance=%.1f",
+                item.actorFormId, item.furnitureFormId, item.distance);
+            continue;
+        }
+
+        bool removed = false;
+        {
+            std::lock_guard<std::mutex> lock(g_nativePackageMutex);
+            const auto tracked = g_nativePackageStates.find(item.actorFormId);
+            if (tracked != g_nativePackageStates.end() &&
+                tracked->second.request.action == "TakeASeat" &&
+                tracked->second.request.targetFormId == item.furnitureFormId) {
+                g_nativePackageStates.erase(tracked);
+                removed = true;
+            }
+        }
+        if (removed) {
+            cleanup.push_back({item.actorFormId, "furniture_activation_failed"});
+        }
+    }
+
+    for (const std::uint32_t actorFormId : completedSeats) {
+        Logger::LogInfo("[NATIVE_ACTION] seat completed actor=0x%08X", actorFormId);
     }
 
     for (const Cleanup& item : cleanup) {
