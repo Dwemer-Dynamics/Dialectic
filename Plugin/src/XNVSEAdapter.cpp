@@ -31,6 +31,21 @@ constexpr std::uintptr_t kInterfaceManagerAddress = 0x011D8A80;
 constexpr std::uintptr_t kMenuVisibilityAddress = 0x011F308F;
 constexpr std::uintptr_t kDataHandlerSingletonAddress = 0x011C3F2C;
 constexpr std::uintptr_t kQueueUiMessageAddress = 0x007052F0;
+// FalloutNV 1.4.0.525 Pip-Boy radio and PlayingMusic layout.
+constexpr std::uintptr_t kPlayingMusicAddress = 0x011DD0F0;
+constexpr std::uintptr_t kPipboyRadioAddress = 0x011DD42C;
+constexpr std::size_t kTrack2PathOffset = 0x108;
+constexpr std::size_t kTrack1FlagsOffset = 0x220;
+constexpr std::size_t kTrack2FlagsOffset = 0x221;
+constexpr std::size_t kPipboyRadioPlayingOffset = 0x223;
+constexpr std::size_t kTrack1ActiveOffset = 0x27C;
+constexpr std::uint8_t kMusicStatePause = 1u << 2;
+constexpr std::uint8_t kMusicStateStop = 1u << 3;
+constexpr std::uint8_t kMusicStatePlay = 1u << 4;
+
+struct NativeRadioEntry {
+    TESObjectREFR* radioRef{nullptr};
+};
 
 struct GuardedActorBase {
     TESActorBase* actorBase{nullptr};
@@ -1340,6 +1355,43 @@ bool CaptureNativeGameState(NativeGameState& state) {
         state.paused = state.pauseMenuOpen || state.pipboyOpen || state.barterMenuOpen ||
             state.containerMenuOpen || state.loadingMenuOpen;
         state.valid = true;
+    return true;
+}
+
+// Capture the active Pip-Boy station and music asset from Fallout's radio globals.
+bool CaptureNativeRadioState(NativeRadioState& state) {
+    state = {};
+    if (!g_initialized.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    const auto* music = reinterpret_cast<const std::uint8_t*>(kPlayingMusicAddress);
+    auto* radioEntry = *reinterpret_cast<NativeRadioEntry**>(kPipboyRadioAddress);
+    state.valid = true;
+    state.active = music[kPipboyRadioPlayingOffset] != 0 &&
+        radioEntry != nullptr && radioEntry->radioRef != nullptr;
+    if (!state.active) {
+        return true;
+    }
+
+    state.stationFormId = radioEntry->radioRef->refID;
+    state.stationName = CopyFormName(radioEntry->radioRef->baseForm);
+    if (state.stationName.empty()) {
+        state.stationName = CopyFormName(radioEntry->radioRef);
+    }
+
+    const bool track1Active = *reinterpret_cast<const std::uint32_t*>(
+        music + kTrack1ActiveOffset) != 0;
+    const std::size_t flagsOffset = track1Active ? kTrack1FlagsOffset : kTrack2FlagsOffset;
+    const std::uint8_t flags = music[flagsOffset];
+    const bool trackPlaying = (flags & kMusicStatePlay) != 0 &&
+        (flags & (kMusicStatePause | kMusicStateStop)) == 0;
+    if (trackPlaying) {
+        const char* trackPath = reinterpret_cast<const char*>(
+            music + (track1Active ? 0 : kTrack2PathOffset));
+        state.trackPath.assign(trackPath, strnlen_s(trackPath, MAX_PATH));
+    }
+
     return true;
 }
 
