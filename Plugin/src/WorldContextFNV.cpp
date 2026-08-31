@@ -26,6 +26,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace WorldContextFNV {
 namespace {
@@ -369,7 +370,12 @@ bool RefreshFromBridge() {
     next.resolved = !IsUnknown(next.location) || next.gamets > 0;
 
     std::lock_guard<std::mutex> lock(g_contextMutex);
-    g_context = next;
+    // The script bridge has no radio fields, so retain native telemetry until its next sample.
+    next.radioActive = g_context.radioActive;
+    next.radioStation = g_context.radioStation;
+    next.radioStationFormId = g_context.radioStationFormId;
+    next.radioSong = g_context.radioSong;
+    g_context = std::move(next);
     if (g_saveLoadPending) {
         g_saveLoadPending = false;
         g_saveLoadCompleted = false;
