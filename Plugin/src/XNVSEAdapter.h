@@ -79,6 +79,14 @@ struct NativeGameState {
     float playerYaw{0.0f};
 };
 
+struct NativeRadioState {
+    std::string stationName;
+    std::string trackPath;
+    bool valid{false};
+    bool active{false};
+    std::uint32_t stationFormId{0};
+};
+
 struct NativePlayerSurvivalState {
     bool valid{false};
     bool hardcoreEnabled{false};
@@ -317,6 +325,7 @@ bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
+bool CaptureNativeRadioState(NativeRadioState& state);
 // Read the active world camera's normalized forward vector for listener-relative audio.
 bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ);
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);
