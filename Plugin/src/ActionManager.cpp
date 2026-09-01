@@ -3408,6 +3408,7 @@ void UpdateNativePackageStates() {
         std::string reason;
     };
     std::vector<Cleanup> cleanup;
+    std::vector<std::uint32_t> completedSeats;
     std::vector<std::uint32_t> deferredCleanup;
     const auto now = std::chrono::steady_clock::now();
     const std::uint64_t generation = RuntimeGeneration::Current();
@@ -3477,6 +3478,27 @@ void UpdateNativePackageStates() {
                 }
             }
 
+            if (!shouldCleanup && action == "TakeASeat") {
+                if (speaker.sitSleepState == 4) {
+                    completedSeats.push_back(it->first);
+                    it = g_nativePackageStates.erase(it);
+                    continue;
+                }
+
+                RuntimeSnapshot::ReferenceState furniture;
+                const bool furnitureReady = state.request.targetFormId != 0 &&
+                    RuntimeSnapshot::TryGetReference(state.request.targetFormId, furniture) &&
+                    furniture.loaded3D && !furniture.deleted && !furniture.taken;
+                if (!furnitureReady) {
+                    shouldCleanup = true;
+                    reason = "furniture_left_scene";
+                }
+                if (!shouldCleanup && now - state.startedAt > std::chrono::minutes(3)) {
+                    shouldCleanup = true;
+                    reason = "timeout";
+                }
+            }
+
             if (shouldCleanup) {
                 cleanup.push_back({it->first, reason});
                 it = g_nativePackageStates.erase(it);
@@ -3496,6 +3518,10 @@ void UpdateNativePackageStates() {
         }
         Logger::LogInfo("[NATIVE_ACTION] deferred package cleanup actor=0x%08X completed",
             actorFormId);
+    }
+
+    for (const std::uint32_t actorFormId : completedSeats) {
+        Logger::LogInfo("[NATIVE_ACTION] seat completed actor=0x%08X", actorFormId);
     }
 
     for (const Cleanup& item : cleanup) {

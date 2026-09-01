@@ -2868,7 +2868,6 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
         AddToFaction DialecticSeatFaction 0
         SetPackageTargetReference DialecticSeatPackage rTarget
         SetPackageLocationReference DialecticSeatPackage rTarget
-        SetPackageTargetDistance DialecticSeatPackage 96
         AddScriptPackage DialecticSeatPackage
     elseif eval iActionCode == 21 && rTarget
         AddToFaction DialecticTravelFaction 0
