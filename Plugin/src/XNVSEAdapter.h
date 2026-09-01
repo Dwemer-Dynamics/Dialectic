@@ -369,7 +369,6 @@ bool ResetNativeLipSync(std::uint32_t actorFormId);
 bool HaltNativeActor(std::uint32_t actorFormId);
 bool ExecuteSimpleNativeAction(std::uint32_t actorFormId, int actionCode);
 bool ExecuteNativePackageAction(std::uint32_t actorFormId, std::uint32_t targetFormId, int actionCode);
-bool ActivateNativeFurniture(std::uint32_t actorFormId, std::uint32_t furnitureFormId);
 bool ExecuteNativeCompanionCommand(std::uint32_t actorFormId,
                                    int actionCode,
                                    bool& handled,

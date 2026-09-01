@@ -74,7 +74,6 @@ Script* g_mfgResetFunction = nullptr;
 Script* g_haltActorFunction = nullptr;
 Script* g_simpleActionFunction = nullptr;
 Script* g_packageActionFunction = nullptr;
-Script* g_activateFurnitureFunction = nullptr;
 Script* g_cccManagedQueryFunction = nullptr;
 Script* g_cccCompanionCommandFunction = nullptr;
 Script* g_attackActionFunction = nullptr;
@@ -1247,7 +1246,6 @@ void Shutdown() {
     g_haltActorFunction = nullptr;
     g_simpleActionFunction = nullptr;
     g_packageActionFunction = nullptr;
-    g_activateFurnitureFunction = nullptr;
     g_cccManagedQueryFunction = nullptr;
     g_cccCompanionCommandFunction = nullptr;
     g_attackActionFunction = nullptr;
@@ -2870,7 +2868,6 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
         AddToFaction DialecticSeatFaction 0
         SetPackageTargetReference DialecticSeatPackage rTarget
         SetPackageLocationReference DialecticSeatPackage rTarget
-        SetPackageTargetDistance DialecticSeatPackage 96
         AddScriptPackage DialecticSeatPackage
     elseif eval iActionCode == 21 && rTarget
         AddToFaction DialecticTravelFaction 0
@@ -2896,58 +2893,6 @@ end
     const UInt32 targetLocal = targetFormId & 0x00FFFFFF;
     return g_scriptInterface->CallFunctionAlt(g_packageActionFunction, actor, 3,
         static_cast<UInt32>(actionCode), targetMod, targetLocal);
-}
-
-bool ActivateNativeFurniture(std::uint32_t actorFormId, std::uint32_t furnitureFormId) {
-    if (!g_scriptInterface || !g_scriptInterface->CompileScript ||
-        !g_scriptInterface->CallFunctionAlt || actorFormId == 0 || furnitureFormId == 0) {
-        return false;
-    }
-    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
-    TESObjectREFR* actor = FindLoadedReference(player, actorFormId);
-    TESObjectREFR* furniture = FindLoadedReference(player, furnitureFormId);
-    if (!actor || !furniture || !furniture->baseForm ||
-        furniture->baseForm->typeID != kFormType_TESFurniture) {
-        return false;
-    }
-
-    if (!g_activateFurnitureFunction) {
-        static constexpr const char* kActivateFurnitureSource = R"(
-int iActorMod
-int iActorLocal
-int iFurnitureMod
-int iFurnitureLocal
-ref rActor
-ref rFurniture
-begin function {iActorMod, iActorLocal, iFurnitureMod, iFurnitureLocal}
-    let rActor := BuildRef iActorMod iActorLocal
-    let rFurniture := BuildRef iFurnitureMod iFurnitureLocal
-    if eval !(rActor) || !(rFurniture)
-        SetFunctionValue 0
-        return
-    endif
-    rActor.RemoveScriptPackage
-    rActor.RemoveFromFaction DialecticSeatFaction
-    rActor.SetRestrained 0
-    rActor.StopCombat
-    rActor.EvaluatePackage
-    rFurniture.Activate rActor 0
-    SetFunctionValue 1
-end
-)";
-        g_activateFurnitureFunction = g_scriptInterface->CompileScript(kActivateFurnitureSource);
-        if (!g_activateFurnitureFunction) {
-            Logger::LogError("[NATIVE_ACTION] failed to compile furniture activation function");
-            return false;
-        }
-    }
-
-    const UInt32 actorMod = (actorFormId >> 24) & 0xFF;
-    const UInt32 actorLocal = actorFormId & 0x00FFFFFF;
-    const UInt32 furnitureMod = (furnitureFormId >> 24) & 0xFF;
-    const UInt32 furnitureLocal = furnitureFormId & 0x00FFFFFF;
-    return g_scriptInterface->CallFunctionAlt(g_activateFurnitureFunction, actor, 4,
-        actorMod, actorLocal, furnitureMod, furnitureLocal);
 }
 
 bool CaptureNativeCombatActorState(std::uint32_t actorFormId, NativeCombatActorState& state) {
