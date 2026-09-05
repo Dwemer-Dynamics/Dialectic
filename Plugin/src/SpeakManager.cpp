@@ -72,6 +72,7 @@ namespace SpeakManager {
         std::string sceneKey;
         uint64_t runtimeGeneration = 0;
         bool rechatLaunched = false;
+        bool directorScene = false;
         bool textOnlyFallback = false;
         uint64_t sequence = 0;
     };
@@ -4202,6 +4203,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
                                          const char* trigger,
                                          bool requireFinalLine,
                                          bool allowCurrentPlayback) {
+        if (finishedLine.directorScene) {
+            return false;
+        }
         const std::string speaker = Trim(finishedLine.actor);
         const std::string originLine = Trim(finishedLine.text);
         if (!Config::rechatEnabled || !Config::rechatSmartLaunch) {
@@ -4817,8 +4821,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
                        uint64_t runtimeGeneration,
                        uint32_t listenerFormId,
                        uint32_t rechatTargetFormId,
-                       const std::string& displayName) {
+                       const std::string& displayName,
+                       bool directorScene) {
         ScriptLine line;
+        line.directorScene = directorScene;
         line.text = text;
         line.actor = speaker;
         line.displayName = displayName;

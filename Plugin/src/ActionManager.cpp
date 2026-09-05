@@ -70,6 +70,7 @@ struct ActionRequest {
     uint64_t runtimeGeneration = 0;
     bool narratorAuthority = false;
     bool emitFuncret = true;
+    bool directorScene = false;
 };
 
 struct NativePackageState {
@@ -918,7 +919,12 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
         target.c_str(),
         cleanResult.size() > 180 ? cleanResult.substr(0, 180).c_str() : cleanResult.c_str());
 
-    HTTPManager::SendEvent("funcret", payload.str());
+    if (request.directorScene) {
+        // Record the real outcome without asking an NPC model to extend the scene.
+        HTTPManager::SendEvent("infoaction", speaker + ": " + cleanResult);
+    } else {
+        HTTPManager::SendEvent("funcret", payload.str());
+    }
 }
 
 void TrackNativePackageAction(const ActionRequest& request) {
@@ -2585,6 +2591,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
 
     request = ActionRequest{};
+    request.directorScene = Trim(ExtractJsonStringValue(lineObject, "action_source")) == "director_scene";
     request.speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
     if (request.speaker.empty()) {
         request.speaker = Trim(ExtractJsonStringValue(lineObject, "character"));

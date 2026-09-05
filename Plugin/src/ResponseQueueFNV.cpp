@@ -25,6 +25,7 @@ struct QueueItem {
     DialogueLine dialogue;
     std::string actionJson;
     std::string source;
+    bool directorScene = false;
     uint64_t responseGeneration = 0;
     uint64_t runtimeGeneration = 0;
     std::chrono::steady_clock::time_point enqueuedAt;
@@ -137,10 +138,11 @@ void EnqueueDialogue(const DialogueLine& line, const char* source) {
         g_items.size());
 }
 
-void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration) {
+void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration, bool directorScene) {
     QueueItem item;
     item.type = ItemType::Action;
     item.actionJson = lineObject;
+    item.directorScene = directorScene;
     item.source = source ? source : "ResponseQueueFNV";
     item.enqueuedAt = std::chrono::steady_clock::now();
 
@@ -169,10 +171,30 @@ bool DispatchPending(std::size_t maxItems) {
     std::size_t dispatchedThisCall = 0;
 
     while (maxItems == 0 || dispatchedThisCall < maxItems) {
+        bool sceneAction = false;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (g_items.empty()) break;
+            sceneAction = g_items.front().directorScene;
+        }
+        bool speechPending = false;
+        if (sceneAction) {
+            const auto speech = SpeakManager::GetQueueStatus();
+            speechPending = speech.isProcessing || speech.isPlaying || speech.currentPlaybackLineActive
+                || speech.dialogueLinesQueued > 0 || speech.ttsDownloadsInProgress > 0
+                || speech.preparedAudioCount > 0 || speech.ttsTasksPending > 0 || speech.ttsTasksActive > 0;
+        }
         QueueItem item;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_items.empty()) {
+                break;
+            }
+            // Closing actions must not overtake the authored exchange. Check stale
+            // generations first so a cancelled scene never blocks a new response.
+            const auto& next = g_items.front();
+            if (next.directorScene && speechPending && IsCurrentGenerationLocked(next.responseGeneration)
+                && RuntimeGeneration::IsCurrent(next.runtimeGeneration)) {
                 break;
             }
             item = std::move(g_items.front());
@@ -218,7 +240,8 @@ bool DispatchPending(std::size_t maxItems) {
                                         line.runtimeGeneration,
                                         line.listenerFormId,
                                         line.rechatTargetFormId,
-                                        line.displayName);
+                                        line.displayName,
+                                        line.directorScene);
             continue;
         }
 
