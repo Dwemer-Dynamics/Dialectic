@@ -2380,8 +2380,13 @@ bool TranslateRolemasterInstruction(ActionRequest& request, const std::vector<st
         request.speaker = characterName;
     }
 
+    // Instruction arguments describe an actor/task, not ordinary action target/item/amount.
+    request.target = args.size() >= 4 ? Trim(args[3]) : "";
+    request.targetFormId = 0;
+    request.item.clear();
+    request.amount = 1;
     if (request.target.empty()) {
-        request.target = InferTargetFromInstruction(action, instruction, request.speaker);
+        request.target = InferTargetFromInstruction(action, rawInstruction, request.speaker);
     }
 
     if (request.item.empty()) {
@@ -2431,6 +2436,7 @@ bool SendDirectorTalkInstruction(const ActionRequest& request, const char* sourc
             << "\"dialectic_mode\":\"STANDARD\","
             << "\"mode\":\"STANDARD\","
             << "\"director_instruction\":true,"
+            << "\"director_action\":\"" << HTTPManager::EscapeJson(request.action) << "\","
             << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(speaker) << "\",\"refid\":\"" << speakerId.str() << "\"}";
     if (!request.target.empty()) {
         payload << ",\"listener\":\"" << HTTPManager::EscapeJson(request.target) << "\""
@@ -2817,7 +2823,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             static_cast<unsigned long long>(RuntimeGeneration::Current()));
         return false;
     }
-    if (request.action == "Talk") {
+    if (!request.instruction.empty() || request.action == "Talk") {
         return SendDirectorTalkInstruction(request, source);
     }
     if (request.narratorAuthority) {
