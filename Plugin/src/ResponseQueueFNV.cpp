@@ -190,7 +190,7 @@ bool DispatchPending(std::size_t maxItems) {
             if (g_items.empty()) {
                 break;
             }
-            // Closing actions must not overtake the authored exchange. Check stale
+            // Attached actions wait for preceding speech, never for action completion. Check stale
             // generations first so a cancelled scene never blocks a new response.
             const auto& next = g_items.front();
             if (next.directorScene && speechPending && IsCurrentGenerationLocked(next.responseGeneration)

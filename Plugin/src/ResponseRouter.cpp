@@ -496,14 +496,16 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
     const std::string id = ExtractJsonStringValue(payload, "id");
     const auto lines = ExtractJsonArrayObjects(payload, "lines");
     const auto actions = ExtractJsonArrayObjects(payload, "actions");
-    if (ExtractJsonStringValue(payload, "schema") != "dialectic.director_scene.v1"
+    const std::string schema = ExtractJsonStringValue(payload, "schema");
+    const bool attachedActions = schema == "dialectic.director_scene.v2";
+    if ((!attachedActions && schema != "dialectic.director_scene.v1")
         || id.empty() || id.size() > 64 || lines.empty() || lines.size() > 6 || actions.size() > 3
         || !ResponseQueueFNV::IsCurrentGeneration(generation)) {
         Logger::LogWarning("DirectorScene: rejected invalid or stale scene");
         return false;
     }
     std::vector<ResponseQueueFNV::DialogueLine> dialogue;
-    std::vector<std::string> closingActions;
+    std::vector<std::vector<std::string>> actionsAfterLine(lines.size());
     for (const auto& line : lines) {
         ResponseQueueFNV::DialogueLine queued;
         queued.speaker = Trim(ExtractJsonStringValue(line, "speaker"));
@@ -530,10 +532,14 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
         const std::string command = ExtractJsonStringValue(action, "command_name");
         const std::string authority = ExtractJsonStringValue(action, "authority");
         const bool narrator = speaker == "The Narrator" && authority == "narrator";
+        // Older scenes retain their closing actions; v2 attaches actions to a spoken line.
+        const int afterLine = attachedActions ? ExtractJsonIntValue(action, "after_line", 0) : static_cast<int>(lines.size());
         if (!ActionManager::IsDirectorSceneAction(command, narrator)
             || (!narrator && (ResolveResponseSpeakerFormId(speaker) == 0 || IsPlayerSpeakerName(speaker)))
-            || (!authority.empty() && !narrator)) {
-            Logger::LogWarning("DirectorScene: rejected invalid closing action in scene %s", id.c_str());
+            || (!authority.empty() && !narrator)
+            || afterLine < 1 || afterLine > static_cast<int>(lines.size())
+            || (attachedActions && !narrator && speaker != dialogue[afterLine - 1].speaker)) {
+            Logger::LogWarning("DirectorScene: rejected invalid action or line attachment in scene %s", id.c_str());
             return false;
         }
         std::string closing = "{\"action\":\"rolecommand\",\"action_source\":\"director_scene\",\"speaker\":\""
@@ -546,7 +552,7 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
         }
         closing += ",\"amount\":" + std::to_string(ExtractJsonIntValue(action, "amount", 1));
         if (narrator) closing += ",\"authority\":\"narrator\"";
-        closingActions.push_back(closing + "}");
+        actionsAfterLine[afterLine - 1].push_back(closing + "}");
     }
     static std::mutex sceneMutex;
     static std::deque<std::string> acceptedScenes;
@@ -556,13 +562,13 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
     }
     acceptedScenes.push_back(id);
     if (acceptedScenes.size() > 64) acceptedScenes.pop_front();
-    for (const auto& line : dialogue) {
-        ResponseQueueFNV::EnqueueDialogue(line, source);
+    for (std::size_t index = 0; index < dialogue.size(); ++index) {
+        ResponseQueueFNV::EnqueueDialogue(dialogue[index], source);
+        for (const auto& action : actionsAfterLine[index]) {
+            ResponseQueueFNV::EnqueueAction(action, source, generation, true);
+        }
     }
-    for (const auto& action : closingActions) {
-        ResponseQueueFNV::EnqueueAction(action, source, generation, true);
-    }
-    Logger::LogInfo("DirectorScene: queued %s dialogue=%zu closing_actions=%zu", id.c_str(), dialogue.size(), closingActions.size());
+    Logger::LogInfo("DirectorScene: queued %s dialogue=%zu actions=%zu", id.c_str(), dialogue.size(), actions.size());
     return true;
 }
 
