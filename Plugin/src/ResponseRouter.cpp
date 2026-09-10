@@ -528,16 +528,25 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
     for (const auto& action : actions) {
         const std::string speaker = ExtractJsonStringValue(action, "speaker");
         const std::string command = ExtractJsonStringValue(action, "command_name");
-        const std::string target = ExtractJsonStringValue(action, "target");
-        if ((command != "Attack" && command != "Follow" && command != "MoveTo"
-            && command != "ComeCloser" && command != "StopFollowing" && command != "TakeASeat")
-            || ResolveResponseSpeakerFormId(speaker) == 0 || IsPlayerSpeakerName(speaker)) {
+        const std::string authority = ExtractJsonStringValue(action, "authority");
+        const bool narrator = speaker == "The Narrator" && authority == "narrator";
+        if (!ActionManager::IsDirectorSceneAction(command, narrator)
+            || (!narrator && (ResolveResponseSpeakerFormId(speaker) == 0 || IsPlayerSpeakerName(speaker)))
+            || (!authority.empty() && !narrator)) {
             Logger::LogWarning("DirectorScene: rejected invalid closing action in scene %s", id.c_str());
             return false;
         }
-        closingActions.push_back("{\"action\":\"rolecommand\",\"action_source\":\"director_scene\",\"speaker\":\""
-            + HTTPManager::EscapeJson(speaker) + "\",\"command_name\":\"" + command
-            + "\",\"target\":\"" + HTTPManager::EscapeJson(target) + "\"}");
+        std::string closing = "{\"action\":\"rolecommand\",\"action_source\":\"director_scene\",\"speaker\":\""
+            + HTTPManager::EscapeJson(speaker) + "\",\"command_name\":\"" + HTTPManager::EscapeJson(command) + "\"";
+        // Copy only action arguments, never model-supplied dispatch or script fields.
+        for (const char* key : {"target", "item", "location", "speed", "id_quest",
+                               "target_refid", "target_formid", "item_refid", "item_baseid", "location_refid"}) {
+            const std::string value = ExtractJsonStringValue(action, key);
+            if (!value.empty()) closing += ",\"" + std::string(key) + "\":\"" + HTTPManager::EscapeJson(value) + "\"";
+        }
+        closing += ",\"amount\":" + std::to_string(ExtractJsonIntValue(action, "amount", 1));
+        if (narrator) closing += ",\"authority\":\"narrator\"";
+        closingActions.push_back(closing + "}");
     }
     static std::mutex sceneMutex;
     static std::deque<std::string> acceptedScenes;

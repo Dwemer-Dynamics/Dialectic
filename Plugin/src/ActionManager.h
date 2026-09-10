@@ -13,6 +13,8 @@ enum class ExternalFollowerAction {
 };
 
 bool IsActionCommand(const std::string& actionName);
+// Scene actions must execute directly, with narrator powers confined to the narrator.
+bool IsDirectorSceneAction(const std::string& actionName, bool narrator);
 bool RequestWaitHere(uint32_t actorFormId,
                      const std::string& actorName,
                      const char* source = "ActionManager");
