@@ -3,6 +3,7 @@
 #include "ResponseQueueFNV.h"
 
 #include "ActionManager.h"
+#include "HTTPManager.h"
 #include "Logger.h"
 #include "RuntimeGeneration.h"
 #include "SpeakManager.h"
@@ -30,6 +31,14 @@ struct QueueItem {
     uint64_t runtimeGeneration = 0;
     std::chrono::steady_clock::time_point enqueuedAt;
 };
+
+// Lines cancelled before reaching SpeakManager still need a terminal delivery report.
+void AbortQueuedDirectorLine(const QueueItem& item) {
+    if (item.type != ItemType::Dialogue || !item.dialogue.directorScene || item.dialogue.utteranceId.empty()) return;
+    const auto& line = item.dialogue;
+    HTTPManager::SendDialogueDeliveryAck(line.speaker, line.actorFormId, line.text,
+        line.ttsCacheKey, line.utteranceId, "aborted", line.requestId);
+}
 
 std::mutex g_mutex;
 std::deque<QueueItem> g_items;
@@ -185,6 +194,7 @@ bool DispatchPending(std::size_t maxItems) {
                 || speech.preparedAudioCount > 0 || speech.ttsTasksPending > 0 || speech.ttsTasksActive > 0;
         }
         QueueItem item;
+        bool droppedStale = false;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_items.empty()) {
@@ -209,9 +219,15 @@ bool DispatchPending(std::size_t maxItems) {
                     static_cast<unsigned long long>(item.runtimeGeneration),
                     static_cast<unsigned long long>(RuntimeGeneration::Current()),
                     item.source.c_str());
-                continue;
+                droppedStale = true;
+            } else {
+                ++g_totalDispatched;
             }
-            ++g_totalDispatched;
+        }
+
+        if (droppedStale) {
+            AbortQueuedDirectorLine(item);
+            continue;
         }
 
         dispatchedAny = true;
@@ -256,15 +272,15 @@ bool DispatchPending(std::size_t maxItems) {
 }
 
 void Clear(const char* reason) {
-    std::size_t cleared = 0;
+    std::deque<QueueItem> cleared;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        cleared = g_items.size();
-        g_items.clear();
+        cleared.swap(g_items);
         g_unfinished = false;
         g_unfinishedSource.clear();
     }
-    Logger::LogInfo("ResponseQueueFNV: cleared pending=%zu reason=%s", cleared, reason ? reason : "clear");
+    for (const auto& item : cleared) AbortQueuedDirectorLine(item);
+    Logger::LogInfo("ResponseQueueFNV: cleared pending=%zu reason=%s", cleared.size(), reason ? reason : "clear");
 }
 
 bool HasPending() {
