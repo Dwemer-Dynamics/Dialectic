@@ -14,6 +14,7 @@ struct DialogueLine {
     std::string displayName;
     uint32_t actorFormId = 0;
     bool isFinalResponseLine = false;
+    bool directorScene = false;
     std::string listenerHint;
     std::string rechatTargetHint;
     uint32_t listenerFormId = 0;
@@ -45,7 +46,7 @@ void MarkUnfinished(bool unfinished, const char* source = "ResponseQueueFNV", ui
 bool IsUnfinished();
 
 void EnqueueDialogue(const DialogueLine& line, const char* source = "ResponseQueueFNV");
-void EnqueueAction(const std::string& lineObject, const char* source = "ResponseQueueFNV", uint64_t responseGeneration = 0);
+void EnqueueAction(const std::string& lineObject, const char* source = "ResponseQueueFNV", uint64_t responseGeneration = 0, bool directorScene = false);
 
 bool DispatchPending(std::size_t maxItems = 64);
 void Clear(const char* reason = "clear");

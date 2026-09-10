@@ -70,6 +70,7 @@ struct ActionRequest {
     uint64_t runtimeGeneration = 0;
     bool narratorAuthority = false;
     bool emitFuncret = true;
+    bool directorScene = false;
 };
 
 struct NativePackageState {
@@ -918,7 +919,12 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
         target.c_str(),
         cleanResult.size() > 180 ? cleanResult.substr(0, 180).c_str() : cleanResult.c_str());
 
-    HTTPManager::SendEvent("funcret", payload.str());
+    if (request.directorScene) {
+        // Record the real outcome without asking an NPC model to extend the scene.
+        HTTPManager::SendEvent("infoaction", speaker + ": " + cleanResult);
+    } else {
+        HTTPManager::SendEvent("funcret", payload.str());
+    }
 }
 
 void TrackNativePackageAction(const ActionRequest& request) {
@@ -2585,6 +2591,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
 
     request = ActionRequest{};
+    request.directorScene = Trim(ExtractJsonStringValue(lineObject, "action_source")) == "director_scene";
     request.speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
     if (request.speaker.empty()) {
         request.speaker = Trim(ExtractJsonStringValue(lineObject, "character"));
@@ -2628,10 +2635,22 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
 
     request.narratorAuthority =
-        EqualsIgnoreCase(actionSource, "narrator") &&
+        (EqualsIgnoreCase(actionSource, "narrator") || request.directorScene) &&
         EqualsIgnoreCase(authority, "narrator") &&
         EqualsIgnoreCase(request.speaker, "The Narrator") &&
         IsNarratorPluginAction(request.action);
+
+    if (request.directorScene && !IsDirectorSceneAction(request.action, request.narratorAuthority)) {
+        return false;
+    }
+
+    if (request.directorScene && request.target.empty()) {
+        if (request.action == "IncreaseWalkSpeed" || request.action == "DecreaseWalkSpeed") {
+            request.target = Trim(ExtractJsonStringValue(lineObject, "speed"));
+        } else if (request.action == "ReadQuests") {
+            request.target = Trim(ExtractJsonStringValue(lineObject, "id_quest"));
+        }
+    }
 
     if (request.action == "TravelTo" && request.target.empty()) {
         request.target = Trim(ExtractJsonStringValue(lineObject, "location"));
@@ -3033,6 +3052,11 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
 bool IsActionCommand(const std::string& actionName) {
     const std::string normalized = NormalizeActionName(actionName);
     return CanonicalActions().find(normalized) != CanonicalActions().end();
+}
+
+bool IsDirectorSceneAction(const std::string& actionName, bool narrator) {
+    return CanonicalActions().contains(actionName) && actionName != "Talk" && actionName != "DirectorCommand"
+        && IsNarratorPluginAction(actionName) == narrator;
 }
 
 bool RequestWaitHere(uint32_t actorFormId,
