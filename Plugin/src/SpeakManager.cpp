@@ -1463,7 +1463,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             (static_cast<uint32_t>(data[3]) << 24);
     }
 
-    static bool ParseWavInfo(const std::vector<uint8_t>& wavData, WavInfo& outInfo) {
+    static bool ParseWavInfo(const std::vector<uint8_t>& wavData, WavInfo& outInfo,
+                             bool sharedAudio = false) {
         if (wavData.size() < 44 ||
             std::memcmp(wavData.data(), "RIFF", 4) != 0 ||
             std::memcmp(wavData.data() + 8, "WAVE", 4) != 0) {
@@ -1479,8 +1480,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
             const uint8_t* chunk = wavData.data() + offset;
             const uint32_t chunkSize = ReadLE32(chunk + 4);
             const size_t dataOffset = offset + 8;
-            if (chunkSize > wavData.size() - dataOffset) {
-                return false;
+            // Shared network audio needs overflow-safe rejection before native playback.
+            if (sharedAudio && chunkSize > wavData.size() - dataOffset) return false;
+            if (dataOffset + chunkSize > wavData.size()) {
+                break;
             }
 
             if (std::memcmp(chunk, "fmt ", 4) == 0 && chunkSize >= 16) {
@@ -4496,7 +4499,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                             const std::string& utterance, const std::vector<uint8_t>& audio) {
         if (!MultiplayerSharing::IsListener()) return;
         WavInfo info;
-        if (!ParseWavInfo(audio, info) || info.durationSeconds > 120.0
+        if (!ParseWavInfo(audio, info, true) || info.durationSeconds > 120.0
             || info.channels > 2 || info.sampleRate > 192000
             || (info.bitsPerSample != 8 && info.bitsPerSample != 16 && info.bitsPerSample != 24 && info.bitsPerSample != 32)
             || info.blockAlign != info.channels * info.bitsPerSample / 8) return;
@@ -4696,7 +4699,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     Log("SpeakManager: Audio playback started for speaker '%s'",
                         g_currentSpeaker.c_str());
                     SendDeliveryState(g_currentPlaybackLine, "playing");
-                    if (!IsNarratorLine(g_currentPlaybackLine) && !IsPlayerTtsLine(g_currentPlaybackLine)) {
+                    if (Config::multiplayerMode.load() == 1 &&
+                        !IsNarratorLine(g_currentPlaybackLine) && !IsPlayerTtsLine(g_currentPlaybackLine)) {
                         MultiplayerSharing::Publish(g_currentPlaybackLine.actor, g_currentPlaybackLine.text,
                             g_currentPlaybackLine.ttsCacheKey, g_currentPlaybackLine.utteranceId);
                     }

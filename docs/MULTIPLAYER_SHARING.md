@@ -3,7 +3,7 @@
 Requires the matching DialecticServer relay feature. Setup and server access details:
 [DialecticServer multiplayer sharing guide](https://github.com/Dwemer-Dynamics/DialecticServer/blob/codex/nvmp-dialogue-sharing/docs/MULTIPLAYER_SHARING.md).
 
-In MCM > Sound, **Dialogue Sharing Mode** uses 0 Off (default), 1 Host, or 2 Listen.
+In MCM > Tools, **(Beta) Multiplayer Dialogue Sharing** uses 0 Off (default), 1 Host, or 2 Listen.
 Set `URL`, `Session` and `Key` under `[Multiplayer]` in
 `Data/NVSE/Plugins/dialectic_custom.ini`. The host uses the host key; listeners use
 the separate listener key. Close MCM to reload the settings, or restart the game.

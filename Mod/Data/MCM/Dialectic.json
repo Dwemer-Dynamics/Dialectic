@@ -574,28 +574,6 @@
       "columns": 1,
       "enable": 1,
       "options": {
-        "23": {
-          "title": "Dialogue Sharing Mode",
-          "type": 2,
-          "enable": 1,
-          "mouse": "0: Off. 1: Host shares NPC speech. 2: Listen plays shared speech only. Set URL, Session and Key in dialectic_custom.ini. Does not sync followers or private narrator speech.",
-          "vars": [
-            {
-              "configINI": "Multiplayer:Mode",
-              "default": 0
-            }
-          ],
-          "scale": {
-            "valueDecimal": 0,
-            "valueIncrement": 1,
-            "valueMin": 0,
-            "valueMax": 2
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
         "1": {
           "title": "Basic",
           "enable": 1,
@@ -984,6 +962,28 @@
           "call": {
             "type": "file",
             "value": "Dialectic/InitializeDialectic.gek"
+          }
+        },
+        "2": {
+          "title": "(Beta) Multiplayer Dialogue Sharing",
+          "type": 2,
+          "enable": 1,
+          "mouse": "0: Off (normal DIALECTIC). 1: Host shares NPC speech. 2: Listen plays shared speech only. Set URL, Session and Key in dialectic_custom.ini. Does not sync followers or private narrator speech.",
+          "vars": [
+            {
+              "configINI": "Multiplayer:Mode",
+              "default": 0
+            }
+          ],
+          "scale": {
+            "valueDecimal": 0,
+            "valueIncrement": 1,
+            "valueMin": 0,
+            "valueMax": 2
+          },
+          "call": {
+            "type": "file",
+            "value": "Dialectic/MCMReload.gek"
           }
         }
       }

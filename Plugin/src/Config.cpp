@@ -987,9 +987,13 @@ namespace Config {
             iniFile << "\n";
         }
         
-        iniFile << "[Multiplayer]\nMode=" << multiplayerMode.load() << "\n";
-        iniFile << "URL=" << multiplayerUrl << "\nSession=" << multiplayerSession
-                << "\nKey=" << multiplayerKey << "\n\n";
+        // Leave ordinary custom INI saves unchanged until sharing is configured.
+        if (multiplayerMode.load() != 0 || !multiplayerUrl.empty() ||
+            !multiplayerSession.empty() || !multiplayerKey.empty()) {
+            iniFile << "[Multiplayer]\nMode=" << multiplayerMode.load() << "\n";
+            iniFile << "URL=" << multiplayerUrl << "\nSession=" << multiplayerSession
+                    << "\nKey=" << multiplayerKey << "\n\n";
+        }
         iniFile << "[Hotkeys]\n";
         iniFile << "; Hotkeys use Fallout DirectInput scan codes. Set them in MCM to enable.\n";
         iniFile << "TalkToNPC=" << hotkeyTalkToNPC << "\n";

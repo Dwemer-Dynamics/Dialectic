@@ -181,6 +181,7 @@ void Reset() {
 }
 
 void Shutdown() {
+    if (g_settings.mode == 0) return;
     // Process shutdown cannot wait for network I/O. The server lease expires after 15 seconds.
     g_running = false;
     Reset();
