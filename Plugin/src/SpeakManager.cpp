@@ -4699,10 +4699,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
                     Log("SpeakManager: Audio playback started for speaker '%s'",
                         g_currentSpeaker.c_str());
                     SendDeliveryState(g_currentPlaybackLine, "playing");
-                    if (Config::multiplayerMode.load() == 1 &&
+                    if (MultiplayerSharing::IsHost() &&
                         !IsNarratorLine(g_currentPlaybackLine) && !IsPlayerTtsLine(g_currentPlaybackLine)) {
                         MultiplayerSharing::Publish(g_currentPlaybackLine.actor, g_currentPlaybackLine.text,
-                            g_currentPlaybackLine.ttsCacheKey, g_currentPlaybackLine.utteranceId);
+                            g_currentPlaybackLine.ttsCacheKey, g_currentPlaybackLine.utteranceId, readyAudio.audioData);
                     }
                     StartLipSync(g_currentPlaybackLine, readyAudio.audioData);
                     StartSubtitleBridge(g_currentPlaybackLine, readyAudio.audioData);

@@ -966,24 +966,86 @@
         },
         "2": {
           "title": "(Beta) Multiplayer Dialogue Sharing",
-          "type": 2,
+          "enable": 1
+        },
+        "3": {
+          "title": "Host session",
+          "type": 5,
           "enable": 1,
-          "mouse": "0: Off (normal DIALECTIC). 1: Host shares NPC speech. 2: Listen plays shared speech only. Set URL, Session and Key in dialectic_custom.ini. Does not sync followers or private narrator speech.",
+          "mouse": "Create a session, then use Copy join code to invite friends. Close MCM to connect. Only ordinary NPC speech is shared.",
           "vars": [
             {
-              "configINI": "Multiplayer:Mode",
+              "configINI": "Tools:SharingHost",
               "default": 0
             }
           ],
-          "scale": {
-            "valueDecimal": 0,
-            "valueIncrement": 1,
-            "valueMin": 0,
-            "valueMax": 2
-          },
           "call": {
             "type": "file",
-            "value": "Dialectic/MCMReload.gek"
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "4": {
+          "title": "Join session (copied code)",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Copy the host's join code first. Close MCM to join. Listening disables your own AI conversations until you disconnect.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingJoin",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "5": {
+          "title": "Copy join code",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Copy the current session code to send to friends.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingCopy",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "6": {
+          "title": "Sharing status",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Show whether sharing is Off, connecting, hosting or listening after closing MCM.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingStatus",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "7": {
+          "title": "Disconnect / Off",
+          "type": 5,
+          "enable": 1,
+          "mouse": "End hosting or leave the session and return to normal DIALECTIC. Close MCM to apply.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingDisconnect",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
           }
         }
       }

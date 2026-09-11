@@ -37,6 +37,7 @@
 
 // Our subsystem headers
 #include "Config.h"
+#include "MultiplayerSharing.h"
 #include "HTTPManager.h"
 #include "AudioManager.h"
 #include "SpeakManager.h"
@@ -1186,6 +1187,17 @@ static bool Cmd_DialecticUpdateActiveQuest_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticSharingSetup_Execute(COMMAND_ARGS) {
+    int action = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        MultiplayerSharing::SetupAction(action);
+        *result = 1;
+    }
+    return true;
+}
+
 static bool Cmd_DialecticOpenModeMenu_Execute(COMMAND_ARGS) {
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
@@ -1507,6 +1519,11 @@ static CommandInfo kCommandInfo_DialecticUpdateFalloutStat = {
     kParams_TwoIntegers, Cmd_DialecticUpdateFalloutStat_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticSharingSetup = {
+    "DialecticSharingSetup", "", 0, "Host, join, copy a code, check status or disconnect dialogue sharing.", 0, 1,
+    kParams_Integer, Cmd_DialecticSharingSetup_Execute, nullptr, nullptr, 0
+};
+
 static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
     constexpr UInt32 kDialecticOpcodeBase = 0x6D00;
     nvse->SetOpcodeBase(kDialecticOpcodeBase);
@@ -1546,7 +1563,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticUpdateFalloutStat,
         &kCommandInfo_DialecticHandleHotkeyUp,
         &kCommandInfo_DialecticInitialize,
-        &kCommandInfo_DialecticWaitHereTarget
+        &kCommandInfo_DialecticWaitHereTarget,
+        &kCommandInfo_DialecticSharingSetup
     };
 
     for (CommandInfo* command : commands) {

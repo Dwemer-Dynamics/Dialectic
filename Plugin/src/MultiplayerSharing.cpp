@@ -14,6 +14,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <winhttp.h>
+#include <bcrypt.h>
+#include <cstring>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -23,6 +25,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <vector>
+#include <utility>
 
 namespace MultiplayerSharing {
 namespace {
@@ -30,6 +33,7 @@ using Clock = std::chrono::steady_clock;
 struct Settings {
     int mode = 0;
     std::string url, session, key;
+    bool hosted = false;
     bool operator==(const Settings&) const = default;
 };
 struct Line {
@@ -44,7 +48,19 @@ struct Exchange {
     std::string epoch, control;
     Line line;
 };
-struct Command { std::string op, fields; };
+struct Command { std::string op, fields; std::vector<uint8_t> audio; };
+struct SetupResult {
+    std::atomic_bool done{false};
+    Settings settings;
+    std::string code;
+    unsigned long status = 0;
+};
+std::atomic<int> g_publicMode{0};
+Settings g_publicSettings;
+std::string g_joinCode, g_pendingCode;
+int g_action = 0;
+std::shared_ptr<SetupResult> g_setup;
+TaskManager::TaskHandle g_setupTask;
 Settings g_settings;
 std::shared_ptr<Exchange> g_exchange;
 TaskManager::TaskHandle g_task;
@@ -61,7 +77,8 @@ std::string Quote(const std::string& value) { return "\"" + HTTPManager::EscapeJ
 
 // Reject credential-bearing URLs and redirects; HTTPS works through a narrowly exposed relay.
 std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
-                            size_t limit, const TaskManager::CancellationToken& token) {
+                            size_t limit, const TaskManager::CancellationToken& token,
+                            const std::vector<uint8_t>& audio = {}, unsigned long* responseStatus = nullptr) {
     std::vector<uint8_t> bytes;
     if (token.IsCancellationRequested() || settings.url.size() > 2048 || settings.key.size() < 32
         || settings.key.size() > 256 || settings.key.find_first_of("\r\n") != std::string::npos) return bytes;
@@ -97,13 +114,22 @@ std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
         DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
         WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
         const std::wstring key(settings.key.begin(), settings.key.end());
-        const std::wstring headers = L"Content-Type: application/json\r\nAuthorization: Bearer " + key + L"\r\n";
+        const std::wstring headers = (audio.empty() ? L"Content-Type: application/json\r\nAuthorization: Bearer "
+            : L"Content-Type: application/octet-stream\r\nAuthorization: Bearer ") + key + L"\r\n";
+        std::string payload = body;
+        if (!audio.empty()) {
+            const uint32_t length = static_cast<uint32_t>(body.size());
+            payload.assign(reinterpret_cast<const char*>(&length), sizeof(length));
+            payload += body;
+            payload.append(reinterpret_cast<const char*>(audio.data()), audio.size());
+        }
         if (!token.IsCancellationRequested() && WinHttpSendRequest(request, headers.c_str(), -1,
-            const_cast<char*>(body.data()), static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), 0)
+            payload.data(), static_cast<DWORD>(payload.size()), static_cast<DWORD>(payload.size()), 0)
             && WinHttpReceiveResponse(request, nullptr)) {
             DWORD status = 0, size = sizeof(status);
             WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
+            if (responseStatus) *responseStatus = status;
             if (status == 200) {
                 uint8_t buffer[8192];
                 DWORD count = 0;
@@ -164,7 +190,132 @@ void SetConnected(bool connected) {
 }
 }
 
-bool IsListener() { return Config::multiplayerMode.load() == 2; }
+bool IsListener() { return g_publicMode.load() ? g_publicMode.load() == 2 : Config::multiplayerMode.load() == 2; }
+bool IsHost() { return g_publicMode.load() ? g_publicMode.load() == 1 : Config::multiplayerMode.load() == 1; }
+
+void SetupAction(int action) {
+    if (action < 1 || action > 5) return;
+    if (action == 2) {
+        g_pendingCode.clear();
+        if (OpenClipboard(nullptr)) {
+            if (HANDLE handle = GetClipboardData(CF_UNICODETEXT)) {
+                const SIZE_T bytes = GlobalSize(handle);
+                if (bytes >= 2 && bytes <= 128) {
+                    if (auto text = static_cast<const wchar_t*>(GlobalLock(handle))) {
+                        for (size_t i = 0; i < bytes / sizeof(wchar_t) && text[i]; ++i) {
+                            wchar_t c = text[i];
+                            if (c == L'-' || c == L' ' || c == L'\r' || c == L'\n') continue;
+                            if (c >= L'a' && c <= L'f') c -= L'a' - L'A';
+                            g_pendingCode += c <= 127 ? static_cast<char>(c) : '?';
+                        }
+                        GlobalUnlock(handle);
+                    }
+                }
+            }
+            CloseClipboard();
+        }
+    }
+    g_action = action;
+}
+
+// Copies only the short listener invitation; never place a host credential on the clipboard.
+static bool CopyJoinCode() {
+    if (g_joinCode.empty() || !OpenClipboard(nullptr)) return false;
+    bool copied = false;
+    const std::wstring text(g_joinCode.begin(), g_joinCode.end());
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    if (memory) {
+        if (void* data = GlobalLock(memory)) {
+            std::memcpy(data, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(memory);
+            if (EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory)) copied = true;
+        }
+        if (!copied) GlobalFree(memory);
+    }
+    CloseClipboard();
+    return copied;
+}
+
+// Setup runs only after an explicit Tools action. Off without pending setup has no work.
+static void UpdateSetup() {
+    if (g_setup && g_setup->done.load()) {
+        auto result = std::move(g_setup);
+        if (result->code.empty()) {
+            std::string message = "Could not reach the public relay. Check your connection and try again.";
+            if (result->status == 403) message = "Join code is invalid or expired. Ask the host for a new code.";
+            if (result->status == 429) message = "Too many connection attempts. Wait a minute and try again.";
+            if (result->status == 503) message = "Public relay is busy or unavailable. Try again later.";
+            IngameNotifier::Notify(message, IngameNotifier::Level::Warning);
+        } else {
+            g_publicSettings = result->settings;
+            g_publicMode.store(result->settings.mode);
+            g_joinCode = result->code;
+            if (result->settings.mode == 1) {
+                IngameNotifier::Notify("Session created. Use Copy join code to invite friends.");
+            } else IngameNotifier::Notify("Joined session. Waiting for shared speech.");
+        }
+    }
+    if (!g_action || GameLoop::GetGameState().isInMenu) return;
+    const int action = std::exchange(g_action, 0);
+    if (action == 3) {
+        IngameNotifier::Notify(CopyJoinCode() ? "Join code copied" : "No join code to copy, or clipboard unavailable");
+        return;
+    }
+    if (action == 4) {
+        IngameNotifier::Notify(g_setup ? "Sharing: connecting" : (g_connected
+            ? (IsHost() ? "Sharing: hosting" : "Sharing: listening")
+            : (g_publicMode.load() || Config::multiplayerMode.load() ? "Sharing: disconnected or waiting" : "Sharing: Off")));
+        return;
+    }
+    if (action == 5) {
+        g_setupTask.Cancel(); g_setup.reset();
+        if (g_publicMode.load() == 1) {
+            const Settings previous = g_publicSettings;
+            TaskManager::Options options;
+            options.type = "multiplayer_end"; options.lane = TaskManager::Lane::Background;
+            options.timeout = std::chrono::seconds(5);
+            TaskManager::Submit(options, [previous](const TaskManager::CancellationToken& token) {
+                Request(previous, "{\"op\":\"end\",\"session\":" + Quote(previous.session) + "}", 128, token);
+            });
+        }
+        g_publicMode.store(0); g_publicSettings = {}; g_joinCode.clear();
+        if (Config::multiplayerMode.exchange(0) != 0) Config::WriteCustomINIValue("Multiplayer", "Mode", "0");
+        IngameNotifier::Notify("Sharing: Off");
+        return;
+    }
+    if (g_setup || g_publicMode.load() || Config::multiplayerMode.load()) {
+        IngameNotifier::Notify("Disconnect the current session before hosting or joining"); return;
+    }
+    if (Config::multiplayerPublicRelayUrl.empty()) {
+        IngameNotifier::Notify("Public relay is not available in this build yet", IngameNotifier::Level::Warning); return;
+    }
+    if (action == 2 && (g_pendingCode.size() != 12 || g_pendingCode.find_first_not_of("0123456789ABCDEF") != std::string::npos)) {
+        IngameNotifier::Notify("Copy your friend's 12-character join code, then choose Join session", IngameNotifier::Level::Warning); return;
+    }
+    unsigned char random[32];
+    if (BCryptGenRandom(nullptr, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return;
+    std::string key;
+    for (unsigned char byte : random) { key += "0123456789abcdef"[byte >> 4]; key += "0123456789abcdef"[byte & 15]; }
+    auto result = std::make_shared<SetupResult>();
+    result->settings = {action == 1 ? 1 : 2, Config::multiplayerPublicRelayUrl, "", key, true};
+    g_setup = result;
+    const std::string body = action == 1 ? "{\"op\":\"create\"}" : "{\"op\":\"join\",\"code\":" + Quote(g_pendingCode) + "}";
+    TaskManager::Options options;
+    options.type = "multiplayer_setup"; options.lane = TaskManager::Lane::Background;
+    options.timeout = std::chrono::seconds(10);
+    IngameNotifier::Notify("Connecting to dialogue sharing...");
+    g_setupTask = TaskManager::Submit(options, [result, body](const TaskManager::CancellationToken& token) {
+        const auto bytes = Request(result->settings, body, 1024, token, {}, &result->status);
+        const auto fields = Fields(std::string(bytes.begin(), bytes.end()));
+        if (fields.size() != 4 || fields[0] != "dialectic.session.v1" || fields[1].size() != 32
+            || fields[2].size() != 64 || fields[3].size() != 12
+            || fields[1].find_first_not_of("0123456789abcdef") != std::string::npos
+            || fields[2].find_first_not_of("0123456789abcdef") != std::string::npos
+            || fields[3].find_first_not_of("0123456789ABCDEF") != std::string::npos) return;
+        result->settings.session = fields[1]; result->settings.key = fields[2]; result->code = fields[3];
+    }, [result](bool success, const char*) { if (!success) result->code.clear(); result->done.store(true); });
+    if (!g_setupTask) result->done.store(true);
+}
 
 void Reset() {
     g_task.Cancel();
@@ -181,6 +332,8 @@ void Reset() {
 }
 
 void Shutdown() {
+    if (g_setup) { g_setupTask.Cancel(); g_setup.reset(); }
+    g_action = 0;
     if (g_settings.mode == 0) return;
     // Process shutdown cannot wait for network I/O. The server lease expires after 15 seconds.
     g_running = false;
@@ -197,20 +350,29 @@ void Control(const char* operation) {
 }
 
 void Publish(const std::string& speaker, const std::string& text,
-             const std::string& cacheKey, const std::string& utteranceId) {
+             const std::string& cacheKey, const std::string& utteranceId, const std::vector<uint8_t>& audio) {
     if (g_settings.mode != 1 || !g_running || !g_connected || g_commands.size() >= 32) return;
     if (speaker.empty() || speaker.size() > 160 || text.empty() || text.size() > 4096
         || cacheKey.size() != 32 || cacheKey.find_first_not_of("0123456789abcdef") != std::string::npos) return;
+    if (g_settings.hosted) {
+        size_t queued = audio.size();
+        for (const auto& command : g_commands) queued += command.audio.size();
+        if (audio.empty() || audio.size() > 4194304 || queued > 8388608) {
+            IngameNotifier::Notify("Shared speech skipped: audio limit reached", IngameNotifier::Level::Warning); return;
+        }
+    }
     // Legacy lines without an ID get a host-local ID; serial ordering still prevents retry duplicates.
     const std::string id = utteranceId.empty() ? g_owner + "_" + std::to_string(g_serial + g_commands.size() + 1) : utteranceId;
     g_commands.push_back({"publish", ",\"speaker\":" + Quote(speaker) + ",\"text\":" + Quote(text)
-        + ",\"cache\":" + Quote(cacheKey) + ",\"utterance\":" + Quote(id)});
+        + ",\"cache\":" + Quote(cacheKey) + ",\"utterance\":" + Quote(id),
+        g_settings.hosted ? audio : std::vector<uint8_t>{}});
     g_next = {};
 }
 
 void Update() {
-    if (Config::multiplayerMode.load() == 0 && g_settings.mode == 0) return;
-    const Settings settings{Config::multiplayerMode.load(), Config::multiplayerUrl,
+    if (g_action || g_setup) UpdateSetup();
+    if (g_publicMode.load() == 0 && Config::multiplayerMode.load() == 0 && g_settings.mode == 0) return;
+    const Settings settings = g_publicMode.load() ? g_publicSettings : Settings{Config::multiplayerMode.load(), Config::multiplayerUrl,
         Config::multiplayerSession, Config::multiplayerKey};
     const auto& game = GameLoop::GetGameState();
     const bool running = settings.mode != 0 && game.isInGame && !game.isLoading;
@@ -285,7 +447,7 @@ void Update() {
             if (settings.mode == 1) delayMs = g_commands.empty() ? 3000 : 0;
             g_next = now + std::chrono::milliseconds(delayMs);
         } else {
-            if (!g_failures) IngameNotifier::Notify("Dialogue sharing unavailable; check the server and sharing settings",
+            if (!g_failures) IngameNotifier::Notify("Sharing connection lost. Disconnect and join again if it does not recover.",
                 IngameNotifier::Level::Warning);
             SetConnected(false);
             g_lines.clear();
@@ -325,8 +487,8 @@ void Update() {
     options.lane = TaskManager::Lane::Background;
     options.generation = RuntimeGeneration::Current();
     options.timeout = std::chrono::seconds(10);
-    g_task = TaskManager::Submit(options, [settings, body, prefix, result](const TaskManager::CancellationToken& token) {
-        const auto bytes = Request(settings, body, 65536, token);
+    g_task = TaskManager::Submit(options, [settings, body, prefix, result, audio = std::move(command.audio)](const TaskManager::CancellationToken& token) {
+        const auto bytes = Request(settings, body, 65536, token, audio);
         const std::string reply(bytes.begin(), bytes.end());
         if (settings.mode == 1) { result->ok = reply == "ok"; return; }
         std::istringstream stream(reply);

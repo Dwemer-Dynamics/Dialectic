@@ -167,6 +167,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ws2_32      # Winsock2
     winhttp     # WinHTTP
+    bcrypt      # Secure ephemeral relay credentials
     winmm       # Windows Multimedia (audio)
     xaudio2     # XAudio2 playback
     psapi       # Process memory diagnostics

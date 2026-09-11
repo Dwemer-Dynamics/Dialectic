@@ -1,28 +1,46 @@
-# Optional multiplayer dialogue sharing (beta)
+# Multiplayer dialogue sharing (beta)
 
-Requires the matching DialecticServer relay feature. Setup and server access details:
-[DialecticServer multiplayer sharing guide](https://github.com/Dwemer-Dynamics/DialecticServer/blob/codex/nvmp-dialogue-sharing/docs/MULTIPLAYER_SHARING.md).
+Public sharing uses a standalone relay. Both players connect outbound; nobody forwards
+ports or exposes their local DialecticServer. The maintainer must deploy the relay and
+set the shipped `[Multiplayer] PublicRelayURL` to its HTTPS endpoint first. Until then,
+Host/Join explains that the public relay is unavailable. No endpoint is invented here.
 
-In MCM > Tools, **(Beta) Multiplayer Dialogue Sharing** uses 0 Off (default), 1 Host, or 2 Listen.
-Set `URL`, `Session` and `Key` under `[Multiplayer]` in
-`Data/NVSE/Plugins/dialectic_custom.ini`. The host uses the host key; listeners use
-the separate listener key. Close MCM to reload the settings, or restart the game.
+## Players
 
-The dialogue host runs normal AI conversations. Listeners play the same ordinary
-NPC speech and passive subtitles, centered at their own voice volume, without
-actor actions or AI requests. Narrator/head voices and Player TTS are excluded.
-Listening continues to be passive if the host or server disconnects.
+Open **MCM > Tools > (Beta) Multiplayer Dialogue Sharing**:
 
-This is audio/subtitle sharing for co-op testing, not follower or game-state
-synchronization. It does not map NVMP actors, provide positional audio or lip sync
-on listeners, or accept guest AI input. New listeners start with new lines, and
-network delay means playback is not exactly simultaneous. Missing or stale audio
-is skipped instead of replaying a long backlog.
+1. Host selects **Host session**, then closes MCM to connect.
+2. Host selects **Copy join code**, closes MCM, and sends the copied code to friends.
+3. Friends copy that 12-character code, select **Join session (copied code)**, and close MCM.
+4. **Sharing status** reports Off, connecting, hosting, listening, or disconnected/waiting.
+5. **Disconnect / Off** ends hosting or leaves listening and restores normal DIALECTIC.
 
-Host pause/resume and cancellation are relayed. Mode changes clear pending speech.
-Internet relay URLs require HTTPS; private IPv4/loopback URLs may use HTTP. Only
-the relay endpoint needs to be reachable from a listener. Keep keys out of logs,
-screenshots and bug reports. Use one audio-sharing method to avoid Discord echo.
+The host keeps their ordinary AI server configuration. Listeners need no AI-provider
+credentials or local server. Public room credentials stay in memory; restarting the game
+returns public sharing to Off. Create a new session after restarting. A code grants
+listener access to the session: share it only with intended players. Listening suspends
+local AI conversations. Narrator/head voices and Player TTS are never shared.
 
-Two-PC NVMP, JIP follower behavior, MCM rendering and actual in-game listening must
-be verified separately from source builds and protocol probes.
+Host session expiry is six hours maximum or three minutes without successful host
+traffic. Gameplay disconnects are detected by a 15-second lease. Save/load can reset
+playback without changing the code if the host resumes within three minutes. Joining
+starts at live speech; previous lines are not replayed. Audio follows the host with
+network delay and is centered, not positional. NVMP players, cell proximity, NPC
+ownership, follower commands and lip sync are not synchronized.
+
+Public upload limits: 4 MiB per line, 8 MiB waiting on the host, 16 MiB/128 audio files
+per room. Lines exceeding limits are skipped. Off makes no relay requests; explicitly
+choosing Host/Join performs setup, and Disconnect may send one best-effort end request.
+
+## Operators and legacy setup
+
+[Public relay deployment](https://github.com/Dwemer-Dynamics/DialecticServer/blob/codex/nvmp-dialogue-sharing/relay/README.md)
+
+The original self-hosted INI mode remains supported for existing users. It uses
+`Mode=1` (Host) or `Mode=2` (Listen), `URL`, `Session` and `Key`, with
+`Mode=0` to disable. Disconnect it before starting a public session. See the
+[server guide](https://github.com/Dwemer-Dynamics/DialecticServer/blob/codex/nvmp-dialogue-sharing/docs/MULTIPLAYER_SHARING.md).
+
+The network/state machine is validated in isolated native probes. Actual MCM rendering,
+xNVSE callback execution, XAudio2 playback and two-PC NVMP sessions still require in-game
+verification. No public service has been deployed by these PRs.

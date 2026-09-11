@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "MultiplayerSharing.h"
 #include "Logger.h"
 #include "VoiceRecorder.h"
 
@@ -27,6 +28,7 @@ namespace Config {
 
     std::atomic<int> multiplayerMode{0};
     std::string multiplayerUrl, multiplayerSession, multiplayerKey;
+    std::string multiplayerPublicRelayUrl;
 
     // Server configuration
     std::string serverHost = kDefaultServerHost;
@@ -642,6 +644,7 @@ namespace Config {
         Logger::LogDebug("Custom INI path: %s", customIniPath.c_str());
 
         int sharingMode = 0;
+        multiplayerPublicRelayUrl.clear();
         multiplayerUrl.clear();
         multiplayerSession.clear();
         multiplayerKey.clear();
@@ -688,6 +691,7 @@ namespace Config {
                         if (value == "1") sharingMode = 1;
                         else if (value == "2") sharingMode = 2;
                     }
+                    else if (key == "PublicRelayURL") multiplayerPublicRelayUrl = value;
                     else if (key == "URL") multiplayerUrl = value;
                     else if (key == "Session") multiplayerSession = value;
                     else if (key == "Key") multiplayerKey = value;
@@ -890,7 +894,7 @@ namespace Config {
         }
 
         multiplayerMode.store(sharingMode);
-        if (resolveConnection && sharingMode != 2) {
+        if (resolveConnection && sharingMode != 2 && !MultiplayerSharing::IsListener()) {
             ResolveServerConnection();
         }
 
@@ -989,8 +993,9 @@ namespace Config {
         
         // Leave ordinary custom INI saves unchanged until sharing is configured.
         if (multiplayerMode.load() != 0 || !multiplayerUrl.empty() ||
-            !multiplayerSession.empty() || !multiplayerKey.empty()) {
+            !multiplayerSession.empty() || !multiplayerKey.empty() || !multiplayerPublicRelayUrl.empty()) {
             iniFile << "[Multiplayer]\nMode=" << multiplayerMode.load() << "\n";
+            iniFile << "PublicRelayURL=" << multiplayerPublicRelayUrl << "\n";
             iniFile << "URL=" << multiplayerUrl << "\nSession=" << multiplayerSession
                     << "\nKey=" << multiplayerKey << "\n\n";
         }

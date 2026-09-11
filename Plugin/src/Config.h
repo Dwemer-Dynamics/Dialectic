@@ -10,6 +10,7 @@ namespace Config {
     // Optional dialogue relay. Mode is read by background request gates.
     extern std::atomic<int> multiplayerMode;
     extern std::string multiplayerUrl, multiplayerSession, multiplayerKey;
+    extern std::string multiplayerPublicRelayUrl;
 
     // Server configuration
     extern std::string serverHost;
