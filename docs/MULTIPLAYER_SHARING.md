@@ -10,7 +10,12 @@ Host/Join explains that the public relay is unavailable. No endpoint is invented
 Open **MCM > Tools > (Beta) Multiplayer Dialogue Sharing**:
 
 1. Host selects **Host session**, then closes MCM to connect.
-2. Host selects **Copy join code**, closes MCM, and sends the copied code to friends.
+2. Host selects **Copy join code**, or **Save invite to Desktop**, then closes MCM.
+   Saving creates `Dialectic Invite.txt` on the Windows Desktop, including redirected/
+   OneDrive Desktops. Existing files are kept; repeat saves use numbered filenames.
+   The file contains only the listener join code and instructions, never host credentials.
+   Open the file to copy the code or send the file to friends. Saved files remain after
+   disconnect, but their codes expire with the session.
 3. Friends copy that 12-character code, select **Join session (copied code)**, and close MCM.
 4. **Sharing status** reports Off, connecting, hosting, listening, or disconnected/waiting.
 5. **Disconnect / Off** ends hosting or leaves listening and restores normal DIALECTIC.

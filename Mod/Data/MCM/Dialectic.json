@@ -1047,6 +1047,22 @@
             "type": "file",
             "value": "Dialectic/SharingSetup.gek"
           }
+        },
+        "8": {
+          "title": "Save invite to Desktop",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Save the hosted session code and joining instructions to a text file on your Desktop. Close MCM to save. Existing files are kept.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingSaveInvite",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
         }
       }
     }

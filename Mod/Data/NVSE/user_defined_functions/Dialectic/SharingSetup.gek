@@ -25,5 +25,8 @@ Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
     if eval iOption == 7
         SetINIIntC "Tools:SharingDisconnect" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
     endif
+    if eval iOption == 8
+        SetINIIntC "Tools:SharingSaveInvite" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
     DialecticSharingSetup iAction
 End

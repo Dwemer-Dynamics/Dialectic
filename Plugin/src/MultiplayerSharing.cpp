@@ -15,6 +15,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
+#include <shlobj.h>
 #include <cstring>
 #include <algorithm>
 #include <atomic>
@@ -194,7 +195,7 @@ bool IsListener() { return g_publicMode.load() ? g_publicMode.load() == 2 : Conf
 bool IsHost() { return g_publicMode.load() ? g_publicMode.load() == 1 : Config::multiplayerMode.load() == 1; }
 
 void SetupAction(int action) {
-    if (action < 1 || action > 5) return;
+    if (action < 1 || action > 6) return;
     if (action == 2) {
         g_pendingCode.clear();
         if (OpenClipboard(nullptr)) {
@@ -236,6 +237,39 @@ static bool CopyJoinCode() {
     return copied;
 }
 
+// Resolve redirected/OneDrive Desktops through Windows and never replace an existing file.
+static std::string SaveInviteToDesktop() {
+    if (g_joinCode.size() != 12 || g_joinCode.find_first_not_of("0123456789ABCDEF") != std::string::npos) return {};
+    PWSTR desktop = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktop))) return {};
+    const std::wstring directory(desktop);
+    CoTaskMemFree(desktop);
+    const std::string content = "DIALECTIC multiplayer dialogue invite\r\n\r\nJoin code: " + g_joinCode
+        + "\r\n\r\n1. Copy only the 12-character join code above.\r\n"
+          "2. In Fallout, open MCM > Tools > (Beta) Multiplayer Dialogue Sharing.\r\n"
+          "3. Select Join session (copied code), then close MCM.\r\n\r\n"
+          "Both players need the public-relay Dialectic build using the same relay.\r\n"
+          "This code grants listening access. Share it only with your intended players.\r\n"
+          "The invite expires when the host ends the session or the relay expires it.\r\n";
+    for (int suffix = 0; suffix < 100; ++suffix) {
+        const std::string name = "Dialectic Invite" + (suffix ? " (" + std::to_string(suffix + 1) + ")" : "") + ".txt";
+        const std::wstring path = directory + L"\\" + std::wstring(name.begin(), name.end());
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS) continue;
+            return {};
+        }
+        DWORD written = 0;
+        const bool saved = WriteFile(file, content.data(), static_cast<DWORD>(content.size()), &written, nullptr)
+            && written == content.size() && FlushFileBuffers(file);
+        CloseHandle(file);
+        if (saved) return name;
+        DeleteFileW(path.c_str()); // Only remove the incomplete file this action just created.
+        return {};
+    }
+    return {};
+}
+
 // Setup runs only after an explicit Tools action. Off without pending setup has no work.
 static void UpdateSetup() {
     if (g_setup && g_setup->done.load()) {
@@ -257,6 +291,16 @@ static void UpdateSetup() {
     }
     if (!g_action || GameLoop::GetGameState().isInMenu) return;
     const int action = std::exchange(g_action, 0);
+    if (action == 6) {
+        if (g_publicMode.load() != 1 || !g_connected) {
+            IngameNotifier::Notify("Host a connected session before saving an invite");
+            return;
+        }
+        const std::string name = SaveInviteToDesktop();
+        IngameNotifier::Notify(name.empty() ? "Could not save the invite to Desktop. Check folder access and try again."
+            : "Saved to Desktop: " + name, name.empty() ? IngameNotifier::Level::Warning : IngameNotifier::Level::Success);
+        return;
+    }
     if (action == 3) {
         IngameNotifier::Notify(CopyJoinCode() ? "Join code copied" : "No join code to copy, or clipboard unavailable");
         return;
