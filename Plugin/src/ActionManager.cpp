@@ -1,3 +1,4 @@
+#include "MultiplayerSharing.h"
 #include "ActionManager.h"
 
 #include "ActorPositionResolverFNV.h"
@@ -2739,6 +2740,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
 }
 
 bool ExecuteNarratorAction(ActionRequest request, const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     const std::string sourceName = source ? source : "ActionManager";
     if (!request.narratorAuthority || !IsNarratorPluginAction(request.action)) {
         return false;
@@ -2832,6 +2834,7 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
 }
 
 bool ExecuteActionRequest(ActionRequest request, const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     if (request.runtimeGeneration == 0) {
         request.runtimeGeneration = RuntimeGeneration::Current();
     } else if (!RuntimeGeneration::IsCurrent(request.runtimeGeneration)) {
@@ -3062,6 +3065,7 @@ bool IsDirectorSceneAction(const std::string& actionName, bool narrator) {
 bool RequestWaitHere(uint32_t actorFormId,
                      const std::string& actorName,
                      const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     const char* sourceName = source ? source : "ActionManager";
     RuntimeSnapshot::GameState gameState;
     RuntimeSnapshot::ActorState actor;
@@ -3111,6 +3115,7 @@ bool RequestExternalFollowerAction(ExternalFollowerAction action,
                                    uint32_t actorFormId,
                                    const std::string& actorName,
                                    const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     const char* sourceName = source ? source : "xNVSEEvent";
     RuntimeSnapshot::GameState gameState;
     RuntimeSnapshot::ActorState actor;
@@ -3177,6 +3182,7 @@ bool RequestExternalFollowerAction(ExternalFollowerAction action,
 bool HandleRoleCommandJson(const std::string& lineObject,
                            const char* source,
                            uint64_t runtimeGeneration) {
+    if (MultiplayerSharing::IsListener()) return false;
     std::string actionField = Trim(ExtractJsonStringValue(lineObject, "action"));
     std::string commandName = Trim(ExtractJsonStringValue(lineObject, "command_name"));
     std::string command = commandName;

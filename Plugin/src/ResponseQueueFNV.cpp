@@ -1,5 +1,6 @@
 // ResponseQueueFNV.cpp - CHIM-style parsed response queue for Dialectic JSON lines
 
+#include "MultiplayerSharing.h"
 #include "ResponseQueueFNV.h"
 
 #include "ActionManager.h"
@@ -176,6 +177,7 @@ void EnqueueAction(const std::string& lineObject, const char* source, uint64_t r
 }
 
 bool DispatchPending(std::size_t maxItems) {
+    if (MultiplayerSharing::IsListener()) return false;
     bool dispatchedAny = false;
     std::size_t dispatchedThisCall = 0;
 

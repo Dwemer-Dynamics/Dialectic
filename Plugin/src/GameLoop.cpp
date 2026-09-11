@@ -1,5 +1,6 @@
 // GameLoop.cpp - Main game loop integration for Dialectic
 
+#include "MultiplayerSharing.h"
 #include "GameLoop.h"
 #include "PlaythroughNotices.h"
 #include "IngameNotifier.h"
@@ -1202,6 +1203,7 @@ static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
 }
 
 void RequestDialecticControlMenuOpen() {
+    if (MultiplayerSharing::IsListener()) return;
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
         Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
@@ -1237,6 +1239,7 @@ void RequestDialecticControlMenuOpen() {
 }
 
 void RequestControlMenuWaitHere() {
+    if (MultiplayerSharing::IsListener()) return;
     const uint32_t actorFormId = g_dialecticControlTargetFormId;
     const std::string actorName = g_dialecticControlTargetName;
     g_dialecticControlTargetFormId = 0;
@@ -1262,6 +1265,7 @@ static void RequestChatHotkeyWaitHere() {
 }
 
 void RequestModeMenuOpen() {
+    if (MultiplayerSharing::IsListener()) return;
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
         Logger::LogInfo("GameLoop: Ignoring mode selector while a blocking menu is open");
@@ -1277,6 +1281,7 @@ void RequestModeMenuOpen() {
 }
 
 void RequestTextInputMenuOpen() {
+    if (MultiplayerSharing::IsListener()) return;
     static DWORD s_lastRequestTick = 0;
     const DWORD now = GetTickCount();
     const DWORD blockUntil = g_textInputMenuBlockUntilTick.load();
@@ -1335,6 +1340,7 @@ void RequestTextInputMenuOpen() {
 }
 
 void RequestLLMModelMenuOpen() {
+    if (MultiplayerSharing::IsListener()) return;
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
         Logger::LogInfo("GameLoop: Ignoring LLM model selector while a blocking menu is open");
@@ -1348,6 +1354,7 @@ void RequestLLMModelMenuOpen() {
 }
 
 void RequestDynamicProfileMenuOpen() {
+    if (MultiplayerSharing::IsListener()) return;
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
         Logger::LogInfo("GameLoop: Ignoring dynamic profile selector while a blocking menu is open");
@@ -3938,6 +3945,7 @@ void SubmitCapturedDialogue(const std::string& source,
 }
 
 static void HandleOpenMicVoiceDetected() {
+    if (MultiplayerSharing::IsListener()) return;
     if (!Config::openMicEnabled || Config::openMicMuted) {
         return;
     }
@@ -3967,7 +3975,7 @@ static void UpdateOpenMicMonitoringState() {
         Config::openMicMuted);
 
     const bool shouldMonitor =
-        Config::openMicEnabled &&
+        !MultiplayerSharing::IsListener() && Config::openMicEnabled &&
         !Config::openMicMuted &&
         g_gameState.isInGame &&
         !g_gameState.isLoading &&
@@ -4204,6 +4212,7 @@ void Initialize() {
 
 void Shutdown() {
     Log("GameLoop: Shutting down...");
+    MultiplayerSharing::Shutdown();
     
     VoiceRecorder::Shutdown();
     TradeManager::Shutdown();
@@ -4225,12 +4234,12 @@ void Update(float deltaTime) {
 
     // Update subsystems
     ProfileUpdateSubsystem("ProcessNativeRuntimeEvents", []() { ProcessNativeRuntimeEvents(); });
-    ProfileUpdateSubsystem("ResponseQueueFNV::DispatchPending", []() {
-        ResponseQueueFNV::DispatchPending(64);
-    });
-    ProfileUpdateSubsystem("InputManager::Update", []() { InputManager::Update(); });
-    ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
-    ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
+    if (!MultiplayerSharing::IsListener()) {
+        ProfileUpdateSubsystem("ResponseQueueFNV::DispatchPending", []() { ResponseQueueFNV::DispatchPending(64); });
+        ProfileUpdateSubsystem("InputManager::Update", []() { InputManager::Update(); });
+        ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
+        ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
+    }
     ProfileUpdateSubsystem("RefreshGameState", []() { RefreshGameState(); });
     if (g_gameState.isInGame && !g_gameState.isLoading) {
         PlaythroughNotices::Notice notice;
@@ -4241,6 +4250,13 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
     }
     ProfileUpdateSubsystem("ApplyPendingRuntimeConfigReload", []() { ApplyPendingRuntimeConfigReload(); });
+    MultiplayerSharing::Update();
+    if (MultiplayerSharing::IsListener()) {
+        g_voiceInputActive = false;
+        VoiceRecorder::StopRecording();
+        VoiceRecorder::StopOpenMicMonitoring();
+        return; // Only passive sharing runs here; no AI, game-state uploads, or actor updates.
+    }
     ProfileUpdateSubsystem("MaybeSendLoadedSaveInit", []() { MaybeSendLoadedSaveInit(); });
     ProfileUpdateSubsystem("WorldContextFNV::Update", []() { WorldContextFNV::Update(); });
     ProfileUpdateSubsystem("NearbyActorsFNV::Update", []() { NearbyActorsFNV::Update(); });
@@ -4451,6 +4467,7 @@ static bool EnforceCombatDialogueGate(uint32_t actorFormId, const char* source, 
 }
 
 void HaltAIActionsNow() {
+    if (MultiplayerSharing::IsListener()) { MultiplayerSharing::Reset(); return; }
     Log("GameLoop: Halt AI Actions requested");
     Console::Print("[DIALECTIC] Halting AI actions");
 
@@ -4518,6 +4535,7 @@ static bool BeginConversationWithActor(uint32_t actorFormId,
 }
 
 bool StartConversationForActor(uint32_t actorFormId, const std::string& actorName, bool notify) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::GameState gameState;
     RuntimeSnapshot::ActorState actor;
     if (!RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
@@ -4537,6 +4555,7 @@ bool StartConversationForActor(uint32_t actorFormId, const std::string& actorNam
 }
 
 bool StartConversation() {
+    if (MultiplayerSharing::IsListener()) return false;
     const auto& target = TargetManager::GetCurrentTarget();
     if (!target.isActor || !target.isAlive) {
         Log("GameLoop: Cannot start conversation - invalid target");
@@ -4622,6 +4641,7 @@ static std::string BuildExternalSpeechPayload(const RuntimeSnapshot::ActorState&
 }
 
 bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::ActorState actor;
     RuntimeSnapshot::GameState gameState;
     const std::string exactText = TrimInput(text);
@@ -4635,6 +4655,7 @@ bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text) {
 }
 
 bool RequestExternalComment(uint32_t actorFormId) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::ActorState actor;
     RuntimeSnapshot::GameState gameState;
     if (!ResolveExternalEventActor(actorFormId, actor, gameState) ||
@@ -4648,6 +4669,7 @@ bool RequestExternalComment(uint32_t actorFormId) {
 }
 
 bool RequestExternalReaction(uint32_t actorFormId, const std::string& instruction) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::ActorState actor;
     RuntimeSnapshot::GameState gameState;
     const std::string cleanInstruction = TrimInput(instruction);
@@ -4665,6 +4687,7 @@ bool RequestExternalReaction(uint32_t actorFormId, const std::string& instructio
 }
 
 bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::ActorState actor;
     RuntimeSnapshot::GameState gameState;
     const std::string cleanQuestion = TrimInput(question);
@@ -4688,6 +4711,7 @@ bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question) 
 }
 
 bool RequestTextInputMenuOpenForActor(uint32_t actorFormId, const std::string& actorName) {
+    if (MultiplayerSharing::IsListener()) return false;
     RuntimeSnapshot::ActorState actor;
     RuntimeSnapshot::GameState gameState;
     if (!ResolveExternalEventActor(actorFormId, actor, gameState)) {
@@ -4764,6 +4788,7 @@ void StopConversation() {
 }
 
 void SendPlayerMessage(const std::string& message) {
+    if (MultiplayerSharing::IsListener()) return;
     if (!g_conversationActive) {
         Log("GameLoop: Cannot send message - no active conversation");
     Console::Print("[DIALECTIC] No active conversation");
@@ -4909,10 +4934,12 @@ uint32_t GetConversationPartnerFormId() {
 }
 
 void StartVoiceInput() {
+    if (MultiplayerSharing::IsListener()) return;
     StartVoiceInputInternal(false);
 }
 
 static void StartVoiceInputInternal(bool openMicTriggered) {
+    if (MultiplayerSharing::IsListener()) return;
     if (g_voiceInputActive) return;
     if (!g_conversationActive) {
         Log("GameLoop: Voice input requested without active conversation");
