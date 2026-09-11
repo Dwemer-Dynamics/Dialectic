@@ -4489,8 +4489,14 @@ static uint32_t g_faceTargetTargetFormId = 0;
             (state.isPaused || GameLoop::IsTextInputMenuActiveOrRecentlyClosed());
     }
 
+    static std::string g_sharedPlaybackUtterance;
+
     // Functions required by GameLoop
     void StopSharedDialogue() {
+        if (!g_sharedPlaybackUtterance.empty()) {
+            MultiplayerSharing::LogPlayback(g_sharedPlaybackUtterance, "playback_stopped");
+            g_sharedPlaybackUtterance.clear();
+        }
         if (AudioManager::IsPlaying()) AudioManager::Stop();
         if (g_subtitleActive) ClearSubtitleBridge();
     }
@@ -4502,12 +4508,18 @@ static uint32_t g_faceTargetTargetFormId = 0;
         if (!ParseWavInfo(audio, info, true) || info.durationSeconds > 120.0
             || info.channels > 2 || info.sampleRate > 192000
             || (info.bitsPerSample != 8 && info.bitsPerSample != 16 && info.bitsPerSample != 24 && info.bitsPerSample != 32)
-            || info.blockAlign != info.channels * info.bitsPerSample / 8) return;
+            || info.blockAlign != info.channels * info.bitsPerSample / 8) {
+            MultiplayerSharing::LogPlayback(utterance, "playback_rejected_wav", audio.size()); return;
+        }
         StopSharedDialogue();
-        if (!AudioManager::LoadWAV(audio.data(), static_cast<unsigned long>(audio.size()))) return;
+        if (!AudioManager::LoadWAV(audio.data(), static_cast<unsigned long>(audio.size()))) {
+            MultiplayerSharing::LogPlayback(utterance, "playback_load_failed", audio.size()); return;
+        }
         AudioManager::Set3DPlaybackEnabled(false);
         AudioManager::SetVolume(GetBaseVoiceVolume());
-        if (!AudioManager::Play()) return;
+        if (!AudioManager::Play()) { MultiplayerSharing::LogPlayback(utterance, "playback_start_failed", audio.size()); return; }
+        g_sharedPlaybackUtterance = utterance;
+        MultiplayerSharing::LogPlayback(utterance, "playback_started", audio.size());
         ScriptLine line;
         line.actor = speaker;
         line.displayName = speaker;
@@ -4518,6 +4530,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void UpdateSharedDialogue(bool remotePaused) {
         if (!AudioManager::IsPlaying()) {
+            if (!g_sharedPlaybackUtterance.empty()) {
+                MultiplayerSharing::LogPlayback(g_sharedPlaybackUtterance, "playback_finished");
+                g_sharedPlaybackUtterance.clear();
+            }
             if (g_subtitleActive) ClearSubtitleBridge();
             return;
         }

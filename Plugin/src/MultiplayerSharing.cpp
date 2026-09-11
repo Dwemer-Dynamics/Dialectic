@@ -6,6 +6,7 @@
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
 #include "IngameNotifier.h"
+#include "Logger.h"
 #include "RuntimeGeneration.h"
 #include "SpeakManager.h"
 #include "TaskManager.h"
@@ -42,19 +43,26 @@ struct Line {
     std::vector<uint8_t> audio;
     Clock::time_point received = Clock::now();
 };
+struct RequestDiagnostics {
+    unsigned long status = 0, error = 0;
+    const char* stage = "not_started";
+};
 struct Exchange {
     std::atomic_bool done{false};
     bool ok = false, reset = false, alive = false;
     long long cursor = -1;
-    std::string epoch, control;
+    std::string epoch, control, operation, utterance;
+    RequestDiagnostics diagnostic;
+    long long elapsedMs = 0;
     Line line;
 };
-struct Command { std::string op, fields; std::vector<uint8_t> audio; };
+struct Command { std::string op, fields; std::vector<uint8_t> audio; std::string utterance; };
 struct SetupResult {
     std::atomic_bool done{false};
     Settings settings;
     std::string code;
     unsigned long status = 0;
+    RequestDiagnostics diagnostic;
 };
 std::atomic<int> g_publicMode{0};
 Settings g_publicSettings;
@@ -74,12 +82,34 @@ bool g_connected = false, g_running = false, g_remotePaused = false, g_waitingFo
 int g_failures = 0;
 Clock::time_point g_next{}, g_lastContact{};
 
+// Stable truncated SHA-256 lets paired logs correlate events without recording raw identifiers.
+std::string DiagnosticId(const std::string& value) {
+    if (value.empty()) return "-";
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    unsigned char digest[32]{};
+    bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0;
+    if (ok) ok = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) == 0;
+    if (ok) ok = BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(value.data())), static_cast<ULONG>(value.size()), 0) == 0;
+    if (ok) ok = BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0;
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (!ok) return "unavailable";
+    std::string id;
+    for (int i = 0; i < 8; ++i) { id += "0123456789abcdef"[digest[i] >> 4]; id += "0123456789abcdef"[digest[i] & 15]; }
+    return id;
+}
+
 std::string Quote(const std::string& value) { return "\"" + HTTPManager::EscapeJson(value) + "\""; }
 
 // Reject credential-bearing URLs and redirects; HTTPS works through a narrowly exposed relay.
 std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
                             size_t limit, const TaskManager::CancellationToken& token,
-                            const std::vector<uint8_t>& audio = {}, unsigned long* responseStatus = nullptr) {
+                            const std::vector<uint8_t>& audio = {}, unsigned long* responseStatus = nullptr, RequestDiagnostics* diagnostics = nullptr) {
+    RequestDiagnostics local;
+    auto& diagnostic = diagnostics ? *diagnostics : local;
+    diagnostic = {};
+    diagnostic.stage = "invalid_settings";
     std::vector<uint8_t> bytes;
     if (token.IsCancellationRequested() || settings.url.size() > 2048 || settings.key.size() < 32
         || settings.key.size() > 256 || settings.key.find_first_of("\r\n") != std::string::npos) return bytes;
@@ -88,6 +118,7 @@ std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
     parts.dwStructSize = sizeof(parts);
     parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength =
         parts.dwUserNameLength = parts.dwPasswordLength = static_cast<DWORD>(-1);
+    diagnostic.stage = "invalid_url";
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.dwUserNameLength || parts.dwPasswordLength
         || parts.dwExtraInfoLength || (parts.nScheme != INTERNET_SCHEME_HTTP && parts.nScheme != INTERNET_SCHEME_HTTPS)) return bytes;
     std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
@@ -99,16 +130,17 @@ std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
             && a <= 255 && b <= 255 && c <= 255 && d <= 255;
         const bool local = host == L"localhost" || host == L"[::1]" || (ipv4 &&
             (a == 127 || a == 10 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)));
-        if (!local) return bytes; // Internet endpoints must protect the sharing key with HTTPS.
+        if (!local) { diagnostic.stage = "https_required"; return bytes; } // Internet endpoints must protect the sharing key with HTTPS.
     }
     HINTERNET session = WinHttpOpen(L"DialecticSharing/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) return bytes;
+    if (!session) { diagnostic.stage = "open_session"; diagnostic.error = GetLastError(); return bytes; }
     WinHttpSetTimeouts(session, 2000, 2000, 3000, 3000);
     HINTERNET connection = WinHttpConnect(session, host.c_str(), parts.nPort, 0);
     HINTERNET request = connection ? WinHttpOpenRequest(connection, L"POST", path.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
         parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) : nullptr;
+    if (!request) { diagnostic.stage = "open_request"; diagnostic.error = GetLastError(); }
     if (request) {
         auto handle = std::make_shared<std::atomic<HINTERNET>>(request);
         token.SetInterrupt([handle]() { if (auto h = handle->exchange(nullptr)) WinHttpCloseHandle(h); });
@@ -128,26 +160,29 @@ std::vector<uint8_t> Request(const Settings& settings, const std::string& body,
             payload.data(), static_cast<DWORD>(payload.size()), static_cast<DWORD>(payload.size()), 0)
             && WinHttpReceiveResponse(request, nullptr)) {
             DWORD status = 0, size = sizeof(status);
-            WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
+            if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX)) diagnostic.error = GetLastError();
+            diagnostic.status = status;
+            diagnostic.stage = status == 200 ? "ok" : "http_status";
             if (responseStatus) *responseStatus = status;
             if (status == 200) {
                 uint8_t buffer[8192];
                 DWORD count = 0;
                 while (!token.IsCancellationRequested()) {
-                    if (!WinHttpReadData(request, buffer, sizeof(buffer), &count)) { bytes.clear(); break; }
+                    if (!WinHttpReadData(request, buffer, sizeof(buffer), &count)) { diagnostic.stage = "read"; diagnostic.error = GetLastError(); bytes.clear(); break; }
                     if (!count) break;
-                    if (bytes.size() + count > limit) { bytes.clear(); break; }
+                    if (bytes.size() + count > limit) { diagnostic.stage = "response_limit"; bytes.clear(); break; }
                     bytes.insert(bytes.end(), buffer, buffer + count);
                 }
             }
         }
+        else { diagnostic.stage = "send_receive"; diagnostic.error = GetLastError(); }
         token.ClearInterrupt();
         if (auto h = handle->exchange(nullptr)) WinHttpCloseHandle(h);
     }
     if (connection) WinHttpCloseHandle(connection);
     WinHttpCloseHandle(session);
-    if (token.IsCancellationRequested()) bytes.clear();
+    if (token.IsCancellationRequested()) { diagnostic.stage = "cancelled"; bytes.clear(); }
     return bytes;
 }
 
@@ -193,6 +228,12 @@ void SetConnected(bool connected) {
 
 bool IsListener() { return g_publicMode.load() ? g_publicMode.load() == 2 : Config::multiplayerMode.load() == 2; }
 bool IsHost() { return g_publicMode.load() ? g_publicMode.load() == 1 : Config::multiplayerMode.load() == 1; }
+
+void LogPlayback(const std::string& utterance, const char* stage, size_t bytes) {
+    Logger::LogInfo("Sharing: role=%s session=%s line=%s stage=%s bytes=%zu",
+        IsListener() ? "listener" : "host", DiagnosticId(g_settings.session).c_str(),
+        DiagnosticId(utterance).c_str(), stage, bytes);
+}
 
 void SetupAction(int action) {
     if (action < 1 || action > 6) return;
@@ -275,6 +316,8 @@ static void UpdateSetup() {
     if (g_setup && g_setup->done.load()) {
         auto result = std::move(g_setup);
         if (result->code.empty()) {
+            Logger::LogWarning("Sharing: setup_failed role=%d stage=%s http=%lu winhttp=%lu",
+                result->settings.mode, result->diagnostic.stage, result->diagnostic.status, result->diagnostic.error);
             std::string message = "Could not reach the public relay. Check your connection and try again.";
             if (result->status == 403) message = "Join code is invalid or expired. Ask the host for a new code.";
             if (result->status == 429) message = "Too many connection attempts. Wait a minute and try again.";
@@ -284,6 +327,7 @@ static void UpdateSetup() {
             g_publicSettings = result->settings;
             g_publicMode.store(result->settings.mode);
             g_joinCode = result->code;
+            Logger::LogInfo("Sharing: setup_ready role=%d session=%s", result->settings.mode, DiagnosticId(result->settings.session).c_str());
             if (result->settings.mode == 1) {
                 IngameNotifier::Notify("Session created. Use Copy join code to invite friends.");
             } else IngameNotifier::Notify("Joined session. Waiting for shared speech.");
@@ -349,7 +393,9 @@ static void UpdateSetup() {
     options.timeout = std::chrono::seconds(10);
     IngameNotifier::Notify("Connecting to dialogue sharing...");
     g_setupTask = TaskManager::Submit(options, [result, body](const TaskManager::CancellationToken& token) {
-        const auto bytes = Request(result->settings, body, 1024, token, {}, &result->status);
+        const auto bytes = Request(result->settings, body, 1024, token, {}, &result->status, &result->diagnostic);
+        if (bytes.empty()) return;
+        result->diagnostic.stage = "invalid_setup_reply";
         const auto fields = Fields(std::string(bytes.begin(), bytes.end()));
         if (fields.size() != 4 || fields[0] != "dialectic.session.v1" || fields[1].size() != 32
             || fields[2].size() != 64 || fields[3].size() != 12
@@ -395,13 +441,20 @@ void Control(const char* operation) {
 
 void Publish(const std::string& speaker, const std::string& text,
              const std::string& cacheKey, const std::string& utteranceId, const std::vector<uint8_t>& audio) {
-    if (g_settings.mode != 1 || !g_running || !g_connected || g_commands.size() >= 32) return;
+    if (g_settings.mode != 1) return;
+    if (!g_running || !g_connected || g_commands.size() >= 32) {
+        LogPlayback(utteranceId, g_commands.size() >= 32 ? "publish_skipped_queue_full" : "publish_skipped_disconnected", audio.size());
+        return;
+    }
     if (speaker.empty() || speaker.size() > 160 || text.empty() || text.size() > 4096
-        || cacheKey.size() != 32 || cacheKey.find_first_not_of("0123456789abcdef") != std::string::npos) return;
+        || cacheKey.size() != 32 || cacheKey.find_first_not_of("0123456789abcdef") != std::string::npos) {
+        LogPlayback(utteranceId, "publish_skipped_metadata", audio.size()); return;
+    }
     if (g_settings.hosted) {
         size_t queued = audio.size();
         for (const auto& command : g_commands) queued += command.audio.size();
         if (audio.empty() || audio.size() > 4194304 || queued > 8388608) {
+            LogPlayback(utteranceId, "upload_skipped_limit", audio.size());
             IngameNotifier::Notify("Shared speech skipped: audio limit reached", IngameNotifier::Level::Warning); return;
         }
     }
@@ -409,7 +462,8 @@ void Publish(const std::string& speaker, const std::string& text,
     const std::string id = utteranceId.empty() ? g_owner + "_" + std::to_string(g_serial + g_commands.size() + 1) : utteranceId;
     g_commands.push_back({"publish", ",\"speaker\":" + Quote(speaker) + ",\"text\":" + Quote(text)
         + ",\"cache\":" + Quote(cacheKey) + ",\"utterance\":" + Quote(id),
-        g_settings.hosted ? audio : std::vector<uint8_t>{}});
+        g_settings.hosted ? audio : std::vector<uint8_t>{}, id});
+    LogPlayback(id, "publish_queued", audio.size());
     g_next = {};
 }
 
@@ -423,6 +477,8 @@ void Update() {
     const auto now = Clock::now();
     if (!(settings == g_settings) || running != g_running || g_runtime != RuntimeGeneration::Current()) {
         const bool changedMode = settings.mode != g_settings.mode;
+        Logger::LogInfo("Sharing: transition mode=%d->%d hosted=%d running=%d generation=%llu session=%s",
+            g_settings.mode, settings.mode, settings.hosted, running, RuntimeGeneration::Current(), DiagnosticId(settings.session).c_str());
         if (g_settings.mode == 1 && g_running && (!running || !(settings == g_settings))) {
             const Settings previous = g_settings;
             const std::string body = "{\"op\":\"close\",\"session\":" + Quote(previous.session)
@@ -469,6 +525,13 @@ void Update() {
     if (g_exchange && g_exchange->done.load()) {
         auto result = std::move(g_exchange);
         if (result->ok) {
+            if (g_failures) Logger::LogInfo("Sharing: recovered session=%s failures=%d", DiagnosticId(settings.session).c_str(), g_failures);
+            if (settings.mode == 1 && result->operation != "heartbeat")
+                Logger::LogInfo("Sharing: role=host session=%s line=%s op=%s accepted=1 elapsed_ms=%lld",
+                    DiagnosticId(settings.session).c_str(), DiagnosticId(result->utterance).c_str(), result->operation.c_str(), result->elapsedMs);
+            if (settings.mode == 2 && (result->reset || !result->control.empty()) && (g_connected || result->alive))
+                Logger::LogInfo("Sharing: role=listener session=%s epoch=%s cursor=%lld reset=%d control=%s",
+                    DiagnosticId(settings.session).c_str(), DiagnosticId(result->epoch).c_str(), result->cursor, result->reset, result->control.c_str());
             g_lastContact = now;
             g_failures = 0;
             if (settings.mode == 2 && !result->alive && !g_connected && !g_waitingForHost)
@@ -485,12 +548,18 @@ void Update() {
                 if (result->control == "resume") g_remotePaused = false;
                 g_cursor = result->cursor;
                 g_epoch = result->epoch;
-                if (!result->line.audio.empty() && g_lines.size() < 2) g_lines.push_back(std::move(result->line));
+                if (!result->line.audio.empty()) {
+                    LogPlayback(result->line.utterance, g_lines.size() < 2 ? "download_queued" : "download_dropped_queue_full", result->line.audio.size());
+                    if (g_lines.size() < 2) g_lines.push_back(std::move(result->line));
+                }
             }
             int delayMs = 500;
             if (settings.mode == 1) delayMs = g_commands.empty() ? 3000 : 0;
             g_next = now + std::chrono::milliseconds(delayMs);
         } else {
+            if (g_failures % 8 == 0) Logger::LogWarning("Sharing: request_failed role=%d session=%s op=%s line=%s stage=%s http=%lu winhttp=%lu failures=%d elapsed_ms=%lld",
+                settings.mode, DiagnosticId(settings.session).c_str(), result->operation.c_str(), DiagnosticId(result->utterance).c_str(),
+                result->diagnostic.stage, result->diagnostic.status, result->diagnostic.error, g_failures + 1, result->elapsedMs);
             if (!g_failures) IngameNotifier::Notify("Sharing connection lost. Disconnect and join again if it does not recover.",
                 IngameNotifier::Level::Warning);
             SetConnected(false);
@@ -504,7 +573,10 @@ void Update() {
     }
     if (settings.mode == 2) {
         SpeakManager::UpdateSharedDialogue(g_remotePaused);
-        while (!g_lines.empty() && now - g_lines.front().received > std::chrono::seconds(30)) g_lines.pop_front();
+        while (!g_lines.empty() && now - g_lines.front().received > std::chrono::seconds(30)) {
+            LogPlayback(g_lines.front().utterance, "download_dropped_stale", g_lines.front().audio.size());
+            g_lines.pop_front();
+        }
         if (!game.isPaused && !game.isInMenu && !g_remotePaused && !AudioManager::IsPlaying() && !g_lines.empty()) {
             auto line = std::move(g_lines.front());
             g_lines.pop_front();
@@ -525,6 +597,7 @@ void Update() {
     else body += ",\"cursor\":" + std::to_string(g_cursor) + ",\"epoch\":" + Quote(g_epoch);
     body += "}";
     auto result = std::make_shared<Exchange>();
+    result->operation = command.op; result->utterance = command.utterance;
     g_exchange = result;
     TaskManager::Options options;
     options.type = "multiplayer";
@@ -532,7 +605,11 @@ void Update() {
     options.generation = RuntimeGeneration::Current();
     options.timeout = std::chrono::seconds(10);
     g_task = TaskManager::Submit(options, [settings, body, prefix, result, audio = std::move(command.audio)](const TaskManager::CancellationToken& token) {
-        const auto bytes = Request(settings, body, 65536, token, audio);
+        const auto started = Clock::now();
+        const auto bytes = Request(settings, body, 65536, token, audio, nullptr, &result->diagnostic);
+        result->elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+        if (bytes.empty()) return;
+        result->diagnostic.stage = "invalid_reply";
         const std::string reply(bytes.begin(), bytes.end());
         if (settings.mode == 1) { result->ok = reply == "ok"; return; }
         std::istringstream stream(reply);
@@ -559,7 +636,11 @@ void Update() {
                 if (result->line.speaker.size() > 160 || result->line.text.size() > 4096) return;
                 const auto audioBody = prefix + ",\"op\":\"audio\",\"epoch\":" + Quote(result->epoch)
                     + ",\"sequence\":" + std::to_string(sequence) + "}";
-                result->line.audio = Request(settings, audioBody, 16777216, token);
+                RequestDiagnostics audioDiagnostic;
+                result->line.audio = Request(settings, audioBody, 16777216, token, {}, nullptr, &audioDiagnostic);
+                Logger::LogInfo("Sharing: role=listener session=%s line=%s cursor=%lld stage=download_result bytes=%zu http=%lu winhttp=%lu outcome=%s",
+                    DiagnosticId(settings.session).c_str(), DiagnosticId(result->line.utterance).c_str(), sequence,
+                    result->line.audio.size(), audioDiagnostic.status, audioDiagnostic.error, audioDiagnostic.stage);
                 result->line.received = Clock::now();
             }
         }

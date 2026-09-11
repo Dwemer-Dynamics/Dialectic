@@ -49,3 +49,24 @@ The original self-hosted INI mode remains supported for existing users. It uses
 The network/state machine is validated in isolated native probes. Actual MCM rendering,
 xNVSE callback execution, XAudio2 playback and two-PC NVMP sessions still require in-game
 verification. No public service has been deployed by these PRs.
+
+## Debugging a shared session
+
+Collect both players' debugging bundles immediately after a problem, labelled Host and
+Listener, plus the approximate time. The launcher collector includes `dialectic.log`
+when found; attach the full file if the bundle's recent-log excerpt misses the incident.
+The public service's PHP log must be collected separately by its operator.
+
+Search for `Sharing:` and match `session=` and `line=` between the two logs. These are
+truncated SHA-256 diagnostic references, not access tokens. A normal delivery records
+`publish_queued`, host `op=publish accepted=1`, listener `download_result` and
+`download_queued`, then `playback_started` and `playback_finished`. Rejected WAVs,
+audio load/start failures, queue limits, stale audio and interruptions have distinct
+stage names. Transport failures include HTTP status, Windows error code and request
+duration; invalid relay replies are distinguished from network failures.
+
+Normal successful idle polling/heartbeats are silent. Repeated main-request failures
+are sampled every eighth failure (about once a minute once backoff reaches eight
+seconds); recovery and session transitions are logged. Off adds no recurring log work.
+These diagnostics never record keys, join codes, URLs, dialogue text or raw session/
+utterance IDs. Existing ordinary Dialectic logs may still contain conversation content.
