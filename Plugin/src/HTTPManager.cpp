@@ -1,4 +1,5 @@
 #include "HTTPManager.h"
+#include "PlaythroughNotices.h"
 #include "ActorPositionResolverFNV.h"
 #include "Config.h"
 #include "Misc.h"
@@ -1111,6 +1112,20 @@ namespace HTTPManager {
                 return "";
             }
 
+            wchar_t saveHeader[96] = {}; DWORD saveHeaderBytes = sizeof(saveHeader);
+            if (WinHttpQueryHeaders(hRequest,WINHTTP_QUERY_CUSTOM,L"X-Playthrough-Save",saveHeader,&saveHeaderBytes,WINHTTP_NO_HEADER_INDEX)) {
+                const std::wstring value(saveHeader);
+                std::string ascii;
+                for (wchar_t c : value) { if (c > 127) { ascii.clear(); break; } ascii.push_back(static_cast<char>(c)); }
+                PlaythroughNotices::Accept(ascii);
+            }
+            DWORD responseStatus = 0; DWORD responseStatusBytes = sizeof(responseStatus);
+            WinHttpQueryHeaders(hRequest,WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,
+                                &responseStatus,&responseStatusBytes,WINHTTP_NO_HEADER_INDEX);
+            if (responseStatus >= 400) {
+                closeRequest(); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+                return "";
+            }
             std::string responseBody;
             std::string lineBuffer;
             DWORD bytesAvailable = 0;

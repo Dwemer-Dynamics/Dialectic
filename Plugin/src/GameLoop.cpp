@@ -1,6 +1,8 @@
 // GameLoop.cpp - Main game loop integration for Dialectic
 
 #include "GameLoop.h"
+#include "PlaythroughNotices.h"
+#include "IngameNotifier.h"
 #include "ActionManager.h"
 #include "InputManager.h"
 #include "TargetManager.h"
@@ -4230,6 +4232,11 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("UpdateOpenMicMonitoringState", []() { UpdateOpenMicMonitoringState(); });
     ProfileUpdateSubsystem("TargetManager::Update", []() { TargetManager::Update(); });
     ProfileUpdateSubsystem("RefreshGameState", []() { RefreshGameState(); });
+    if (g_gameState.isInGame && !g_gameState.isLoading) {
+        PlaythroughNotices::Notice notice;
+        if (PlaythroughNotices::Take(notice)) IngameNotifier::Notify("[DIALECTIC] " + notice.text,
+            notice.error ? IngameNotifier::Level::Error : IngameNotifier::Level::Info);
+    }
     if (ShouldPoll(g_lastRuntimeConfigFallbackPoll, std::chrono::seconds(1))) {
         ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
     }
