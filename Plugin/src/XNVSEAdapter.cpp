@@ -3279,6 +3279,8 @@ bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
 
     state.valid = true;
     state.hardcoreEnabled = player->isHardcore;
+    // The player's actor-value owner supplies the current level, including level-ups.
+    state.playerLevel = static_cast<int>(player->avOwner.Fn_0A());
     state.dehydration = readNeed(eActorVal_Dehydration);
     state.hunger = readNeed(eActorVal_Hunger);
     state.sleepDeprivation = readNeed(eActorVal_Sleepdeprevation);
