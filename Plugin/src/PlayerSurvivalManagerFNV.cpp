@@ -41,6 +41,7 @@ int NeedStage(float value) {
 std::string BuildHash(const XNVSEAdapter::NativePlayerSurvivalState& state) {
     std::ostringstream output;
     output << (state.hardcoreEnabled ? 1 : 0) << '|'
+           << state.playerLevel << '|'
            << std::fixed << std::setprecision(1)
            << state.hunger << '|'
            << state.dehydration << '|'
@@ -64,6 +65,7 @@ std::string BuildPayload(const XNVSEAdapter::NativePlayerSurvivalState& state) {
     json << "\"timestamp\":" << Misc::GetCurrentTimeMillis() << ',';
     json << "\"gamets\":" << (gameTimestamp.empty() ? "0" : gameTimestamp) << ',';
     json << "\"hardcore_enabled\":" << (state.hardcoreEnabled ? "true" : "false") << ',';
+    if (state.playerLevel > 0) json << "\"player_level\":" << state.playerLevel << ',';
     json << "\"needs\":{";
     json << "\"hunger\":{\"value\":" << state.hunger
          << ",\"stage\":" << NeedStage(state.hunger) << "},";

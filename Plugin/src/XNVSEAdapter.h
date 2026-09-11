@@ -90,6 +90,7 @@ struct NativeRadioState {
 struct NativePlayerSurvivalState {
     bool valid{false};
     bool hardcoreEnabled{false};
+    int playerLevel{0};
     float hunger{0.0f};
     float dehydration{0.0f};
     float sleepDeprivation{0.0f};
