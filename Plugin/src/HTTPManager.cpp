@@ -1,3 +1,4 @@
+#include "MultiplayerSharing.h"
 #include "HTTPManager.h"
 #include "ActorPositionResolverFNV.h"
 #include "Config.h"
@@ -83,7 +84,7 @@ namespace HTTPManager {
                                     std::function<void()> task,
                                     const std::string& key = "",
                                     bool priority = false) {
-        if (!task) return 0;
+        if (!task || MultiplayerSharing::IsListener()) return 0;
         const std::string taskType = "http:" + type;
         const std::string taskKey = "http:" + key;
         const bool turnScoped = type == "HTTPStream" || type == "HTTPStreamRechat" ||
@@ -984,6 +985,7 @@ namespace HTTPManager {
         bool streamResponse,
         const std::function<void(const std::string&)>& streamCallback,
         const std::function<bool()>& cancelRequested) {
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized) {
             Log("HTTPManager: Not initialized, cannot send JSON");
             return "";
@@ -1505,6 +1507,7 @@ namespace HTTPManager {
                                   const std::string& actorName,
                                   const std::string& originalName,
                                   const std::string& referenceText) {
+        if (MultiplayerSharing::IsListener()) return "";
         const TaskManager::CancellationToken* token = TaskManager::CurrentToken();
         if (token && token->IsCancellationRequested()) return "";
         if (!g_initialized) {
@@ -1734,6 +1737,7 @@ namespace HTTPManager {
     std::string UploadCSVFile(const std::string& csvData,
                               const std::string& filename,
                               const std::string& fileType) {
+        if (MultiplayerSharing::IsListener()) return "";
         const TaskManager::CancellationToken* token = TaskManager::CurrentToken();
         if (token && token->IsCancellationRequested()) return "";
         if (!g_initialized) {
@@ -1965,6 +1969,7 @@ namespace HTTPManager {
                                      const std::string& metadataJson,
                                      const std::string& fileName,
                                      const TaskManager::CancellationToken* token) {
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized || imageData.empty() || metadataJson.empty()) {
             Log("HTTPManager: PipVision upload rejected initialized=%d image_bytes=%zu metadata_bytes=%zu",
                 g_initialized.load() ? 1 : 0, imageData.size(), metadataJson.size());
@@ -2104,6 +2109,7 @@ namespace HTTPManager {
     // Upload audio WAV data to server for STT transcription
     std::string UploadAudioForSTT(const std::string& wavData,
                                   const TaskManager::CancellationToken* token) {
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized) {
             Log("HTTPManager: Not initialized, cannot upload audio");
             return "";

@@ -1,11 +1,16 @@
 #pragma once
 
 #include <string>
+#include <atomic>
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
 
 namespace Config {
+    // Optional dialogue relay. Mode is read by background request gates.
+    extern std::atomic<int> multiplayerMode;
+    extern std::string multiplayerUrl, multiplayerSession, multiplayerKey;
+
     // Server configuration
     extern std::string serverHost;
     extern int serverPort;

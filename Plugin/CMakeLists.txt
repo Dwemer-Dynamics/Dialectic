@@ -23,6 +23,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ActionManager.cpp
     src/ExternalEventAPI.cpp
     src/HTTPManager.cpp
+    src/MultiplayerSharing.cpp
     src/ResponseRouter.cpp
     src/ResponseQueueFNV.cpp
     src/AudioManager.cpp

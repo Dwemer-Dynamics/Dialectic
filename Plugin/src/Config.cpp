@@ -25,6 +25,9 @@ namespace Config {
     static constexpr int kDefaultServerPort = 8085;
     static constexpr const char* kDefaultServerPath = "DialecticServer/main.php";
 
+    std::atomic<int> multiplayerMode{0};
+    std::string multiplayerUrl, multiplayerSession, multiplayerKey;
+
     // Server configuration
     std::string serverHost = kDefaultServerHost;
     int serverPort = kDefaultServerPort;
@@ -638,6 +641,10 @@ namespace Config {
         Logger::LogDebug("Default INI path: %s", defaultIniPath.c_str());
         Logger::LogDebug("Custom INI path: %s", customIniPath.c_str());
 
+        int sharingMode = 0;
+        multiplayerUrl.clear();
+        multiplayerSession.clear();
+        multiplayerKey.clear();
         for (const std::string& iniPath : { defaultIniPath, customIniPath }) {
             std::ifstream iniFile(iniPath);
             if (!iniFile.is_open()) {
@@ -674,6 +681,16 @@ namespace Config {
                     else if (key == "Port") ParsePort(value, serverPort, iniPath.c_str());
                     else if (key == "Path") serverPath = value;
                     else if (key == "LocalSoundcachePath") localSoundcachePath = value;
+                }
+                else if (currentSection == "Multiplayer") {
+                    if (key == "Mode") {
+                        sharingMode = 0;
+                        if (value == "1") sharingMode = 1;
+                        else if (value == "2") sharingMode = 2;
+                    }
+                    else if (key == "URL") multiplayerUrl = value;
+                    else if (key == "Session") multiplayerSession = value;
+                    else if (key == "Key") multiplayerKey = value;
                 }
                 else if (currentSection == "Player") {
                 // Player name is detected from the live game reference, not loaded from INI.
@@ -872,7 +889,8 @@ namespace Config {
             iniFile.close();
         }
 
-        if (resolveConnection) {
+        multiplayerMode.store(sharingMode);
+        if (resolveConnection && sharingMode != 2) {
             ResolveServerConnection();
         }
 
@@ -969,6 +987,9 @@ namespace Config {
             iniFile << "\n";
         }
         
+        iniFile << "[Multiplayer]\nMode=" << multiplayerMode.load() << "\n";
+        iniFile << "URL=" << multiplayerUrl << "\nSession=" << multiplayerSession
+                << "\nKey=" << multiplayerKey << "\n\n";
         iniFile << "[Hotkeys]\n";
         iniFile << "; Hotkeys use Fallout DirectInput scan codes. Set them in MCM to enable.\n";
         iniFile << "TalkToNPC=" << hotkeyTalkToNPC << "\n";

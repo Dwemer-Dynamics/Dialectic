@@ -3,10 +3,16 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <cstddef>
 
 namespace SpeakManager {
+// Passive listener presentation never resolves actors or reports AI delivery. Game thread only.
+void PlaySharedDialogue(const std::string& speaker, const std::string& text,
+                        const std::string& utterance, const std::vector<uint8_t>& audio);
+void StopSharedDialogue();
+void UpdateSharedDialogue(bool remotePaused);
 struct QueueStatus {
     uint64_t audioGeneration = 0;
     int dialogueLinesQueued = 0;
