@@ -7,6 +7,8 @@
 #include <vector>
 
 namespace XNVSEAdapter {
+// Publish acknowledged state to the existing MCM Extender runtime value map.
+bool UpdateInteractionMenuState(int status);
 
 enum class LifecycleEvent {
     PostLoad,

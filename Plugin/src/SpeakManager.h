@@ -155,6 +155,9 @@ void StopSpeaking();
 // Hard kill all queued/active speech, including player sidecar lines.
 void HaltAllSpeech();
 
+// Discard future lines while letting current playback finish.
+void DiscardPendingInteraction();
+
 // Clear all queued/active speech for lifecycle resets without reporting a hard halt.
 void ClearAllSpeech(const char* reason);
 

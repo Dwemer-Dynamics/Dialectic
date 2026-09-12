@@ -1,3 +1,4 @@
+#include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "ActionManager.h"
 
@@ -53,6 +54,7 @@ constexpr auto kActorInspectionTimeout = std::chrono::milliseconds(850);
 std::atomic<uint64_t> g_requestCounter{0};
 
 struct ActionRequest {
+    uint64_t interactionEpoch = Interaction::Epoch();
     std::string action;
     std::string speaker;
     std::string target;
@@ -2797,6 +2799,7 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
     const std::uint64_t generation = request.runtimeGeneration;
     return GameThreadDispatcher::Enqueue("narrator_action", commandKey, generation,
         [request, sourceName]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             std::string failure;
             bool succeeded = false;
             if (request.action == "SpawnCaps") {
@@ -2834,6 +2837,7 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
 }
 
 bool ExecuteActionRequest(ActionRequest request, const char* source) {
+    if (!Interaction::IsCurrent(request.interactionEpoch)) return false;
     if (MultiplayerSharing::IsListener()) return false;
     if (request.runtimeGeneration == 0) {
         request.runtimeGeneration = RuntimeGeneration::Current();
@@ -2926,6 +2930,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
     const std::uint64_t generation = request.runtimeGeneration;
     return GameThreadDispatcher::Enqueue("action", commandKey, generation,
         [request]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             const int actionCode = ActionCodeForAction(request.action);
             if (actionCode == 2 || actionCode == 3) {
                 XNVSEAdapter::NativeTradeMenuInfo menuInfo;
@@ -3091,6 +3096,7 @@ bool RequestWaitHere(uint32_t actorFormId,
     const std::string commandKey = request.action + ":" + FormatRefId(actorFormId);
     const bool queued = GameThreadDispatcher::Enqueue("action", commandKey, request.runtimeGeneration,
         [request, sourceName = std::string(sourceName)]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             if (XNVSEAdapter::ExecuteNativePackageAction(
                     request.speakerFormId, request.targetFormId, 18)) {
                 TrackNativePackageAction(request);

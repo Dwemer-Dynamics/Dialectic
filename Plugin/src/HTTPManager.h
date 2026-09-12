@@ -53,6 +53,7 @@ namespace HTTPManager {
 
     // Drop queued/stale responses and invalidate in-flight response continuations.
     void CancelPendingResponses();
+    void DiscardInteractionResponses();
     int CancelTasksByType(const std::string& taskType);
     int CancelTasksByKey(const std::string& taskKey);
 

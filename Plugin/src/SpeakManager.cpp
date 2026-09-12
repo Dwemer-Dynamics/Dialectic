@@ -1,3 +1,4 @@
+#include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "SpeakManager.h"
 #include "AudioManager.h"
@@ -56,6 +57,7 @@ namespace SpeakManager {
 
     // Script line structure for dialogue queue
     struct ScriptLine {
+        uint64_t interactionEpoch = Interaction::Epoch();
         std::string text;
         std::string actor;
         std::string displayName;
@@ -3107,7 +3109,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         if (g_downloadsInProgress > 0) {
             --g_downloadsInProgress;
         }
-        if (generation != g_audioGeneration.load()) {
+        if (generation != g_audioGeneration.load() || !Interaction::IsCurrent(audio.line.interactionEpoch)) {
             return;
         }
         if (audio.ready && !audio.audioData.empty()) {
@@ -3132,7 +3134,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_downloadsInProgress > 0) {
                 --g_downloadsInProgress;
             }
-            if (generation == g_audioGeneration.load() && item.sequence != 0 &&
+            if (Interaction::IsCurrent(item.interactionEpoch) && generation == g_audioGeneration.load() && item.sequence != 0 &&
                 !item.text.empty() && !item.actor.empty()) {
                 PendingAudio fallback;
                 fallback.speaker = item.actor;
@@ -4661,7 +4663,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_isProcessing = true;
 
             std::string dropReason;
-            if (ShouldDropLineBeforePlayback(readyAudio.line, &dropReason)) {
+            if (!Interaction::IsCurrent(readyAudio.line.interactionEpoch) || ShouldDropLineBeforePlayback(readyAudio.line, &dropReason)) {
                 Log("SpeakManager: Dropping stale queued audio for speaker '%s' (0x%08X): %s",
                     readyAudio.line.actor.c_str(),
                     readyAudio.line.actorFormId,
@@ -4710,7 +4712,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 }
                 StartDialogueGuardBridge(g_currentPlaybackLine);
                 StartFaceTargetBridge(g_currentPlaybackLine);
-                if (AudioManager::Play()) {
+                if (Interaction::IsCurrent(readyAudio.line.interactionEpoch) && AudioManager::Play()) {
                     g_playbackStarted.fetch_add(1, std::memory_order_relaxed);
                     Log("SpeakManager: Audio playback started for speaker '%s'",
                         g_currentSpeaker.c_str());
@@ -4892,6 +4894,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                        uint32_t rechatTargetFormId,
                        const std::string& displayName,
                        bool directorScene) {
+        if (!Interaction::Allowed()) return;
         if (MultiplayerSharing::IsListener()) return;
         ScriptLine line;
         line.directorScene = directorScene;
@@ -4973,6 +4976,26 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_playerInputTtsGateUntil = std::chrono::steady_clock::now() + kPlayerInputTtsGateTimeout;
         Log("SpeakManager: Player TTS interrupt gate active for %lld ms",
             static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(kPlayerInputTtsGateTimeout).count()));
+    }
+
+    void DiscardPendingInteraction() {
+        TaskManager::CancelByType("audio_prepare");
+        std::vector<ScriptLine> discarded;
+        {
+            std::lock_guard<std::mutex> lock(g_queueMutex);
+            while (!g_scriptQueue.empty()) { discarded.push_back(g_scriptQueue.front()); g_scriptQueue.pop(); }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_pendingMutex);
+            for (const auto& pending : g_pendingAudioQueue) discarded.push_back(pending.line);
+            g_pendingAudioQueue.clear();
+            g_pendingLineSequences.clear();
+        }
+        for (const auto& line : discarded) SendAbortDeliveryStateIfTracked(line, "interaction_off");
+        ResetRechatChainState();
+        ClearDeferredRechatLaunch();
+        ClearPlayerInputTtsGate("interaction_off");
+        if (!g_currentPlaybackLineActive) ClearDialogueGuardBridge();
     }
 
     static void StopSpeakingInternal(bool preservePlayerLines, const char* reason) {

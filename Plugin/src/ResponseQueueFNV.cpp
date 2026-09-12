@@ -1,3 +1,4 @@
+#include "Interaction.h"
 // ResponseQueueFNV.cpp - CHIM-style parsed response queue for Dialectic JSON lines
 
 #include "MultiplayerSharing.h"
@@ -61,7 +62,7 @@ static std::string Preview(const std::string& value, std::size_t maxLen = 80) {
 } // namespace
 
 static bool IsCurrentGenerationLocked(uint64_t generation) {
-    return generation == 0 || g_activeGeneration == 0 || generation == g_activeGeneration;
+    return Interaction::Allowed() && (generation == 0 || g_activeGeneration == 0 || generation == g_activeGeneration);
 }
 
 void SetActiveGeneration(uint64_t generation, const char* source) {

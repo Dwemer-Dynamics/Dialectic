@@ -22,6 +22,7 @@ add_library(${PROJECT_NAME} SHARED
     src/Logger.cpp
     src/ActionManager.cpp
     src/ExternalEventAPI.cpp
+    src/Interaction.cpp
     src/HTTPManager.cpp
     src/MultiplayerSharing.cpp
     src/ResponseRouter.cpp

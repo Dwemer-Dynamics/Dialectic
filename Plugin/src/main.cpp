@@ -1,3 +1,4 @@
+#include "Interaction.h"
 // Dialectic - xNVSE plugin for AI-powered NPCs in Fallout New Vegas
 
 // The xNVSE SDK prefix must be the first platform include. Several SDK
@@ -1373,6 +1374,18 @@ static CommandInfo kCommandInfo_DialecticSetConfigFloat = {
     kParams_ConfigStringsValueFloat, Cmd_DialecticSetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
+static bool Cmd_DialecticToggleInteraction_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) InitializeSubsystems();
+    Interaction::Toggle();
+    *result = Interaction::Status();
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticToggleInteraction = {
+    "DialecticToggleInteraction", "", 0, "Toggles AI dialogue and actions while preserving game events.", 0, 0,
+    nullptr, Cmd_DialecticToggleInteraction_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticReloadConfig = {
     "DialecticReloadConfig", "", 0, "Reloads DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticReloadConfig_Execute, nullptr, nullptr, 0
@@ -1564,7 +1577,8 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticHandleHotkeyUp,
         &kCommandInfo_DialecticInitialize,
         &kCommandInfo_DialecticWaitHereTarget,
-        &kCommandInfo_DialecticSharingSetup
+        &kCommandInfo_DialecticSharingSetup,
+        &kCommandInfo_DialecticToggleInteraction
     };
 
     for (CommandInfo* command : commands) {
