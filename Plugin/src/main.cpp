@@ -64,11 +64,11 @@
 #include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "1.0.0"
+#define DIALECTIC_VERSION "1.1.0"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
-#define DIALECTIC_PLUGIN_INFO_VERSION 10000
+#define DIALECTIC_PLUGIN_INFO_VERSION 10100
 #endif
 
 // Global variables
