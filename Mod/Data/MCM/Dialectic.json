@@ -419,7 +419,7 @@
           "title": {
             "auxStringMap": "*DialecticInteraction",
             "key": "title",
-            "default": "Dialectic: Syncing..."
+            "default": "DIALECTIC: Syncing..."
           },
           "type": 5,
           "enable": {

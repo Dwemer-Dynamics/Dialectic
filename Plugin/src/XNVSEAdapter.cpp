@@ -2383,13 +2383,13 @@ begin function {iState}
     AuxStringMapSetFlt "*DialecticInteraction" "enabled" (iState == 1)
     AuxStringMapSetFlt "*DialecticInteraction" "available" (iState != 2)
     if eval iState == 1
-        AuxStringMapSetStr "*DialecticInteraction" "title" "Dialectic: On"
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: On"
     elseif eval iState == 0
-        AuxStringMapSetStr "*DialecticInteraction" "title" "Dialectic: Off"
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Off"
     elseif eval iState == 2
-        AuxStringMapSetStr "*DialecticInteraction" "title" "Dialectic: Syncing..."
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Syncing..."
     else
-        AuxStringMapSetStr "*DialecticInteraction" "title" "Dialectic is off. Retry"
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC is off. Retry"
     endif
 end
 )");
@@ -2419,8 +2419,8 @@ bool OpenNativeToolMenu(NativeToolMenu menu,
                 SanitizeMenuTitle(status ? status->llmMode.c_str() : nullptr, "STANDARD");
             const int interaction = Interaction::Status();
             const bool listener = MultiplayerSharing::IsListener();
-            const std::string toggleLabel = interaction == 1 ? "Dialectic: On" : interaction == 0 ? "Dialectic: Off"
-                : interaction == 2 ? "Dialectic: Syncing..." : "Dialectic is off. Retry";
+            const std::string toggleLabel = interaction == 1 ? "DIALECTIC: On" : interaction == 0 ? "DIALECTIC: Off"
+                : interaction == 2 ? "DIALECTIC: Syncing..." : "DIALECTIC is off. Retry";
             const std::string help = interaction == 1 ? "Choose a setting or NPC action:"
                 : "AI dialogue and actions are off. Game events are still recorded.";
             function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel + "|" + std::to_string(interaction) + (listener ? "L" : "H")];
