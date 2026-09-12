@@ -517,51 +517,6 @@
             "value": "Dialectic/MCMReload.gek"
           }
         },
-        "6": {
-          "title": "Dynamic Profiles",
-          "enable": 1,
-          "type": 0
-        },
-        "7": {
-          "title": "Dynamic Profile Timer",
-          "type": 2,
-          "enable": 1,
-          "suffix": " min",
-          "mouse": "Minutes between automatic dynamic profile refreshes.",
-          "vars": [
-            {
-              "configINI": "DynamicProfile:TimerMinutes",
-              "default": 30
-            }
-          ],
-          "scale": {
-            "valueDecimal": 0,
-            "valueIncrement": 5,
-            "valueMin": 5,
-            "valueMax": 240,
-            "suffix": " min"
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "8": {
-          "title": "Include Narrator",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Includes The Narrator in timer-triggered profile refreshes.",
-          "vars": [
-            {
-              "configINI": "DynamicProfile:IncludeNarrator",
-              "default": 1
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
         "9": {
           "title": "Bored Events",
           "enable": 1,
