@@ -126,10 +126,6 @@ static std::atomic<bool> g_voiceInputActive(false);
 static std::chrono::steady_clock::time_point g_lastUpdateTime;
 static float g_updateAccumulator = 0.0f;
 static const float UPDATE_INTERVAL = 0.1f;  // 100ms update rate
-static std::chrono::steady_clock::time_point g_lastDynamicProfileTimerUpdate;
-static std::chrono::steady_clock::time_point g_dynamicProfileBlockedAt;
-static std::chrono::steady_clock::time_point g_dynamicProfileResumeNotBefore;
-static std::chrono::steady_clock::time_point g_lastDynamicProfileLoadDelayAt;
 static std::chrono::steady_clock::time_point g_lastBoredEventTimerUpdate;
 static std::chrono::steady_clock::time_point g_lastBoredBlockingActivityTime;
 static std::chrono::steady_clock::time_point g_lastVoiceSampleToolPoll;
@@ -1470,7 +1466,7 @@ static void SendDynamicProfileBatchRequest(const std::vector<std::string>& npcNa
     }
     payload << "]"
             << "}";
-    HTTPManager::SendEvent("updateprofiles_batch_async", payload.str());
+    HTTPManager::SendEvent("updateprofiles_batch_async_manual", payload.str());
 }
 
 static void TriggerDynamicProfileForCurrentTarget() {
@@ -1562,98 +1558,7 @@ static void TriggerDynamicProfileForNarrator() {
     HTTPManager::SendEvent("updateprofile_narrator", "{\"schema\":\"dialectic.dynamic_profile.v1\",\"npc\":\"The Narrator\"}");
 }
 
-static void UpdateDynamicProfileTimer() {
-    if (Config::dynamicProfileTimerMinutes <= 0) {
-        return;
-    }
 
-    const auto now = std::chrono::steady_clock::now();
-    if (g_lastDynamicProfileTimerUpdate.time_since_epoch().count() == 0) {
-        g_lastDynamicProfileTimerUpdate = now;
-        Logger::LogInfo("GameLoop: Dynamic profile timer armed for %d minute(s)",
-            Config::dynamicProfileTimerMinutes);
-        return;
-    }
-
-    std::string blockReason;
-    if (!g_gameState.isInGame) {
-        blockReason = "not in game";
-    } else if (g_gameState.isLoading) {
-        blockReason = "loading";
-    } else if (g_gameState.isPaused) {
-        blockReason = "paused";
-    } else if (g_gameState.isInMenu || g_gameState.isInDialogue) {
-        blockReason = "menu open";
-    }
-
-    if (!blockReason.empty()) {
-        if (g_dynamicProfileBlockedAt.time_since_epoch().count() == 0) {
-            g_dynamicProfileBlockedAt = now;
-            Logger::LogDebug("GameLoop: Dynamic profile timer suspended (%s)", blockReason.c_str());
-        }
-        return;
-    }
-
-    if (g_dynamicProfileBlockedAt.time_since_epoch().count() != 0) {
-        const auto blockedDuration = now - g_dynamicProfileBlockedAt;
-        g_lastDynamicProfileTimerUpdate += blockedDuration;
-        Logger::LogDebug("GameLoop: Dynamic profile timer resumed after %lld ms",
-            static_cast<long long>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(blockedDuration).count()));
-        g_dynamicProfileBlockedAt = {};
-    }
-
-    if (g_dynamicProfileResumeNotBefore.time_since_epoch().count() != 0) {
-        if (now < g_dynamicProfileResumeNotBefore) {
-            return;
-        }
-        g_dynamicProfileResumeNotBefore = {};
-    }
-
-    const auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(
-        now - g_lastDynamicProfileTimerUpdate);
-    if (elapsed.count() < Config::dynamicProfileTimerMinutes) {
-        return;
-    }
-
-    g_lastDynamicProfileTimerUpdate = now;
-    Logger::LogInfo("GameLoop: Dynamic profile timer fired after %lld minute(s)",
-        static_cast<long long>(elapsed.count()));
-    TriggerDynamicProfilesForNearbyAgents();
-    if (Config::dynamicProfileTimerIncludeNarrator) {
-        TriggerDynamicProfileForNarrator();
-    }
-}
-
-static void BeginDynamicProfileTimerBlock(const char* reason) {
-    if (g_dynamicProfileBlockedAt.time_since_epoch().count() == 0) {
-        g_dynamicProfileBlockedAt = std::chrono::steady_clock::now();
-        Logger::LogDebug("GameLoop: Dynamic profile timer suspended (%s)",
-            reason && *reason ? reason : "runtime transition");
-    }
-}
-
-static void DelayDynamicProfileTimerAfterLoad(const char* reason) {
-    constexpr auto kLoadDelay = std::chrono::seconds(30);
-    constexpr auto kLoadDelayCooldown = std::chrono::seconds(60);
-    const auto now = std::chrono::steady_clock::now();
-
-    if (g_lastDynamicProfileLoadDelayAt.time_since_epoch().count() != 0 &&
-        now - g_lastDynamicProfileLoadDelayAt < kLoadDelayCooldown) {
-        Logger::LogInfo("GameLoop: Dynamic profile load delay skipped; cooldown active (%s)",
-            reason && *reason ? reason : "load");
-        return;
-    }
-
-    if (g_lastDynamicProfileTimerUpdate.time_since_epoch().count() == 0) {
-        g_lastDynamicProfileTimerUpdate = now;
-    }
-    g_lastDynamicProfileTimerUpdate += kLoadDelay;
-    g_dynamicProfileResumeNotBefore = now + kLoadDelay;
-    g_lastDynamicProfileLoadDelayAt = now;
-    Logger::LogInfo("GameLoop: Added 30-second dynamic profile delay after %s",
-        reason && *reason ? reason : "load");
-}
 
 static bool IsBoredEventBlocked(std::string& reason) {
     if (!g_gameState.isInGame) {
@@ -4090,7 +3995,6 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::Reset("native_pre_load_game");
                 FalloutStatsManagerFNV::Reset("native_pre_load_game");
                 ResetRuntimeForAIActions("native_pre_load_game", false, false);
-                BeginDynamicProfileTimerBlock("pre-load game");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
                 g_loadedSaveInitBlocked = true;
@@ -4102,8 +4006,6 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::ForceRefresh("native_load_game", 3000);
                 FalloutStatsManagerFNV::Reset("native_load_game");
                 ResetRuntimeForAIActions("native_load_game", false, false);
-                BeginDynamicProfileTimerBlock("load game");
-                DelayDynamicProfileTimerAfterLoad("game load");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
                 g_loadedSaveInitBlocked = true;
@@ -4127,10 +4029,6 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::ForceRefresh("native_new_game", 4000);
                 FalloutStatsManagerFNV::Reset("native_new_game");
                 ResetRuntimeForAIActions("native_new_game", false, false);
-                g_lastDynamicProfileTimerUpdate = std::chrono::steady_clock::now();
-                g_dynamicProfileBlockedAt = {};
-                g_dynamicProfileResumeNotBefore = {};
-                g_lastDynamicProfileLoadDelayAt = {};
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
                 g_loadedSaveInitBlocked = false;
@@ -4141,7 +4039,6 @@ static void ProcessNativeRuntimeEvents() {
                 PlayerSurvivalManagerFNV::Reset("native_runtime_exit");
                 FalloutStatsManagerFNV::Reset("native_runtime_exit");
                 ResetRuntimeForAIActions("native_runtime_exit", false, false);
-                BeginDynamicProfileTimerBlock("runtime exit");
                 g_loadedSaveInitSent = false;
                 g_lastSeenGamets = 0;
                 g_loadedSaveInitBlocked = false;
@@ -4182,10 +4079,6 @@ void Initialize() {
     
     g_lastUpdateTime = std::chrono::steady_clock::now();
     g_updateAccumulator = 0.0f;
-    g_lastDynamicProfileTimerUpdate = {};
-    g_dynamicProfileBlockedAt = {};
-    g_dynamicProfileResumeNotBefore = {};
-    g_lastDynamicProfileLoadDelayAt = {};
     g_lastModeSelectionPoll = {};
     g_lastDynamicProfileSelectionPoll = {};
     g_lastLegacyToolPoll = {};
@@ -4273,7 +4166,6 @@ void Update(float deltaTime) {
     ProfileUpdateSubsystem("FalloutStatsManagerFNV::Update", []() { FalloutStatsManagerFNV::Update(); });
     ProfileUpdateSubsystem("ActionManager::Update", []() { ActionManager::Update(); });
     ProfileUpdateSubsystem("TradeManager::Update", []() { TradeManager::Update(); });
-    ProfileUpdateSubsystem("UpdateDynamicProfileTimer", []() { UpdateDynamicProfileTimer(); });
     ProfileUpdateSubsystem("UpdateBoredEventTimer", []() { UpdateBoredEventTimer(); });
     if (ShouldPoll(g_lastDynamicProfileSelectionPoll, std::chrono::milliseconds(100))) {
         ProfileUpdateSubsystem("PollDynamicProfileSelection", []() { PollDynamicProfileSelection(); });

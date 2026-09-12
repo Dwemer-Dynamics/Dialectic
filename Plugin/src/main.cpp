@@ -362,11 +362,6 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "endconversationcooldown") { outValue = Config::rechatEndConversationCooldown; return true; }
     }
 
-    if (s == "dynamicprofile") {
-        if (k == "enabled") { outValue = 1.0; return true; }
-        if (k == "timerminutes" || k == "updateminutes") { outValue = Config::dynamicProfileTimerMinutes; return true; }
-        if (k == "includenarrator") { outValue = Config::dynamicProfileTimerIncludeNarrator ? 1.0 : 0.0; return true; }
-    }
 
     if (s == "boredevents") {
         if (k == "enabled") { outValue = 1.0; return true; }
@@ -458,9 +453,6 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
         else if (k == "avoidwhensneaking") { Config::rechatAvoidWhenSneaking = enabled; changed = true; }
         else if (k == "avoidinmenu") { Config::rechatAvoidInMenu = enabled; changed = true; }
         else if (k == "endconversationcooldown") { Config::rechatEndConversationCooldown = static_cast<int>(value); changed = true; }
-    } else if (s == "dynamicprofile") {
-        if (k == "timerminutes" || k == "updateminutes") { Config::dynamicProfileTimerMinutes = std::max(1, static_cast<int>(value)); changed = true; }
-        else if (k == "includenarrator") { Config::dynamicProfileTimerIncludeNarrator = enabled; changed = true; }
     } else if (s == "boredevents") {
         if (k == "enabled") { Config::boredEventsEnabled = true; return true; }
         else if (k == "timerseconds" || k == "boredeventtimerseconds") { Config::boredEventTimerSeconds = std::max(5, static_cast<int>(value)); changed = true; }

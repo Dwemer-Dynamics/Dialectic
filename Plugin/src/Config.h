@@ -151,8 +151,6 @@ namespace Config {
     extern bool pointsOfInterestIncludeLookingAt;
 
     // Dynamic profile trigger configuration
-    extern int dynamicProfileTimerMinutes;
-    extern bool dynamicProfileTimerIncludeNarrator;
 
     // Bored/idle event trigger configuration
     extern bool boredEventsEnabled;

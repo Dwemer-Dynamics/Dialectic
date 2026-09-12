@@ -168,9 +168,6 @@ namespace Config {
     bool pointsOfInterestIncludeLocked = true;
     bool pointsOfInterestIncludeLookingAt = true;
 
-    // Dynamic profile trigger configuration
-    int dynamicProfileTimerMinutes = 30;
-    bool dynamicProfileTimerIncludeNarrator = true;
 
     // Bored/idle event trigger configuration
     bool boredEventsEnabled = true;
@@ -833,10 +830,6 @@ namespace Config {
                 else if (key == "IncludeLocked") pointsOfInterestIncludeLocked = (value == "1" || value == "true");
                 else if (key == "IncludeLookingAt") pointsOfInterestIncludeLookingAt = (value == "1" || value == "true");
             }
-            else if (currentSection == "DynamicProfile") {
-                if (key == "TimerMinutes" || key == "UpdateMinutes") dynamicProfileTimerMinutes = std::max(1, std::stoi(value));
-                else if (key == "IncludeNarrator") dynamicProfileTimerIncludeNarrator = (value == "1" || value == "true");
-            }
             else if (currentSection == "BoredEvents") {
                 if (key == "Enabled") boredEventsEnabled = true;
                 else if (key == "TimerSeconds" || key == "BoredEventTimerSeconds") boredEventTimerSeconds = std::max(5, std::stoi(value));
@@ -1173,12 +1166,6 @@ namespace Config {
         iniFile << "IncludeDoors=" << (pointsOfInterestIncludeDoors ? "1" : "0") << "\n";
         iniFile << "IncludeLocked=" << (pointsOfInterestIncludeLocked ? "1" : "0") << "\n";
         iniFile << "IncludeLookingAt=" << (pointsOfInterestIncludeLookingAt ? "1" : "0") << "\n\n";
-
-        iniFile << "[DynamicProfile]\n";
-        iniFile << "; Periodic dynamic profile refresh. Manual hotkeys live in [Hotkeys].\n";
-        iniFile << "; Always enabled; TimerMinutes controls how often background refreshes run.\n";
-        iniFile << "TimerMinutes=" << dynamicProfileTimerMinutes << "\n";
-        iniFile << "IncludeNarrator=" << (dynamicProfileTimerIncludeNarrator ? "1" : "0") << "\n\n";
 
         iniFile << "[BoredEvents]\n";
         iniFile << "; Idle/bored NPC comments. Always enabled; server-side BORED_EVENT controls probability.\n";
