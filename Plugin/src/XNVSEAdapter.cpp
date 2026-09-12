@@ -1,3 +1,5 @@
+#include "Interaction.h"
+#include "MultiplayerSharing.h"
 #include "XNVSEAdapter.h"
 
 #include "Logger.h"
@@ -2372,6 +2374,28 @@ std::string SanitizeMenuTitle(const char* requested, const char* fallback) {
 
 }  // namespace
 
+bool UpdateInteractionMenuState(int status) {
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript || !g_scriptInterface->CallFunctionAlt) return false;
+    static Script* function = nullptr;
+    if (!function) function = g_scriptInterface->CompileScript(R"(
+int iState
+begin function {iState}
+    AuxStringMapSetFlt "*DialecticInteraction" "enabled" (iState == 1)
+    AuxStringMapSetFlt "*DialecticInteraction" "available" (iState != 2)
+    if eval iState == 1
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: On"
+    elseif eval iState == 0
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Off"
+    elseif eval iState == 2
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Syncing..."
+    else
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC is off. Retry"
+    endif
+end
+)");
+    return function && g_scriptInterface->CallFunctionAlt(function, nullptr, 1, static_cast<UInt32>(status));
+}
+
 bool OpenNativeToolMenu(NativeToolMenu menu,
                         const char* titleOverride,
                         const NativeToolMenuStatus* status) {
@@ -2393,14 +2417,25 @@ bool OpenNativeToolMenu(NativeToolMenu menu,
                 SanitizeMenuTitle(status ? status->chatMode.c_str() : nullptr, "STANDARD");
             const std::string llmLabel =
                 SanitizeMenuTitle(status ? status->llmMode.c_str() : nullptr, "STANDARD");
-            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel];
-            dynamicSource = R"(
-begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Mode: [)" +
-                chatLabel + R"(]|LLM Mode: [)" + llmLabel +
-                R"(]|Dynamic Profiles|Wait Here|Close Menu"
-end
-)";
+            const int interaction = Interaction::Status();
+            const bool listener = MultiplayerSharing::IsListener();
+            const std::string toggleLabel = interaction == 1 ? "DIALECTIC: On" : interaction == 0 ? "DIALECTIC: Off"
+                : interaction == 2 ? "DIALECTIC: Syncing..." : "DIALECTIC is off. Retry";
+            const std::string help = interaction == 1 ? "Choose a setting or NPC action:"
+                : "AI dialogue and actions are off. Game events are still recorded.";
+            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel + "|" + std::to_string(interaction) + (listener ? "L" : "H")];
+            dynamicSource = "begin function {}\n    MessageBoxExAlt (CompileScript \"Dialectic/DialecticControlMenuSelect.gek\") \"^DIALECTIC Control^"
+                + help + "|" + toggleLabel;
+            if (!listener) dynamicSource += "|Chat Mode: [" + chatLabel + "]|LLM Mode: [" + llmLabel + "]|Dynamic Profiles|Wait Here";
+            dynamicSource += "|Close Menu\"\n";
+            const char* red = interaction == 1 ? "64" : "255";
+            const char* green = interaction == 1 ? "255" : "64";
+            for (const char* tile : {"MM_ButtonList/*:0/ListItemText", "MM_MessageText"}) {
+                const std::string prefix = "SetUIFloatAlt \"MessageMenu/NOGLOW_BRANCH/MM_MainRect/" + std::string(tile);
+                dynamicSource += prefix + "/systemcolor\" 0\n" + prefix + "/red\" " + red + "\n"
+                    + prefix + "/green\" " + green + "\n" + prefix + "/blue\" 64\n";
+            }
+            dynamicSource += "end\n";
             source = dynamicSource.c_str();
             break;
         }

@@ -1,3 +1,4 @@
+#include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "HTTPManager.h"
 #include "PlaythroughNotices.h"
@@ -702,6 +703,8 @@ namespace HTTPManager {
             : ExtractQueryParam(payload, "audience_snapshot");
         std::ostringstream json;
         json << "{";
+        json << "\"interaction_generation\":" << Interaction::Generation() << ",";
+        json << "\"interaction_passive\":" << (Interaction::Allowed() ? "false" : "true") << ",";
         json << "\"schema\":\"dialectic.event.v1\",";
         json << "\"type\":\"" << EscapeJson(eventType) << "\",";
         json << "\"ts\":" << ts << ",";
@@ -747,6 +750,7 @@ namespace HTTPManager {
     }
 
     void Stream(const std::string& msg, int rechatDepth) {
+        if (!Interaction::Allowed()) return;
         std::string jsonBody = FormatEventJson("inputtext", msg);
         const uint64_t generation = g_responseGeneration.load();
         ExtendHotInputWindow(12000, rechatDepth > 0 ? "rechat stream" : "input stream");
@@ -794,6 +798,7 @@ namespace HTTPManager {
     void SendEvent(const std::string& eventType,
                    const std::string& payload,
                    const std::string& audienceSnapshotJson) {
+        if (Interaction::IsTrigger(eventType) && !Interaction::Allowed()) return;
         std::string jsonBody = FormatEventJson(eventType, payload, audienceSnapshotJson);
         Log("HTTPManager: Sending event [%s]: %s", eventType.c_str(), 
             jsonBody.length() > 100 ? jsonBody.substr(0, 100).c_str() : jsonBody.c_str());
@@ -881,13 +886,14 @@ namespace HTTPManager {
             eventType == "goodnight" ||
             eventType == "waitstart" ||
             eventType == "waitstop";
-        const bool queueResponse = !eventOnlyResponse;
+        const bool queueResponse = !eventOnlyResponse && Interaction::Allowed();
         if (queueResponse) {
             ResponseQueueFNV::SetActiveGeneration(generation, eventType.c_str());
         }
         EnqueueHttpTask(queueResponse ? "HTTPStreamEvent" : eventType, [jsonBody, generation, eventType, queueResponse]() {
             const bool streamTask = queueResponse;
             if (queueResponse && generation != g_responseGeneration.load()) {
+                if (!Interaction::IsTrigger(eventType)) SendJsonRequest("main.php", jsonBody);
                 Log("HTTPManager: Skipping stale queued %s task generation=%llu current=%llu",
                     eventType.c_str(),
                     static_cast<unsigned long long>(generation),
@@ -914,7 +920,7 @@ namespace HTTPManager {
                     queuedStreamedResponse = ResponseRouter::ProcessJsonResponse(envelope, "HTTPManager:event-stream", generation) ||
                         queuedStreamedResponse;
                 },
-                [generation, queueResponse]() { return queueResponse && (!IsCurrentGeneration(generation) || IsCurrentHttpTaskCancelled()); });
+                [generation, queueResponse, eventType]() { return queueResponse && Interaction::IsTrigger(eventType) && (!IsCurrentGeneration(generation) || IsCurrentHttpTaskCancelled()); });
             const bool stale = generation != g_responseGeneration.load();
             const bool generationIndependentResponse = eventType == "setconf";
             if ((!stale || generationIndependentResponse) && !response.empty() && !queuedStreamedResponse) {
@@ -951,6 +957,14 @@ namespace HTTPManager {
                 FinishStreamTask("HTTPStreamEvent", generation);
             }
         }, eventType, queueResponse);
+    }
+
+    void DiscardInteractionResponses() {
+        const uint64_t nextGeneration = g_responseGeneration.fetch_add(1) + 1;
+        ResponseQueueFNV::SetActiveGeneration(nextGeneration, "interaction_off");
+        CancelTasksByType("HTTPStream");
+        CancelTasksByType("HTTPStreamRechat");
+        // HTTPStreamEvent also carries real observations; let those reach the server.
     }
 
     void CancelPendingResponses() {
@@ -1026,6 +1040,7 @@ namespace HTTPManager {
                 ? L"Content-Type: application/json\r\nAccept: application/x-ndjson\r\nX-Dialectic-Stream: 1\r\nConnection: close"
                 : L"Content-Type: application/json\r\nAccept: application/json\r\nConnection: close";
 
+            wideHeaders += Interaction::Headers();
             HINTERNET hSession = WinHttpOpen(
                 wideUserAgent.c_str(),
                 WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -1078,7 +1093,7 @@ namespace HTTPManager {
                 if (request) WinHttpCloseHandle(request);
             };
 
-            DWORD timeout = Config::aiResponseTimeout * 1000;
+            DWORD timeout = endpoint == "interaction.php" ? 5000 : Config::aiResponseTimeout * 1000;
             WinHttpSetTimeouts(hRequest, timeout, timeout, timeout, timeout);
 
             if (!WinHttpAddRequestHeaders(hRequest, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD)) {
@@ -1326,6 +1341,7 @@ namespace HTTPManager {
     }
 
     static bool SendPlayerTtsPlayForGeneration(const std::string& message, uint64_t generation) {
+        if (!Interaction::Allowed() || generation != g_responseGeneration.load()) return false;
         std::ostringstream payload;
         payload << "{"
                 << "\"schema\":\"dialectic.player_tts.v1\","

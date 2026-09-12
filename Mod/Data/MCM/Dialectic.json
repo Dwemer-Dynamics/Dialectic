@@ -415,6 +415,31 @@
       "columns": 1,
       "enable": 1,
       "options": {
+        "11": {
+          "title": {
+            "auxStringMap": "*DialecticInteraction",
+            "key": "title",
+            "default": "DIALECTIC: Syncing..."
+          },
+          "type": 5,
+          "enable": {
+            "auxStringMap": "*DialecticInteraction",
+            "key": "available",
+            "default": 0
+          },
+          "mouse": "Turn AI dialogue and actions on or off. Game events are still recorded. The current line can finish. This uses the same switch as DIALECTIC Control.",
+          "vars": [
+            {
+              "auxStringMap": "*DialecticInteraction",
+              "key": "enabled",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/InteractionToggle.gek"
+          }
+        },
         "1": {
           "title": "Dialogue",
           "enable": 1,

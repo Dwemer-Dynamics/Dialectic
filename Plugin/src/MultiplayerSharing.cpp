@@ -1,3 +1,4 @@
+#include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "AudioManager.h"
 #include "ActionManager.h"
@@ -39,6 +40,7 @@ struct Settings {
     bool operator==(const Settings&) const = default;
 };
 struct Line {
+    uint64_t interactionEpoch = Interaction::Epoch();
     std::string speaker, text, utterance;
     std::vector<uint8_t> audio;
     Clock::time_point received = Clock::now();
@@ -48,6 +50,7 @@ struct RequestDiagnostics {
     const char* stage = "not_started";
 };
 struct Exchange {
+    uint64_t interactionEpoch = Interaction::Epoch();
     std::atomic_bool done{false};
     bool ok = false, reset = false, alive = false;
     long long cursor = -1;
@@ -548,7 +551,7 @@ void Update() {
                 if (result->control == "resume") g_remotePaused = false;
                 g_cursor = result->cursor;
                 g_epoch = result->epoch;
-                if (!result->line.audio.empty()) {
+                if (Interaction::IsCurrent(result->interactionEpoch) && !result->line.audio.empty()) {
                     LogPlayback(result->line.utterance, g_lines.size() < 2 ? "download_queued" : "download_dropped_queue_full", result->line.audio.size());
                     if (g_lines.size() < 2) g_lines.push_back(std::move(result->line));
                 }
@@ -572,12 +575,14 @@ void Update() {
         }
     }
     if (settings.mode == 2) {
+        if (!Interaction::Allowed()) g_lines.clear();
         SpeakManager::UpdateSharedDialogue(g_remotePaused);
-        while (!g_lines.empty() && now - g_lines.front().received > std::chrono::seconds(30)) {
+        while (!g_lines.empty() && (!Interaction::IsCurrent(g_lines.front().interactionEpoch)
+            || now - g_lines.front().received > std::chrono::seconds(30))) {
             LogPlayback(g_lines.front().utterance, "download_dropped_stale", g_lines.front().audio.size());
             g_lines.pop_front();
         }
-        if (!game.isPaused && !game.isInMenu && !g_remotePaused && !AudioManager::IsPlaying() && !g_lines.empty()) {
+        if (Interaction::Allowed() && !game.isPaused && !game.isInMenu && !g_remotePaused && !AudioManager::IsPlaying() && !g_lines.empty()) {
             auto line = std::move(g_lines.front());
             g_lines.pop_front();
             SpeakManager::PlaySharedDialogue(line.speaker, line.text, line.utterance, line.audio);

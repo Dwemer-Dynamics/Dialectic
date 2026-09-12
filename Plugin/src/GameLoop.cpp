@@ -1,3 +1,4 @@
+#include "Interaction.h"
 // GameLoop.cpp - Main game loop integration for Dialectic
 
 #include "MultiplayerSharing.h"
@@ -1203,7 +1204,7 @@ static bool IsToolMenuBlocked(const RuntimeSnapshot::GameState& state) {
 }
 
 void RequestDialecticControlMenuOpen() {
-    if (MultiplayerSharing::IsListener()) return;
+    Interaction::Update();
     const RuntimeSnapshot::GameState state = RuntimeSnapshot::GetGameState();
     if (IsToolMenuBlocked(state)) {
         Logger::LogInfo("GameLoop: Ignoring Dialectic Control while a blocking menu is open");
@@ -1856,7 +1857,7 @@ static void ResetBoredEventTimer(const char* reason) {
 }
 
 static void UpdateBoredEventTimer() {
-    if (!Config::boredEventsEnabled || Config::boredEventTimerSeconds <= 0) {
+    if (!Interaction::Allowed() || !Config::boredEventsEnabled || Config::boredEventTimerSeconds <= 0) {
         return;
     }
 
@@ -4250,8 +4251,10 @@ void Update(float deltaTime) {
         ProfileUpdateSubsystem("PollRuntimeConfigReloadFallback", []() { PollRuntimeConfigReloadFallback(); });
     }
     ProfileUpdateSubsystem("ApplyPendingRuntimeConfigReload", []() { ApplyPendingRuntimeConfigReload(); });
+    Interaction::Update();
     MultiplayerSharing::Update();
     if (MultiplayerSharing::IsListener()) {
+        if (InputManager::IsActionTriggered(InputManager::HotkeyAction::DialecticControl)) RequestDialecticControlMenuOpen();
         g_voiceInputActive = false;
         VoiceRecorder::StopRecording();
         VoiceRecorder::StopOpenMicMonitoring();
@@ -4788,6 +4791,7 @@ void StopConversation() {
 }
 
 void SendPlayerMessage(const std::string& message) {
+    if (!Interaction::ManualInputAllowed()) return;
     if (MultiplayerSharing::IsListener()) return;
     if (!g_conversationActive) {
         Log("GameLoop: Cannot send message - no active conversation");
@@ -4939,6 +4943,7 @@ void StartVoiceInput() {
 }
 
 static void StartVoiceInputInternal(bool openMicTriggered) {
+    if (!Interaction::Allowed()) { if (!openMicTriggered) Interaction::ManualInputAllowed(); return; }
     if (MultiplayerSharing::IsListener()) return;
     if (g_voiceInputActive) return;
     if (!g_conversationActive) {
