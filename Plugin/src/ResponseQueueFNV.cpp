@@ -1,8 +1,11 @@
+#include "Interaction.h"
 // ResponseQueueFNV.cpp - CHIM-style parsed response queue for Dialectic JSON lines
 
+#include "MultiplayerSharing.h"
 #include "ResponseQueueFNV.h"
 
 #include "ActionManager.h"
+#include "HTTPManager.h"
 #include "Logger.h"
 #include "RuntimeGeneration.h"
 #include "SpeakManager.h"
@@ -25,10 +28,19 @@ struct QueueItem {
     DialogueLine dialogue;
     std::string actionJson;
     std::string source;
+    bool directorScene = false;
     uint64_t responseGeneration = 0;
     uint64_t runtimeGeneration = 0;
     std::chrono::steady_clock::time_point enqueuedAt;
 };
+
+// Lines cancelled before reaching SpeakManager still need a terminal delivery report.
+void AbortQueuedDirectorLine(const QueueItem& item) {
+    if (item.type != ItemType::Dialogue || !item.dialogue.directorScene || item.dialogue.utteranceId.empty()) return;
+    const auto& line = item.dialogue;
+    HTTPManager::SendDialogueDeliveryAck(line.speaker, line.actorFormId, line.text,
+        line.ttsCacheKey, line.utteranceId, "aborted", line.requestId);
+}
 
 std::mutex g_mutex;
 std::deque<QueueItem> g_items;
@@ -50,7 +62,7 @@ static std::string Preview(const std::string& value, std::size_t maxLen = 80) {
 } // namespace
 
 static bool IsCurrentGenerationLocked(uint64_t generation) {
-    return generation == 0 || g_activeGeneration == 0 || generation == g_activeGeneration;
+    return Interaction::Allowed() && (generation == 0 || g_activeGeneration == 0 || generation == g_activeGeneration);
 }
 
 void SetActiveGeneration(uint64_t generation, const char* source) {
@@ -137,10 +149,11 @@ void EnqueueDialogue(const DialogueLine& line, const char* source) {
         g_items.size());
 }
 
-void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration) {
+void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration, bool directorScene) {
     QueueItem item;
     item.type = ItemType::Action;
     item.actionJson = lineObject;
+    item.directorScene = directorScene;
     item.source = source ? source : "ResponseQueueFNV";
     item.enqueuedAt = std::chrono::steady_clock::now();
 
@@ -165,14 +178,36 @@ void EnqueueAction(const std::string& lineObject, const char* source, uint64_t r
 }
 
 bool DispatchPending(std::size_t maxItems) {
+    if (MultiplayerSharing::IsListener()) return false;
     bool dispatchedAny = false;
     std::size_t dispatchedThisCall = 0;
 
     while (maxItems == 0 || dispatchedThisCall < maxItems) {
+        bool sceneAction = false;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (g_items.empty()) break;
+            sceneAction = g_items.front().directorScene;
+        }
+        bool speechPending = false;
+        if (sceneAction) {
+            const auto speech = SpeakManager::GetQueueStatus();
+            speechPending = speech.isProcessing || speech.isPlaying || speech.currentPlaybackLineActive
+                || speech.dialogueLinesQueued > 0 || speech.ttsDownloadsInProgress > 0
+                || speech.preparedAudioCount > 0 || speech.ttsTasksPending > 0 || speech.ttsTasksActive > 0;
+        }
         QueueItem item;
+        bool droppedStale = false;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_items.empty()) {
+                break;
+            }
+            // Attached actions wait for preceding speech, never for action completion. Check stale
+            // generations first so a cancelled scene never blocks a new response.
+            const auto& next = g_items.front();
+            if (next.directorScene && speechPending && IsCurrentGenerationLocked(next.responseGeneration)
+                && RuntimeGeneration::IsCurrent(next.runtimeGeneration)) {
                 break;
             }
             item = std::move(g_items.front());
@@ -187,9 +222,15 @@ bool DispatchPending(std::size_t maxItems) {
                     static_cast<unsigned long long>(item.runtimeGeneration),
                     static_cast<unsigned long long>(RuntimeGeneration::Current()),
                     item.source.c_str());
-                continue;
+                droppedStale = true;
+            } else {
+                ++g_totalDispatched;
             }
-            ++g_totalDispatched;
+        }
+
+        if (droppedStale) {
+            AbortQueuedDirectorLine(item);
+            continue;
         }
 
         dispatchedAny = true;
@@ -218,7 +259,8 @@ bool DispatchPending(std::size_t maxItems) {
                                         line.runtimeGeneration,
                                         line.listenerFormId,
                                         line.rechatTargetFormId,
-                                        line.displayName);
+                                        line.displayName,
+                                        line.directorScene);
             continue;
         }
 
@@ -233,15 +275,15 @@ bool DispatchPending(std::size_t maxItems) {
 }
 
 void Clear(const char* reason) {
-    std::size_t cleared = 0;
+    std::deque<QueueItem> cleared;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        cleared = g_items.size();
-        g_items.clear();
+        cleared.swap(g_items);
         g_unfinished = false;
         g_unfinishedSource.clear();
     }
-    Logger::LogInfo("ResponseQueueFNV: cleared pending=%zu reason=%s", cleared, reason ? reason : "clear");
+    for (const auto& item : cleared) AbortQueuedDirectorLine(item);
+    Logger::LogInfo("ResponseQueueFNV: cleared pending=%zu reason=%s", cleared.size(), reason ? reason : "clear");
 }
 
 bool HasPending() {

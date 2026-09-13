@@ -1,3 +1,5 @@
+#include "Interaction.h"
+#include "MultiplayerSharing.h"
 #include "SpeakManager.h"
 #include "AudioManager.h"
 #include "AgentManager.h"
@@ -55,6 +57,7 @@ namespace SpeakManager {
 
     // Script line structure for dialogue queue
     struct ScriptLine {
+        uint64_t interactionEpoch = Interaction::Epoch();
         std::string text;
         std::string actor;
         std::string displayName;
@@ -72,6 +75,7 @@ namespace SpeakManager {
         std::string sceneKey;
         uint64_t runtimeGeneration = 0;
         bool rechatLaunched = false;
+        bool directorScene = false;
         bool textOnlyFallback = false;
         uint64_t sequence = 0;
     };
@@ -1461,7 +1465,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             (static_cast<uint32_t>(data[3]) << 24);
     }
 
-    static bool ParseWavInfo(const std::vector<uint8_t>& wavData, WavInfo& outInfo) {
+    static bool ParseWavInfo(const std::vector<uint8_t>& wavData, WavInfo& outInfo,
+                             bool sharedAudio = false) {
         if (wavData.size() < 44 ||
             std::memcmp(wavData.data(), "RIFF", 4) != 0 ||
             std::memcmp(wavData.data() + 8, "WAVE", 4) != 0) {
@@ -1477,6 +1482,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
             const uint8_t* chunk = wavData.data() + offset;
             const uint32_t chunkSize = ReadLE32(chunk + 4);
             const size_t dataOffset = offset + 8;
+            // Shared network audio needs overflow-safe rejection before native playback.
+            if (sharedAudio && chunkSize > wavData.size() - dataOffset) return false;
             if (dataOffset + chunkSize > wavData.size()) {
                 break;
             }
@@ -2728,6 +2735,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     void Abort() {
         g_aborted = true;
+        MultiplayerSharing::Control("cancel");
         g_audioGeneration.fetch_add(1);
         HTTPManager::CancelPendingResponses();
         AudioManager::Stop();
@@ -3101,7 +3109,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         if (g_downloadsInProgress > 0) {
             --g_downloadsInProgress;
         }
-        if (generation != g_audioGeneration.load()) {
+        if (generation != g_audioGeneration.load() || !Interaction::IsCurrent(audio.line.interactionEpoch)) {
             return;
         }
         if (audio.ready && !audio.audioData.empty()) {
@@ -3126,7 +3134,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_downloadsInProgress > 0) {
                 --g_downloadsInProgress;
             }
-            if (generation == g_audioGeneration.load() && item.sequence != 0 &&
+            if (Interaction::IsCurrent(item.interactionEpoch) && generation == g_audioGeneration.load() && item.sequence != 0 &&
                 !item.text.empty() && !item.actor.empty()) {
                 PendingAudio fallback;
                 fallback.speaker = item.actor;
@@ -3258,6 +3266,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
     static void ClearSpeechForSceneChange(const std::string& oldSceneKey,
                                           const std::string& newSceneKey) {
+        MultiplayerSharing::Control("cancel");
         Log("SpeakManager: Player scene changed from %s to %s; cancelling stale dialogue/rechat",
             oldSceneKey.c_str(),
             newSceneKey.c_str());
@@ -4202,6 +4211,9 @@ static uint32_t g_faceTargetTargetFormId = 0;
                                          const char* trigger,
                                          bool requireFinalLine,
                                          bool allowCurrentPlayback) {
+        if (finishedLine.directorScene) {
+            return false;
+        }
         const std::string speaker = Trim(finishedLine.actor);
         const std::string originLine = Trim(finishedLine.text);
         if (!Config::rechatEnabled || !Config::rechatSmartLaunch) {
@@ -4479,8 +4491,63 @@ static uint32_t g_faceTargetTargetFormId = 0;
             (state.isPaused || GameLoop::IsTextInputMenuActiveOrRecentlyClosed());
     }
 
+    static std::string g_sharedPlaybackUtterance;
+
     // Functions required by GameLoop
+    void StopSharedDialogue() {
+        if (!g_sharedPlaybackUtterance.empty()) {
+            MultiplayerSharing::LogPlayback(g_sharedPlaybackUtterance, "playback_stopped");
+            g_sharedPlaybackUtterance.clear();
+        }
+        if (AudioManager::IsPlaying()) AudioManager::Stop();
+        if (g_subtitleActive) ClearSubtitleBridge();
+    }
+
+    void PlaySharedDialogue(const std::string& speaker, const std::string& text,
+                            const std::string& utterance, const std::vector<uint8_t>& audio) {
+        if (!MultiplayerSharing::IsListener()) return;
+        WavInfo info;
+        if (!ParseWavInfo(audio, info, true) || info.durationSeconds > 120.0
+            || info.channels > 2 || info.sampleRate > 192000
+            || (info.bitsPerSample != 8 && info.bitsPerSample != 16 && info.bitsPerSample != 24 && info.bitsPerSample != 32)
+            || info.blockAlign != info.channels * info.bitsPerSample / 8) {
+            MultiplayerSharing::LogPlayback(utterance, "playback_rejected_wav", audio.size()); return;
+        }
+        StopSharedDialogue();
+        if (!AudioManager::LoadWAV(audio.data(), static_cast<unsigned long>(audio.size()))) {
+            MultiplayerSharing::LogPlayback(utterance, "playback_load_failed", audio.size()); return;
+        }
+        AudioManager::Set3DPlaybackEnabled(false);
+        AudioManager::SetVolume(GetBaseVoiceVolume());
+        if (!AudioManager::Play()) { MultiplayerSharing::LogPlayback(utterance, "playback_start_failed", audio.size()); return; }
+        g_sharedPlaybackUtterance = utterance;
+        MultiplayerSharing::LogPlayback(utterance, "playback_started", audio.size());
+        ScriptLine line;
+        line.actor = speaker;
+        line.displayName = speaker;
+        line.text = text;
+        line.utteranceId = utterance;
+        StartSubtitleBridge(line, audio);
+    }
+
+    void UpdateSharedDialogue(bool remotePaused) {
+        if (!AudioManager::IsPlaying()) {
+            if (!g_sharedPlaybackUtterance.empty()) {
+                MultiplayerSharing::LogPlayback(g_sharedPlaybackUtterance, "playback_finished");
+                g_sharedPlaybackUtterance.clear();
+            }
+            if (g_subtitleActive) ClearSubtitleBridge();
+            return;
+        }
+        const bool pause = remotePaused || ShouldPauseDialogueForMenu();
+        if (pause && !AudioManager::IsPaused()) AudioManager::Pause();
+        if (!pause && AudioManager::IsPaused()) AudioManager::Resume();
+        AudioManager::SetVolume(GetBaseVoiceVolume());
+        UpdateSubtitleBridge();
+    }
+
     void UpdatePlaybackFrame() {
+        if (MultiplayerSharing::IsListener()) return;
         ProcessPendingLipSyncResets();
         UpdatePlayerTextOnlySubtitle();
         if (CancelDialogueIfPlayerSceneChanged()) {
@@ -4495,6 +4562,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 if (!g_playbackPausedForMenu) {
                     AudioManager::Pause();
                     g_playbackPausedForMenu = true;
+                    MultiplayerSharing::Control("pause");
                     Log("SpeakManager: Paused AI dialogue because a blocking menu/chatbox is open "
                         "(paused=%d inMenu=%d)",
                         state.isPaused ? 1 : 0,
@@ -4506,6 +4574,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             if (g_playbackPausedForMenu) {
                 AudioManager::Resume();
                 g_playbackPausedForMenu = false;
+                MultiplayerSharing::Control("resume");
                 Log("SpeakManager: Resumed AI dialogue after blocking menu/chatbox closed");
             }
 
@@ -4520,6 +4589,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     void ProcessQueue() {
+        if (MultiplayerSharing::IsListener()) return;
         UpdatePlayerTextOnlySubtitle();
         if (UpdateNpcTextOnlyFallback()) {
             return;
@@ -4593,7 +4663,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             g_isProcessing = true;
 
             std::string dropReason;
-            if (ShouldDropLineBeforePlayback(readyAudio.line, &dropReason)) {
+            if (!Interaction::IsCurrent(readyAudio.line.interactionEpoch) || ShouldDropLineBeforePlayback(readyAudio.line, &dropReason)) {
                 Log("SpeakManager: Dropping stale queued audio for speaker '%s' (0x%08X): %s",
                     readyAudio.line.actor.c_str(),
                     readyAudio.line.actorFormId,
@@ -4642,11 +4712,16 @@ static uint32_t g_faceTargetTargetFormId = 0;
                 }
                 StartDialogueGuardBridge(g_currentPlaybackLine);
                 StartFaceTargetBridge(g_currentPlaybackLine);
-                if (AudioManager::Play()) {
+                if (Interaction::IsCurrent(readyAudio.line.interactionEpoch) && AudioManager::Play()) {
                     g_playbackStarted.fetch_add(1, std::memory_order_relaxed);
                     Log("SpeakManager: Audio playback started for speaker '%s'",
                         g_currentSpeaker.c_str());
                     SendDeliveryState(g_currentPlaybackLine, "playing");
+                    if (MultiplayerSharing::IsHost() &&
+                        !IsNarratorLine(g_currentPlaybackLine) && !IsPlayerTtsLine(g_currentPlaybackLine)) {
+                        MultiplayerSharing::Publish(g_currentPlaybackLine.actor, g_currentPlaybackLine.text,
+                            g_currentPlaybackLine.ttsCacheKey, g_currentPlaybackLine.utteranceId, readyAudio.audioData);
+                    }
                     StartLipSync(g_currentPlaybackLine, readyAudio.audioData);
                     StartSubtitleBridge(g_currentPlaybackLine, readyAudio.audioData);
                     UpdateCurrentSpatialPlayback();
@@ -4817,8 +4892,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
                        uint64_t runtimeGeneration,
                        uint32_t listenerFormId,
                        uint32_t rechatTargetFormId,
-                       const std::string& displayName) {
+                       const std::string& displayName,
+                       bool directorScene) {
+        if (!Interaction::Allowed()) return;
+        if (MultiplayerSharing::IsListener()) return;
         ScriptLine line;
+        line.directorScene = directorScene;
         line.text = text;
         line.actor = speaker;
         line.displayName = displayName;
@@ -4897,6 +4976,26 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_playerInputTtsGateUntil = std::chrono::steady_clock::now() + kPlayerInputTtsGateTimeout;
         Log("SpeakManager: Player TTS interrupt gate active for %lld ms",
             static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(kPlayerInputTtsGateTimeout).count()));
+    }
+
+    void DiscardPendingInteraction() {
+        TaskManager::CancelByType("audio_prepare");
+        std::vector<ScriptLine> discarded;
+        {
+            std::lock_guard<std::mutex> lock(g_queueMutex);
+            while (!g_scriptQueue.empty()) { discarded.push_back(g_scriptQueue.front()); g_scriptQueue.pop(); }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_pendingMutex);
+            for (const auto& pending : g_pendingAudioQueue) discarded.push_back(pending.line);
+            g_pendingAudioQueue.clear();
+            g_pendingLineSequences.clear();
+        }
+        for (const auto& line : discarded) SendAbortDeliveryStateIfTracked(line, "interaction_off");
+        ResetRechatChainState();
+        ClearDeferredRechatLaunch();
+        ClearPlayerInputTtsGate("interaction_off");
+        if (!g_currentPlaybackLineActive) ClearDialogueGuardBridge();
     }
 
     static void StopSpeakingInternal(bool preservePlayerLines, const char* reason) {
@@ -5008,6 +5107,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             cleanReason,
             preservePlayerLines ? 1 : 0,
             suppressRechatBriefly ? 1 : 0);
+        MultiplayerSharing::Control("cancel");
         StopSpeakingInternal(preservePlayerLines, cleanReason);
         {
             std::lock_guard<std::mutex> lock(g_rechatMutex);

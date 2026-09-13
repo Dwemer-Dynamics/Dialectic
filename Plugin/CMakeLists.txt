@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Dialectic VERSION 1.0.0)
+project(Dialectic VERSION 1.1.0)
 
 math(EXPR DIALECTIC_PLUGIN_INFO_VERSION
     "${PROJECT_VERSION_MAJOR} * 10000 + ${PROJECT_VERSION_MINOR} * 100 + ${PROJECT_VERSION_PATCH}")
@@ -21,7 +21,10 @@ add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Logger.cpp
     src/ActionManager.cpp
+    src/ExternalEventAPI.cpp
+    src/Interaction.cpp
     src/HTTPManager.cpp
+    src/MultiplayerSharing.cpp
     src/ResponseRouter.cpp
     src/ResponseQueueFNV.cpp
     src/AudioManager.cpp
@@ -165,6 +168,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ws2_32      # Winsock2
     winhttp     # WinHTTP
+    bcrypt      # Secure ephemeral relay credentials
     winmm       # Windows Multimedia (audio)
     xaudio2     # XAudio2 playback
     psapi       # Process memory diagnostics

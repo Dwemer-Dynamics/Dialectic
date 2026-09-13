@@ -7,6 +7,8 @@
 #include <vector>
 
 namespace XNVSEAdapter {
+// Publish acknowledged state to the existing MCM Extender runtime value map.
+bool UpdateInteractionMenuState(int status);
 
 enum class LifecycleEvent {
     PostLoad,
@@ -79,9 +81,18 @@ struct NativeGameState {
     float playerYaw{0.0f};
 };
 
+struct NativeRadioState {
+    std::string stationName;
+    std::string trackPath;
+    bool valid{false};
+    bool active{false};
+    std::uint32_t stationFormId{0};
+};
+
 struct NativePlayerSurvivalState {
     bool valid{false};
     bool hardcoreEnabled{false};
+    int playerLevel{0};
     float hunger{0.0f};
     float dehydration{0.0f};
     float sleepDeprivation{0.0f};
@@ -291,8 +302,25 @@ struct NativePresentationDiagnostics {
 using MessageCallback = std::function<void(const Message&)>;
 using PlayerInventoryChangeCallback = std::function<void(const char*)>;
 
+enum class PublicDialecticEvent {
+    SpeakExact,
+    Comment,
+    React,
+    Ask,
+    OpenPrompt,
+    Recruit,
+    Dismiss,
+    Wait,
+    Resume
+};
+
+using PublicDialecticEventCallback =
+    std::function<void(PublicDialecticEvent event, std::uint32_t actorFormId, std::string text)>;
+
 bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCallback callback);
 void Shutdown();
+bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
+void UnregisterPublicDialecticEvents();
 bool IsInitialized();
 bool HasMessaging();
 void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);
@@ -300,6 +328,7 @@ bool HasPlayerInventoryEventHooks();
 std::uint32_t MessagingVersion();
 std::string RuntimeDirectory();
 bool CaptureNativeGameState(NativeGameState& state);
+bool CaptureNativeRadioState(NativeRadioState& state);
 // Read the active world camera's normalized forward vector for listener-relative audio.
 bool CaptureNativeCameraForward(float& forwardX, float& forwardY, float& forwardZ);
 bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state);

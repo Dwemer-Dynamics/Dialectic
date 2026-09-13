@@ -1,3 +1,5 @@
+#include "Interaction.h"
+#include "MultiplayerSharing.h"
 #include "XNVSEAdapter.h"
 
 #include "Logger.h"
@@ -31,6 +33,21 @@ constexpr std::uintptr_t kInterfaceManagerAddress = 0x011D8A80;
 constexpr std::uintptr_t kMenuVisibilityAddress = 0x011F308F;
 constexpr std::uintptr_t kDataHandlerSingletonAddress = 0x011C3F2C;
 constexpr std::uintptr_t kQueueUiMessageAddress = 0x007052F0;
+// FalloutNV 1.4.0.525 Pip-Boy radio and PlayingMusic layout.
+constexpr std::uintptr_t kPlayingMusicAddress = 0x011DD0F0;
+constexpr std::uintptr_t kPipboyRadioAddress = 0x011DD42C;
+constexpr std::size_t kTrack2PathOffset = 0x108;
+constexpr std::size_t kTrack1FlagsOffset = 0x220;
+constexpr std::size_t kTrack2FlagsOffset = 0x221;
+constexpr std::size_t kPipboyRadioPlayingOffset = 0x223;
+constexpr std::size_t kTrack1ActiveOffset = 0x27C;
+constexpr std::uint8_t kMusicStatePause = 1u << 2;
+constexpr std::uint8_t kMusicStateStop = 1u << 3;
+constexpr std::uint8_t kMusicStatePlay = 1u << 4;
+
+struct NativeRadioEntry {
+    TESObjectREFR* radioRef{nullptr};
+};
 
 struct GuardedActorBase {
     TESActorBase* actorBase{nullptr};
@@ -157,6 +174,7 @@ void CaptureActorFactions(Actor* actor, TESActorBase* actorBase,
 std::mutex g_callbackMutex;
 MessageCallback g_callback;
 PlayerInventoryChangeCallback g_playerInventoryChangeCallback;
+PublicDialecticEventCallback g_publicDialecticEventCallback;
 const NVSEInterface* g_nvse = nullptr;
 NVSEMessagingInterface* g_messaging = nullptr;
 NVSEScriptInterface* g_scriptInterface = nullptr;
@@ -164,6 +182,106 @@ NVSEEventManagerInterface* g_eventManager = nullptr;
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 std::atomic<bool> g_initialized{false};
 std::array<bool, 6> g_playerInventoryEventHandlers{};
+std::array<bool, 9> g_publicDialecticEventHandlers{};
+
+bool CopyPublicDialecticEventArguments(TESObjectREFR* thisObj,
+                                       void* parameters,
+                                       bool hasText,
+                                       std::uint32_t& actorFormId,
+                                       char* textBuffer,
+                                       std::size_t textBufferSize,
+                                       std::size_t& textLength) {
+    actorFormId = 0;
+    textLength = 0;
+    if (textBuffer && textBufferSize > 0) {
+        textBuffer[0] = '\0';
+    }
+    __try {
+        actorFormId = thisObj ? thisObj->refID : 0;
+        if (hasText && parameters) {
+            auto** arguments = static_cast<void**>(parameters);
+            const char* value = arguments ? static_cast<const char*>(arguments[0]) : nullptr;
+            if (value && textBuffer && textBufferSize > 1) {
+                textLength = strnlen_s(value, textBufferSize);
+                if (textLength >= textBufferSize) {
+                    textLength = textBufferSize - 1;
+                }
+                std::memcpy(textBuffer, value, textLength);
+                textBuffer[textLength] = '\0';
+            }
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void NotifyPublicDialecticEvent(PublicDialecticEvent event, TESObjectREFR* thisObj, void* parameters, bool hasText) {
+    std::uint32_t actorFormId = 0;
+    char textBuffer[1002]{};
+    std::size_t textLength = 0;
+    if (!CopyPublicDialecticEventArguments(
+            thisObj, parameters, hasText, actorFormId, textBuffer, sizeof(textBuffer), textLength)) {
+        Logger::LogWarning("XNVSEAdapter: rejected public event with invalid native arguments");
+        return;
+    }
+    std::string text(textBuffer, textLength);
+
+    PublicDialecticEventCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(g_callbackMutex);
+        callback = g_publicDialecticEventCallback;
+    }
+    if (callback) {
+        callback(event, actorFormId, std::move(text));
+    }
+}
+
+void OnDialecticSpeakExact(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::SpeakExact, actor, parameters, true);
+}
+void OnDialecticComment(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Comment, actor, parameters, false);
+}
+void OnDialecticReact(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::React, actor, parameters, true);
+}
+void OnDialecticAsk(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Ask, actor, parameters, true);
+}
+void OnDialecticOpenPrompt(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::OpenPrompt, actor, parameters, false);
+}
+void OnDialecticRecruit(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Recruit, actor, parameters, false);
+}
+void OnDialecticDismiss(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Dismiss, actor, parameters, false);
+}
+void OnDialecticWait(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Wait, actor, parameters, false);
+}
+void OnDialecticResume(TESObjectREFR* actor, void* parameters) {
+    NotifyPublicDialecticEvent(PublicDialecticEvent::Resume, actor, parameters, false);
+}
+
+struct PublicDialecticEventBinding {
+    const char* name;
+    NVSEEventManagerInterface::NativeEventHandler handler;
+    bool hasText;
+};
+
+const std::array<PublicDialecticEventBinding, 9> kPublicDialecticEventBindings{{
+    {"DialecticSpeakExact", OnDialecticSpeakExact, true},
+    {"DialecticComment", OnDialecticComment, false},
+    {"DialecticReact", OnDialecticReact, true},
+    {"DialecticAsk", OnDialecticAsk, true},
+    {"DialecticOpenPrompt", OnDialecticOpenPrompt, false},
+    {"DialecticRecruit", OnDialecticRecruit, false},
+    {"DialecticDismiss", OnDialecticDismiss, false},
+    {"DialecticWait", OnDialecticWait, false},
+    {"DialecticResume", OnDialecticResume, false},
+}};
 
 bool IsPlayerInventoryEventSource(void* parameters) {
     if (!parameters) return false;
@@ -1039,8 +1157,67 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCa
     return true;
 }
 
+bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback) {
+    if (!g_eventManager || !g_eventManager->RegisterEvent || !g_eventManager->SetNativeEventHandler) {
+        Logger::LogWarning("XNVSEAdapter: event manager unavailable; public Dialectic event API disabled");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_callbackMutex);
+        g_publicDialecticEventCallback = std::move(callback);
+    }
+
+    static NVSEEventManagerInterface::ParamType stringParams[] = {
+        NVSEEventManagerInterface::eParamType_String
+    };
+    std::size_t registeredCount = 0;
+    for (std::size_t index = 0; index < kPublicDialecticEventBindings.size(); ++index) {
+        const auto& binding = kPublicDialecticEventBindings[index];
+        const bool eventRegistered = g_eventManager->RegisterEvent(
+            binding.name,
+            binding.hasText ? 1 : 0,
+            binding.hasText ? stringParams : nullptr,
+            NVSEEventManagerInterface::kFlag_AllowScriptDispatch);
+        if (!eventRegistered) {
+            Logger::LogWarning(
+                "XNVSEAdapter: public event name collision; handler not attached event=%s",
+                binding.name);
+            continue;
+        }
+
+        g_publicDialecticEventHandlers[index] =
+            g_eventManager->SetNativeEventHandler(binding.name, binding.handler);
+        if (!g_publicDialecticEventHandlers[index]) {
+            Logger::LogWarning("XNVSEAdapter: failed to attach public event handler event=%s", binding.name);
+            continue;
+        }
+        ++registeredCount;
+    }
+
+    Logger::LogInfo("XNVSEAdapter: public Dialectic event API registered events=%zu/%zu",
+        registeredCount, kPublicDialecticEventBindings.size());
+    return registeredCount == kPublicDialecticEventBindings.size();
+}
+
+void UnregisterPublicDialecticEvents() {
+    if (g_eventManager && g_eventManager->RemoveNativeEventHandler) {
+        for (std::size_t index = 0; index < kPublicDialecticEventBindings.size(); ++index) {
+            if (!g_publicDialecticEventHandlers[index]) {
+                continue;
+            }
+            const auto& binding = kPublicDialecticEventBindings[index];
+            g_eventManager->RemoveNativeEventHandler(binding.name, binding.handler);
+            g_publicDialecticEventHandlers[index] = false;
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_callbackMutex);
+    g_publicDialecticEventCallback = {};
+}
+
 void Shutdown() {
     g_initialized.store(false, std::memory_order_release);
+    UnregisterPublicDialecticEvents();
     if (g_eventManager && g_eventManager->RemoveNativeEventHandler) {
         for (std::size_t index = 0; index < kPlayerInventoryEventBindings.size(); ++index) {
             if (!g_playerInventoryEventHandlers[index]) continue;
@@ -1053,6 +1230,7 @@ void Shutdown() {
         std::lock_guard<std::mutex> lock(g_callbackMutex);
         g_callback = {};
         g_playerInventoryChangeCallback = {};
+        g_publicDialecticEventCallback = {};
     }
     g_messaging = nullptr;
     g_scriptInterface = nullptr;
@@ -1179,6 +1357,43 @@ bool CaptureNativeGameState(NativeGameState& state) {
         state.paused = state.pauseMenuOpen || state.pipboyOpen || state.barterMenuOpen ||
             state.containerMenuOpen || state.loadingMenuOpen;
         state.valid = true;
+    return true;
+}
+
+// Capture the active Pip-Boy station and music asset from Fallout's radio globals.
+bool CaptureNativeRadioState(NativeRadioState& state) {
+    state = {};
+    if (!g_initialized.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    const auto* music = reinterpret_cast<const std::uint8_t*>(kPlayingMusicAddress);
+    auto* radioEntry = *reinterpret_cast<NativeRadioEntry**>(kPipboyRadioAddress);
+    state.valid = true;
+    state.active = music[kPipboyRadioPlayingOffset] != 0 &&
+        radioEntry != nullptr && radioEntry->radioRef != nullptr;
+    if (!state.active) {
+        return true;
+    }
+
+    state.stationFormId = radioEntry->radioRef->refID;
+    state.stationName = CopyFormName(radioEntry->radioRef->baseForm);
+    if (state.stationName.empty()) {
+        state.stationName = CopyFormName(radioEntry->radioRef);
+    }
+
+    const bool track1Active = *reinterpret_cast<const std::uint32_t*>(
+        music + kTrack1ActiveOffset) != 0;
+    const std::size_t flagsOffset = track1Active ? kTrack1FlagsOffset : kTrack2FlagsOffset;
+    const std::uint8_t flags = music[flagsOffset];
+    const bool trackPlaying = (flags & kMusicStatePlay) != 0 &&
+        (flags & (kMusicStatePause | kMusicStateStop)) == 0;
+    if (trackPlaying) {
+        const char* trackPath = reinterpret_cast<const char*>(
+            music + (track1Active ? 0 : kTrack2PathOffset));
+        state.trackPath.assign(trackPath, strnlen_s(trackPath, MAX_PATH));
+    }
+
     return true;
 }
 
@@ -2159,6 +2374,28 @@ std::string SanitizeMenuTitle(const char* requested, const char* fallback) {
 
 }  // namespace
 
+bool UpdateInteractionMenuState(int status) {
+    if (!g_scriptInterface || !g_scriptInterface->CompileScript || !g_scriptInterface->CallFunctionAlt) return false;
+    static Script* function = nullptr;
+    if (!function) function = g_scriptInterface->CompileScript(R"(
+int iState
+begin function {iState}
+    AuxStringMapSetFlt "*DialecticInteraction" "enabled" (iState == 1)
+    AuxStringMapSetFlt "*DialecticInteraction" "available" (iState != 2)
+    if eval iState == 1
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: On"
+    elseif eval iState == 0
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Off"
+    elseif eval iState == 2
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC: Syncing..."
+    else
+        AuxStringMapSetStr "*DialecticInteraction" "title" "DIALECTIC is off. Retry"
+    endif
+end
+)");
+    return function && g_scriptInterface->CallFunctionAlt(function, nullptr, 1, static_cast<UInt32>(status));
+}
+
 bool OpenNativeToolMenu(NativeToolMenu menu,
                         const char* titleOverride,
                         const NativeToolMenuStatus* status) {
@@ -2180,14 +2417,25 @@ bool OpenNativeToolMenu(NativeToolMenu menu,
                 SanitizeMenuTitle(status ? status->chatMode.c_str() : nullptr, "STANDARD");
             const std::string llmLabel =
                 SanitizeMenuTitle(status ? status->llmMode.c_str() : nullptr, "STANDARD");
-            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel];
-            dynamicSource = R"(
-begin function {}
-    MessageBoxExAlt (CompileScript "Dialectic/DialecticControlMenuSelect.gek") "^DIALECTIC Control^Choose a setting or NPC action:|Chat Mode: [)" +
-                chatLabel + R"(]|LLM Mode: [)" + llmLabel +
-                R"(]|Dynamic Profiles|Wait Here|Close Menu"
-end
-)";
+            const int interaction = Interaction::Status();
+            const bool listener = MultiplayerSharing::IsListener();
+            const std::string toggleLabel = interaction == 1 ? "DIALECTIC: On" : interaction == 0 ? "DIALECTIC: Off"
+                : interaction == 2 ? "DIALECTIC: Syncing..." : "DIALECTIC is off. Retry";
+            const std::string help = interaction == 1 ? "Choose a setting or NPC action:"
+                : "AI dialogue and actions are off. Game events are still recorded.";
+            function = &g_dialecticControlMenuFunctions[chatLabel + "|" + llmLabel + "|" + std::to_string(interaction) + (listener ? "L" : "H")];
+            dynamicSource = "begin function {}\n    MessageBoxExAlt (CompileScript \"Dialectic/DialecticControlMenuSelect.gek\") \"^DIALECTIC Control^"
+                + help + "|" + toggleLabel;
+            if (!listener) dynamicSource += "|Chat Mode: [" + chatLabel + "]|LLM Mode: [" + llmLabel + "]|Dynamic Profiles|Wait Here";
+            dynamicSource += "|Close Menu\"\n";
+            const char* red = interaction == 1 ? "64" : "255";
+            const char* green = interaction == 1 ? "255" : "64";
+            for (const char* tile : {"MM_ButtonList/*:0/ListItemText", "MM_MessageText"}) {
+                const std::string prefix = "SetUIFloatAlt \"MessageMenu/NOGLOW_BRANCH/MM_MainRect/" + std::string(tile);
+                dynamicSource += prefix + "/systemcolor\" 0\n" + prefix + "/red\" " + red + "\n"
+                    + prefix + "/green\" " + green + "\n" + prefix + "/blue\" 64\n";
+            }
+            dynamicSource += "end\n";
             source = dynamicSource.c_str();
             break;
         }
@@ -2655,7 +2903,6 @@ begin function {iActionCode, iTargetMod, iTargetLocal}
         AddToFaction DialecticSeatFaction 0
         SetPackageTargetReference DialecticSeatPackage rTarget
         SetPackageLocationReference DialecticSeatPackage rTarget
-        SetPackageTargetDistance DialecticSeatPackage 96
         AddScriptPackage DialecticSeatPackage
     elseif eval iActionCode == 21 && rTarget
         AddToFaction DialecticTravelFaction 0
@@ -3067,6 +3314,8 @@ bool CaptureNativePlayerSurvivalState(NativePlayerSurvivalState& state) {
 
     state.valid = true;
     state.hardcoreEnabled = player->isHardcore;
+    // The player's actor-value owner supplies the current level, including level-ups.
+    state.playerLevel = static_cast<int>(player->avOwner.Fn_0A());
     state.dehydration = readNeed(eActorVal_Dehydration);
     state.hunger = readNeed(eActorVal_Hunger);
     state.sleepDeprivation = readNeed(eActorVal_Sleepdeprevation);

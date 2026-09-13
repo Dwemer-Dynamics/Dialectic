@@ -1,3 +1,5 @@
+#include "Interaction.h"
+#include "MultiplayerSharing.h"
 #include "ActionManager.h"
 
 #include "ActorPositionResolverFNV.h"
@@ -52,6 +54,7 @@ constexpr auto kActorInspectionTimeout = std::chrono::milliseconds(850);
 std::atomic<uint64_t> g_requestCounter{0};
 
 struct ActionRequest {
+    uint64_t interactionEpoch = Interaction::Epoch();
     std::string action;
     std::string speaker;
     std::string target;
@@ -69,6 +72,8 @@ struct ActionRequest {
     int itemInventoryType = 0;
     uint64_t runtimeGeneration = 0;
     bool narratorAuthority = false;
+    bool emitFuncret = true;
+    bool directorScene = false;
 };
 
 struct NativePackageState {
@@ -882,6 +887,9 @@ std::string ActionTargetLabel(const ActionRequest& request) {
 }
 
 void SendFuncretResult(const ActionRequest& request, const std::string& result) {
+    if (!request.emitFuncret) {
+        return;
+    }
     const std::string target = SanitizeFuncretSegment(ActionTargetLabel(request));
     const std::string speaker = SanitizeFuncretSegment(request.speaker);
     const std::string cleanResult = SanitizeFuncretSegment(result);
@@ -914,7 +922,12 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
         target.c_str(),
         cleanResult.size() > 180 ? cleanResult.substr(0, 180).c_str() : cleanResult.c_str());
 
-    HTTPManager::SendEvent("funcret", payload.str());
+    if (request.directorScene) {
+        // Record the real outcome without asking an NPC model to extend the scene.
+        HTTPManager::SendEvent("infoaction", speaker + ": " + cleanResult);
+    } else {
+        HTTPManager::SendEvent("funcret", payload.str());
+    }
 }
 
 void TrackNativePackageAction(const ActionRequest& request) {
@@ -2376,8 +2389,13 @@ bool TranslateRolemasterInstruction(ActionRequest& request, const std::vector<st
         request.speaker = characterName;
     }
 
+    // Instruction arguments describe an actor/task, not ordinary action target/item/amount.
+    request.target = args.size() >= 4 ? Trim(args[3]) : "";
+    request.targetFormId = 0;
+    request.item.clear();
+    request.amount = 1;
     if (request.target.empty()) {
-        request.target = InferTargetFromInstruction(action, instruction, request.speaker);
+        request.target = InferTargetFromInstruction(action, rawInstruction, request.speaker);
     }
 
     if (request.item.empty()) {
@@ -2427,6 +2445,7 @@ bool SendDirectorTalkInstruction(const ActionRequest& request, const char* sourc
             << "\"dialectic_mode\":\"STANDARD\","
             << "\"mode\":\"STANDARD\","
             << "\"director_instruction\":true,"
+            << "\"director_action\":\"" << HTTPManager::EscapeJson(request.action) << "\","
             << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(speaker) << "\",\"refid\":\"" << speakerId.str() << "\"}";
     if (!request.target.empty()) {
         payload << ",\"listener\":\"" << HTTPManager::EscapeJson(request.target) << "\""
@@ -2575,6 +2594,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
 
     request = ActionRequest{};
+    request.directorScene = Trim(ExtractJsonStringValue(lineObject, "action_source")) == "director_scene";
     request.speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
     if (request.speaker.empty()) {
         request.speaker = Trim(ExtractJsonStringValue(lineObject, "character"));
@@ -2618,10 +2638,22 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
 
     request.narratorAuthority =
-        EqualsIgnoreCase(actionSource, "narrator") &&
+        (EqualsIgnoreCase(actionSource, "narrator") || request.directorScene) &&
         EqualsIgnoreCase(authority, "narrator") &&
         EqualsIgnoreCase(request.speaker, "The Narrator") &&
         IsNarratorPluginAction(request.action);
+
+    if (request.directorScene && !IsDirectorSceneAction(request.action, request.narratorAuthority)) {
+        return false;
+    }
+
+    if (request.directorScene && request.target.empty()) {
+        if (request.action == "IncreaseWalkSpeed" || request.action == "DecreaseWalkSpeed") {
+            request.target = Trim(ExtractJsonStringValue(lineObject, "speed"));
+        } else if (request.action == "ReadQuests") {
+            request.target = Trim(ExtractJsonStringValue(lineObject, "id_quest"));
+        }
+    }
 
     if (request.action == "TravelTo" && request.target.empty()) {
         request.target = Trim(ExtractJsonStringValue(lineObject, "location"));
@@ -2710,6 +2742,7 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
 }
 
 bool ExecuteNarratorAction(ActionRequest request, const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     const std::string sourceName = source ? source : "ActionManager";
     if (!request.narratorAuthority || !IsNarratorPluginAction(request.action)) {
         return false;
@@ -2766,6 +2799,7 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
     const std::uint64_t generation = request.runtimeGeneration;
     return GameThreadDispatcher::Enqueue("narrator_action", commandKey, generation,
         [request, sourceName]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             std::string failure;
             bool succeeded = false;
             if (request.action == "SpawnCaps") {
@@ -2803,6 +2837,8 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
 }
 
 bool ExecuteActionRequest(ActionRequest request, const char* source) {
+    if (!Interaction::IsCurrent(request.interactionEpoch)) return false;
+    if (MultiplayerSharing::IsListener()) return false;
     if (request.runtimeGeneration == 0) {
         request.runtimeGeneration = RuntimeGeneration::Current();
     } else if (!RuntimeGeneration::IsCurrent(request.runtimeGeneration)) {
@@ -2813,7 +2849,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             static_cast<unsigned long long>(RuntimeGeneration::Current()));
         return false;
     }
-    if (request.action == "Talk") {
+    if (!request.instruction.empty() || request.action == "Talk") {
         return SendDirectorTalkInstruction(request, source);
     }
     if (request.narratorAuthority) {
@@ -2894,6 +2930,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
     const std::uint64_t generation = request.runtimeGeneration;
     return GameThreadDispatcher::Enqueue("action", commandKey, generation,
         [request]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             const int actionCode = ActionCodeForAction(request.action);
             if (actionCode == 2 || actionCode == 3) {
                 XNVSEAdapter::NativeTradeMenuInfo menuInfo;
@@ -3025,9 +3062,15 @@ bool IsActionCommand(const std::string& actionName) {
     return CanonicalActions().find(normalized) != CanonicalActions().end();
 }
 
+bool IsDirectorSceneAction(const std::string& actionName, bool narrator) {
+    return CanonicalActions().contains(actionName) && actionName != "Talk" && actionName != "DirectorCommand"
+        && IsNarratorPluginAction(actionName) == narrator;
+}
+
 bool RequestWaitHere(uint32_t actorFormId,
                      const std::string& actorName,
                      const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
     const char* sourceName = source ? source : "ActionManager";
     RuntimeSnapshot::GameState gameState;
     RuntimeSnapshot::ActorState actor;
@@ -3053,6 +3096,7 @@ bool RequestWaitHere(uint32_t actorFormId,
     const std::string commandKey = request.action + ":" + FormatRefId(actorFormId);
     const bool queued = GameThreadDispatcher::Enqueue("action", commandKey, request.runtimeGeneration,
         [request, sourceName = std::string(sourceName)]() {
+            if (!Interaction::IsCurrent(request.interactionEpoch)) return;
             if (XNVSEAdapter::ExecuteNativePackageAction(
                     request.speakerFormId, request.targetFormId, 18)) {
                 TrackNativePackageAction(request);
@@ -3073,9 +3117,78 @@ bool RequestWaitHere(uint32_t actorFormId,
     return queued;
 }
 
+bool RequestExternalFollowerAction(ExternalFollowerAction action,
+                                   uint32_t actorFormId,
+                                   const std::string& actorName,
+                                   const char* source) {
+    if (MultiplayerSharing::IsListener()) return false;
+    const char* sourceName = source ? source : "xNVSEEvent";
+    RuntimeSnapshot::GameState gameState;
+    RuntimeSnapshot::ActorState actor;
+    if (actorFormId == 0 || actorFormId == 0x00000014 ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !RuntimeSnapshot::TryGetActor(actorFormId, actor) ||
+        actor.deleted || actor.dead || !actor.loaded3D ||
+        !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
+        Logger::LogWarning("%s: external follower action rejected by scene gate actor=0x%08X",
+            sourceName, actorFormId);
+        return false;
+    }
+
+    if (action != ExternalFollowerAction::Recruit && !actor.playerTeammate) {
+        Logger::LogWarning("%s: external follower action rejected because actor is not a teammate actor=0x%08X",
+            sourceName, actorFormId);
+        return false;
+    }
+
+    const std::string resolvedName = actor.name.empty() ? actorName : actor.name;
+    if (action == ExternalFollowerAction::Wait) {
+        return RequestWaitHere(actorFormId, resolvedName, sourceName);
+    }
+
+    if (action == ExternalFollowerAction::Resume) {
+        {
+            std::lock_guard<std::mutex> lock(g_nativePackageMutex);
+            const auto tracked = g_nativePackageStates.find(actorFormId);
+            if (tracked == g_nativePackageStates.end() ||
+                tracked->second.request.action != "WaitHere") {
+                Logger::LogWarning("%s: external Resume rejected because actor has no tracked WaitHere state actor=0x%08X",
+                    sourceName, actorFormId);
+                return false;
+            }
+        }
+
+        const std::uint64_t generation = RuntimeGeneration::Current();
+        return GameThreadDispatcher::Enqueue("action", "Resume:" + FormatRefId(actorFormId), generation,
+            [actorFormId, resolvedName, sourceName = std::string(sourceName)]() {
+                if (!XNVSEAdapter::HaltNativeActor(actorFormId)) {
+                    Logger::LogWarning("[NATIVE_ACTION] external Resume failed actor=0x%08X source=%s",
+                        actorFormId, sourceName.c_str());
+                    return;
+                }
+                ClearNativePackageState(actorFormId);
+                Logger::LogInfo("[NATIVE_ACTION] external Resume completed actor=0x%08X name=%s source=%s",
+                    actorFormId, resolvedName.c_str(), sourceName.c_str());
+            });
+    }
+
+    ActionRequest request;
+    request.action = action == ExternalFollowerAction::Recruit ? "Follow" : "StopFollowing";
+    request.speaker = resolvedName;
+    request.speakerFormId = actorFormId;
+    request.runtimeGeneration = RuntimeGeneration::Current();
+    request.emitFuncret = false;
+    if (action == ExternalFollowerAction::Recruit) {
+        request.target = PlayerDisplayNameForAction();
+        request.targetFormId = gameState.playerFormId != 0 ? gameState.playerFormId : 0x00000014;
+    }
+    return ExecuteActionRequest(std::move(request), sourceName);
+}
+
 bool HandleRoleCommandJson(const std::string& lineObject,
                            const char* source,
                            uint64_t runtimeGeneration) {
+    if (MultiplayerSharing::IsListener()) return false;
     std::string actionField = Trim(ExtractJsonStringValue(lineObject, "action"));
     std::string commandName = Trim(ExtractJsonStringValue(lineObject, "command_name"));
     std::string command = commandName;
@@ -3337,6 +3450,7 @@ void UpdateNativePackageStates() {
         std::string reason;
     };
     std::vector<Cleanup> cleanup;
+    std::vector<std::uint32_t> completedSeats;
     std::vector<std::uint32_t> deferredCleanup;
     const auto now = std::chrono::steady_clock::now();
     const std::uint64_t generation = RuntimeGeneration::Current();
@@ -3406,6 +3520,27 @@ void UpdateNativePackageStates() {
                 }
             }
 
+            if (!shouldCleanup && action == "TakeASeat") {
+                if (speaker.sitSleepState == 4) {
+                    completedSeats.push_back(it->first);
+                    it = g_nativePackageStates.erase(it);
+                    continue;
+                }
+
+                RuntimeSnapshot::ReferenceState furniture;
+                const bool furnitureReady = state.request.targetFormId != 0 &&
+                    RuntimeSnapshot::TryGetReference(state.request.targetFormId, furniture) &&
+                    furniture.loaded3D && !furniture.deleted && !furniture.taken;
+                if (!furnitureReady) {
+                    shouldCleanup = true;
+                    reason = "furniture_left_scene";
+                }
+                if (!shouldCleanup && now - state.startedAt > std::chrono::minutes(3)) {
+                    shouldCleanup = true;
+                    reason = "timeout";
+                }
+            }
+
             if (shouldCleanup) {
                 cleanup.push_back({it->first, reason});
                 it = g_nativePackageStates.erase(it);
@@ -3425,6 +3560,10 @@ void UpdateNativePackageStates() {
         }
         Logger::LogInfo("[NATIVE_ACTION] deferred package cleanup actor=0x%08X completed",
             actorFormId);
+    }
+
+    for (const std::uint32_t actorFormId : completedSeats) {
+        Logger::LogInfo("[NATIVE_ACTION] seat completed actor=0x%08X", actorFormId);
     }
 
     for (const Cleanup& item : cleanup) {

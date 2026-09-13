@@ -1,3 +1,4 @@
+#include "Interaction.h"
 // VoiceRecorder.cpp - Voice recording implementation for Dialectic
 
 #include "VoiceRecorder.h"
@@ -1002,6 +1003,12 @@ static void OpenMicMonitoringThreadFunc(OpenMicCallback onVoiceDetected) {
 }
 
 void StartRecording(int boundKey, STTCallback callback, int silenceStopMs) {
+    if (!Interaction::Allowed()) return;
+    const auto interactionEpoch = Interaction::Epoch();
+    const auto originalCallback = callback;
+    callback = [originalCallback, interactionEpoch](const std::string& text) {
+        if (Interaction::IsCurrent(interactionEpoch)) originalCallback(text);
+    };
     if (g_isRecording) {
         Log("VoiceRecorder: Already recording, ignoring start request");
         return;
@@ -1064,6 +1071,7 @@ ServiceStatus GetServiceStatus() {
 }
 
 void StartOpenMicMonitoring(OpenMicCallback onVoiceDetected) {
+    if (!Interaction::Allowed()) return;
     if (g_openMicMonitoringActive || g_isRecording) {
         return;
     }

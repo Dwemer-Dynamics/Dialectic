@@ -31,6 +31,8 @@ begin function {}
 
     if eval fModeIndex == 4
         let sTargetName := sv_Construct "The Narrator"
+    elseif eval fModeIndex == 5
+        let sTargetName := sv_Construct "The Director"
     else
         let sHintTarget := ReadStringFromFile "Data\\NVSE\\Plugins\\dialectic_textinput_target.tmp" 1 1
         if eval sHintTarget && (sv_Length sHintTarget) > 0
