@@ -24,6 +24,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ExternalEventAPI.cpp
     src/Interaction.cpp
     src/HTTPManager.cpp
+    src/PlaythroughSession.cpp
     src/MultiplayerSharing.cpp
     src/ResponseRouter.cpp
     src/ResponseQueueFNV.cpp

@@ -1,3 +1,4 @@
+#include "PlaythroughSession.h"
 #include "Interaction.h"
 // GameLoop.cpp - Main game loop integration for Dialectic
 
@@ -4018,7 +4019,7 @@ static void ProcessNativeRuntimeEvents() {
                     Logger::LogInfo("GameLoop: successful PostLoadGame; waiting for fresh loaded-save timestamp");
                 } else {
                     g_loadedSaveInitSent = true;
-                    g_loadedSaveInitBlocked = false;
+                    g_loadedSaveInitBlocked = true;
                     Logger::LogWarning("GameLoop: PostLoadGame reported failure; suppressing loaded-save init");
                 }
                 break;
@@ -4126,6 +4127,21 @@ void Shutdown() {
 void Update(float deltaTime) {
     const auto frameProfileStart = std::chrono::steady_clock::now();
 
+    // Resolve this load before dispatching responses, input or gameplay telemetry.
+    ProcessNativeRuntimeEvents();
+    RefreshGameState();
+    if (!MultiplayerSharing::IsListener() && !PlaythroughSession::Allowed(PlaythroughSession::Generation())) {
+        if (g_gameState.isInGame && !g_gameState.isLoading && !g_loadedSaveInitBlocked) {
+            RefreshPlayerNameFromGame();
+            PlaythroughSession::Connect(Misc::GetPlayerName(), WorldContextFNV::GetGameTimestamp());
+            std::string message;
+            if (PlaythroughSession::TakeNotice(message)) IngameNotifier::Notify("[DIALECTIC] " + message);
+        }
+        Interaction::Update();
+        return;
+    }
+    std::string playthroughMessage;
+    if (PlaythroughSession::TakeNotice(playthroughMessage)) IngameNotifier::Notify("[DIALECTIC] " + playthroughMessage);
     // Update subsystems
     ProfileUpdateSubsystem("ProcessNativeRuntimeEvents", []() { ProcessNativeRuntimeEvents(); });
     if (!MultiplayerSharing::IsListener()) {

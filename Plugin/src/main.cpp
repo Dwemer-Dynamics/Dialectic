@@ -1,4 +1,5 @@
 #include "Interaction.h"
+#include "PlaythroughSession.h"
 // Dialectic - xNVSE plugin for AI-powered NPCs in Fallout New Vegas
 
 // The xNVSE SDK prefix must be the first platform include. Several SDK
@@ -1780,11 +1781,42 @@ __declspec(dllexport) bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInf
     return true;
 }
 
+
+// xNVSE keeps this identity with the character across ordinary saves and copied saves.
+static NVSESerializationInterface* g_playthroughSerialization = nullptr;
+static void SavePlaythroughIdentity(void*) {
+    const std::string id = PlaythroughSession::Character();
+    if (!PlaythroughSession::ValidId(id)) return;
+    const std::string record = id + (PlaythroughSession::NewCharacter() ? "1" : "0");
+    g_playthroughSerialization->WriteRecord('DPTI', 1, record.data(), static_cast<UInt32>(record.size()));
+}
+static void LoadPlaythroughIdentity(void*) {
+    UInt32 type=0, version=0, length=0;
+    while (g_playthroughSerialization->GetNextRecordInfo(&type,&version,&length)) {
+        if(type!='DPTI' || version!=1 || length!=33) continue;
+        char record[33];
+        if(g_playthroughSerialization->ReadRecordData(record,33)==33 && (record[32]=='0'||record[32]=='1'))
+            PlaythroughSession::RestoreCharacter(std::string(record,32),record[32]=='1');
+    }
+}
+static void NewPlaythroughIdentity(void*) { PlaythroughSession::BeginLoad(true); }
+
 // NVSE load function - called after all plugins are queried
 __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface* nvse) {
     Logger::LogInfo("NVSEPlugin_Load called - Dialectic v%s", DIALECTIC_VERSION);
 
     g_pluginHandle = nvse->GetPluginHandle();
+    if (!nvse->isEditor) {
+        g_playthroughSerialization = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
+        if (!g_playthroughSerialization || g_playthroughSerialization->version < 2) {
+            Logger::LogError("Playthrough identity requires xNVSE serialization version 2.");
+            return false;
+        }
+        g_playthroughSerialization->SetSaveCallback(g_pluginHandle, SavePlaythroughIdentity);
+        g_playthroughSerialization->SetLoadCallback(g_pluginHandle, LoadPlaythroughIdentity);
+        g_playthroughSerialization->SetNewGameCallback(g_pluginHandle, NewPlaythroughIdentity);
+    }
+
     Logger::LogDebug("Plugin handle: 0x%08X", g_pluginHandle);
 
     if (!nvse->isEditor) {
