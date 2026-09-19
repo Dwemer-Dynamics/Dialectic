@@ -7,6 +7,7 @@
 #include "ActionManager.h"
 #include "HTTPManager.h"
 #include "Logger.h"
+#include "IngameNotifier.h"
 #include "RuntimeGeneration.h"
 #include "SpeakManager.h"
 
@@ -58,7 +59,7 @@ std::map<std::string, DirectorProgress> g_directorScenes;
 void FinishDirectorScene(const std::string& id) {
     const auto scene = g_directorScenes.find(id);
     if (scene != g_directorScenes.end() && scene->second.pending.empty() && scene->second.actions == 0) {
-        Logger::LogInfo("[DIRECTOR] Scene stop: %s (%s)", id.c_str(), scene->second.outcome.c_str());
+        IngameNotifier::Notify("Director scene stopped.");
         g_directorScenes.erase(scene);
     }
 }
@@ -74,8 +75,8 @@ void CompleteDirectorAction(const std::string& id) {
 // Clearing response generations ends diagnostics even when an audio worker finishes later.
 void CancelDirectorScenes() {
     std::lock_guard<std::mutex> lock(g_directorMutex);
-    for (const auto& scene : g_directorScenes) {
-        Logger::LogInfo("[DIRECTOR] Scene stop: %s (cancelled)", scene.first.c_str());
+    for (std::size_t i = 0; i < g_directorScenes.size(); ++i) {
+        IngameNotifier::Notify("Director scene stopped.");
     }
     g_directorScenes.clear();
 }
@@ -104,7 +105,7 @@ void BeginDirectorScene(const std::string& id, const std::vector<DialogueLine>& 
     auto& scene = g_directorScenes[id];
     for (const auto& line : lines) scene.pending.insert(line.utteranceId);
     scene.actions = actions;
-    Logger::LogInfo("[DIRECTOR] Scene start: %s", id.c_str());
+    IngameNotifier::Notify("Director scene started.");
 }
 
 void CompleteDirectorSpeech(const std::string& id, const std::string& utteranceId, const std::string& state) {
