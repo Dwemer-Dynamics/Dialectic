@@ -1,6 +1,7 @@
 #include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "SpeakManager.h"
+#include "ResponseQueueFNV.h"
 #include "AudioManager.h"
 #include "AgentManager.h"
 #include "ActorEligibilityFNV.h"
@@ -155,6 +156,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
             line.actor.c_str(),
             line.utteranceId.c_str(),
             line.ttsCacheKey.c_str());
+        if (line.directorScene) ResponseQueueFNV::CompleteDirectorSpeech(line.requestId, line.utteranceId, state);
         HTTPManager::SendDialogueDeliveryAck(
             line.actor,
             line.actorFormId,

@@ -1,6 +1,7 @@
 #include "Interaction.h"
 #include "MultiplayerSharing.h"
 #include "XNVSEAdapter.h"
+#include "PlaythroughSession.h"
 
 #include "Logger.h"
 
@@ -1078,6 +1079,7 @@ void OnNVSEMessage(NVSEMessagingInterface::Message* source) {
         return;
     }
 
+    if (event == LifecycleEvent::PreLoadGame || event == LifecycleEvent::ExitToMainMenu || event == LifecycleEvent::ExitGame) PlaythroughSession::BeginLoad();
     Message message;
     message.event = event;
     message.data = source->data;
