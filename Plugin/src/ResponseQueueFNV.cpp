@@ -14,6 +14,8 @@
 #include <chrono>
 #include <mutex>
 #include <utility>
+#include <map>
+#include <set>
 
 namespace ResponseQueueFNV {
 namespace {
@@ -29,6 +31,7 @@ struct QueueItem {
     std::string actionJson;
     std::string source;
     bool directorScene = false;
+    std::string directorSceneId;
     uint64_t responseGeneration = 0;
     uint64_t runtimeGeneration = 0;
     std::chrono::steady_clock::time_point enqueuedAt;
@@ -38,8 +41,43 @@ struct QueueItem {
 void AbortQueuedDirectorLine(const QueueItem& item) {
     if (item.type != ItemType::Dialogue || !item.dialogue.directorScene || item.dialogue.utteranceId.empty()) return;
     const auto& line = item.dialogue;
+    CompleteDirectorSpeech(line.requestId, line.utteranceId, "aborted");
     HTTPManager::SendDialogueDeliveryAck(line.speaker, line.actorFormId, line.text,
         line.ttsCacheKey, line.utteranceId, "aborted", line.requestId);
+}
+
+struct DirectorProgress {
+    std::set<std::string> pending;
+    std::string outcome = "completed";
+    std::size_t actions = 0;
+};
+std::mutex g_directorMutex;
+std::map<std::string, DirectorProgress> g_directorScenes;
+
+// Called with the scene lock held after speech or attached-action dispatch completes.
+void FinishDirectorScene(const std::string& id) {
+    const auto scene = g_directorScenes.find(id);
+    if (scene != g_directorScenes.end() && scene->second.pending.empty() && scene->second.actions == 0) {
+        Logger::LogInfo("[DIRECTOR] Scene stop: %s (%s)", id.c_str(), scene->second.outcome.c_str());
+        g_directorScenes.erase(scene);
+    }
+}
+
+void CompleteDirectorAction(const std::string& id) {
+    std::lock_guard<std::mutex> lock(g_directorMutex);
+    const auto scene = g_directorScenes.find(id);
+    if (scene == g_directorScenes.end()) return;
+    if (scene->second.actions > 0) --scene->second.actions;
+    FinishDirectorScene(id);
+}
+
+// Clearing response generations ends diagnostics even when an audio worker finishes later.
+void CancelDirectorScenes() {
+    std::lock_guard<std::mutex> lock(g_directorMutex);
+    for (const auto& scene : g_directorScenes) {
+        Logger::LogInfo("[DIRECTOR] Scene stop: %s (cancelled)", scene.first.c_str());
+    }
+    g_directorScenes.clear();
 }
 
 std::mutex g_mutex;
@@ -61,6 +99,24 @@ static std::string Preview(const std::string& value, std::size_t maxLen = 80) {
 
 } // namespace
 
+void BeginDirectorScene(const std::string& id, const std::vector<DialogueLine>& lines, std::size_t actions) {
+    std::lock_guard<std::mutex> lock(g_directorMutex);
+    auto& scene = g_directorScenes[id];
+    for (const auto& line : lines) scene.pending.insert(line.utteranceId);
+    scene.actions = actions;
+    Logger::LogInfo("[DIRECTOR] Scene start: %s", id.c_str());
+}
+
+void CompleteDirectorSpeech(const std::string& id, const std::string& utteranceId, const std::string& state) {
+    if (state == "playing") return;
+    std::lock_guard<std::mutex> lock(g_directorMutex);
+    const auto scene = g_directorScenes.find(id);
+    if (scene == g_directorScenes.end() || !scene->second.pending.erase(utteranceId)) return;
+    if (state == "failed") scene->second.outcome = "failed";
+    else if (state == "aborted" && scene->second.outcome != "failed") scene->second.outcome = "cancelled";
+    FinishDirectorScene(id);
+}
+
 static bool IsCurrentGenerationLocked(uint64_t generation) {
     return Interaction::Allowed() && (generation == 0 || g_activeGeneration == 0 || generation == g_activeGeneration);
 }
@@ -71,6 +127,7 @@ void SetActiveGeneration(uint64_t generation, const char* source) {
         return;
     }
 
+    CancelDirectorScenes();
     g_activeGeneration = generation;
     g_activeRuntimeGeneration = RuntimeGeneration::Current();
     Logger::LogInfo("ResponseQueueFNV: active_generation=%llu runtime_generation=%llu source=%s pending=%zu",
@@ -132,6 +189,7 @@ void EnqueueDialogue(const DialogueLine& line, const char* source) {
     item.dialogue.runtimeGeneration = item.runtimeGeneration;
     if (!IsCurrentGenerationLocked(line.responseGeneration)) {
         ++g_totalDroppedStale;
+        AbortQueuedDirectorLine(item);
         Logger::LogInfo("ResponseQueueFNV: dropped stale dialogue speaker='%s' generation=%llu active=%llu source=%s",
             line.speaker.c_str(),
             static_cast<unsigned long long>(line.responseGeneration),
@@ -149,11 +207,12 @@ void EnqueueDialogue(const DialogueLine& line, const char* source) {
         g_items.size());
 }
 
-void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration, bool directorScene) {
+void EnqueueAction(const std::string& lineObject, const char* source, uint64_t responseGeneration, bool directorScene, const std::string& directorSceneId) {
     QueueItem item;
     item.type = ItemType::Action;
     item.actionJson = lineObject;
     item.directorScene = directorScene;
+    item.directorSceneId = directorSceneId;
     item.source = source ? source : "ResponseQueueFNV";
     item.enqueuedAt = std::chrono::steady_clock::now();
 
@@ -164,6 +223,7 @@ void EnqueueAction(const std::string& lineObject, const char* source, uint64_t r
         : RuntimeGeneration::Current();
     if (!IsCurrentGenerationLocked(responseGeneration)) {
         ++g_totalDroppedStale;
+        if (directorScene) CompleteDirectorAction(directorSceneId);
         Logger::LogInfo("ResponseQueueFNV: dropped stale action generation=%llu active=%llu source=%s",
             static_cast<unsigned long long>(responseGeneration),
             static_cast<unsigned long long>(g_activeGeneration),
@@ -230,6 +290,7 @@ bool DispatchPending(std::size_t maxItems) {
 
         if (droppedStale) {
             AbortQueuedDirectorLine(item);
+            if (item.directorScene) CompleteDirectorAction(item.directorSceneId);
             continue;
         }
 
@@ -264,17 +325,29 @@ bool DispatchPending(std::size_t maxItems) {
             continue;
         }
 
+        bool skipDirectorAction = false;
+        if (item.directorScene) {
+            std::lock_guard<std::mutex> lock(g_directorMutex);
+            const auto scene = g_directorScenes.find(item.directorSceneId);
+            skipDirectorAction = scene == g_directorScenes.end() || scene->second.outcome != "completed";
+        }
+        if (skipDirectorAction) {
+            CompleteDirectorAction(item.directorSceneId);
+            continue;
+        }
         Logger::LogInfo("ResponseQueueFNV: dispatch action source=%s latency_ms=%lld state=dispatching",
             item.source.c_str(),
             static_cast<long long>(dispatchLatencyMs));
         ActionManager::HandleRoleCommandJson(
             item.actionJson, item.source.c_str(), item.runtimeGeneration);
+        if (item.directorScene) CompleteDirectorAction(item.directorSceneId);
     }
 
     return dispatchedAny;
 }
 
 void Clear(const char* reason) {
+    CancelDirectorScenes();
     std::deque<QueueItem> cleared;
     {
         std::lock_guard<std::mutex> lock(g_mutex);

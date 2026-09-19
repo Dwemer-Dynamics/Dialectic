@@ -497,14 +497,16 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
     const auto lines = ExtractJsonArrayObjects(payload, "lines");
     const auto actions = ExtractJsonArrayObjects(payload, "actions");
     const std::string schema = ExtractJsonStringValue(payload, "schema");
-    const bool attachedActions = schema == "dialectic.director_scene.v2";
+    const bool chunked = schema == "dialectic.director_scene.v3";
+    const bool attachedActions = chunked || schema == "dialectic.director_scene.v2";
     if ((!attachedActions && schema != "dialectic.director_scene.v1")
-        || id.empty() || id.size() > 64 || lines.empty() || lines.size() > 6 || actions.size() > 3
+        || id.empty() || id.size() > 64 || lines.empty() || lines.size() > (chunked ? 128u : 6u) || actions.size() > 3
         || !ResponseQueueFNV::IsCurrentGeneration(generation)) {
         Logger::LogWarning("DirectorScene: rejected invalid or stale scene");
         return false;
     }
     std::vector<ResponseQueueFNV::DialogueLine> dialogue;
+    std::vector<std::string> utteranceIds;
     std::vector<std::vector<std::string>> actionsAfterLine(lines.size());
     for (const auto& line : lines) {
         ResponseQueueFNV::DialogueLine queued;
@@ -519,12 +521,14 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
         queued.responseGeneration = generation;
         queued.directorScene = true;
         const auto actor = ActorPositionResolverFNV::ResolveActor(queued.actorFormId);
-        if (queued.actorFormId == 0 || IsPlayerSpeakerName(queued.speaker) || queued.text.empty()
+        if (queued.utteranceId.empty() || std::find(utteranceIds.begin(), utteranceIds.end(), queued.utteranceId) != utteranceIds.end()
+            || queued.actorFormId == 0 || IsPlayerSpeakerName(queued.speaker) || queued.text.empty()
             || queued.text.size() > 2400 || queued.ttsCacheKey.empty() || queued.listenerFormId == 0
             || !actor.resolved || !ActorPositionResolverFNV::IsPositionInPlayerScene(actor)) {
             Logger::LogWarning("DirectorScene: unavailable speaker/listener or invalid line in scene %s", id.c_str());
             return false;
         }
+        utteranceIds.push_back(queued.utteranceId);
         dialogue.push_back(std::move(queued));
     }
     for (const auto& action : actions) {
@@ -562,13 +566,13 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
     }
     acceptedScenes.push_back(id);
     if (acceptedScenes.size() > 64) acceptedScenes.pop_front();
+    ResponseQueueFNV::BeginDirectorScene(id, dialogue, actions.size());
     for (std::size_t index = 0; index < dialogue.size(); ++index) {
         ResponseQueueFNV::EnqueueDialogue(dialogue[index], source);
         for (const auto& action : actionsAfterLine[index]) {
-            ResponseQueueFNV::EnqueueAction(action, source, generation, true);
+            ResponseQueueFNV::EnqueueAction(action, source, generation, true, id);
         }
     }
-    Logger::LogInfo("DirectorScene: queued %s dialogue=%zu actions=%zu", id.c_str(), dialogue.size(), actions.size());
     return true;
 }
 

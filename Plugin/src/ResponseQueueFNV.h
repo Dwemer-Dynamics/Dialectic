@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace ResponseQueueFNV {
 
@@ -40,13 +41,17 @@ struct QueueStatus {
     std::string unfinishedSource;
 };
 
+// Track terminal speech delivery once per scene, including chunks dropped before playback.
+void BeginDirectorScene(const std::string& id, const std::vector<DialogueLine>& lines, std::size_t actions);
+void CompleteDirectorSpeech(const std::string& id, const std::string& utteranceId, const std::string& state);
+
 void SetActiveGeneration(uint64_t generation, const char* source = "ResponseQueueFNV");
 bool IsCurrentGeneration(uint64_t generation);
 void MarkUnfinished(bool unfinished, const char* source = "ResponseQueueFNV", uint64_t generation = 0);
 bool IsUnfinished();
 
 void EnqueueDialogue(const DialogueLine& line, const char* source = "ResponseQueueFNV");
-void EnqueueAction(const std::string& lineObject, const char* source = "ResponseQueueFNV", uint64_t responseGeneration = 0, bool directorScene = false);
+void EnqueueAction(const std::string& lineObject, const char* source = "ResponseQueueFNV", uint64_t responseGeneration = 0, bool directorScene = false, const std::string& directorSceneId = "");
 
 bool DispatchPending(std::size_t maxItems = 64);
 void Clear(const char* reason = "clear");
