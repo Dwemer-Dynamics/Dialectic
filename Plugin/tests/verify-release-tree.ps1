@@ -57,6 +57,13 @@ try {
     }
     $tracked = @($trackedIndex | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
 
+    foreach ($guide in @('AGENTS.md', 'agent-guide.md', 'building.md')) {
+        $relative = "Mod/Data/docs/Dialectic/$guide"
+        if ($relative -notin $tracked) {
+            Fail "bundled agent guide is missing or untracked: $relative"
+        }
+    }
+
     $forbiddenPatterns = @(
         '^Mod/Source/',
         '^Mod/Data/Dialectic/voice_samples/',

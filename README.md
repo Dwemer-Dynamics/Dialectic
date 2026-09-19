@@ -3,6 +3,10 @@
 Dialectic is the Fallout: New Vegas and Tale of Two Wastelands client for AI
 NPC interaction.
 
+For AI assistants and coding agents, start with [AGENTS.md](AGENTS.md).
+The [bundled guides](Mod/Data/docs/Dialectic/AGENTS.md) cover troubleshooting,
+builds and custom integrations and are included in the installed mod.
+
 - `Plugin/`: native 32-bit xNVSE plugin source for `dialectic.dll`.
 - `Mod/Data/`: deployable ESP, MCM, JIP script-runner, UI, and voice assets.
 - `docs/`: native-runtime migration and validation records.
