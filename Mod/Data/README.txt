@@ -1,7 +1,7 @@
 Dialectic - AI NPCs for Fallout New Vegas and TTW
 =================================================
 
-Version: 1.0.0
+Version: 1.1.3
 Author: Dwemer Dynamics
 
 REQUIREMENTS
@@ -37,9 +37,16 @@ mode selection, model selection, and profile selection through MCM.
 
 TROUBLESHOOTING
 ---------------
-Check NVSE/Plugins/dialectic.log and jip_ln_nvse.log for plugin or script-runner
-errors. Verify DialecticServer discovery or the custom server override if the
-plugin loads but requests fail.
+Check Documents/My Games/FalloutNV/NVSE/dialectic.log and jip_ln_nvse.log for
+plugin or script-runner errors. Verify DialecticServer discovery or the custom
+server override if the plugin loads but requests fail. See the agent guide for
+fallback log locations.
+
+FOR AI ASSISTANTS AND CODING AGENTS
+---------------------------------
+Start at docs/Dialectic/AGENTS.md. The adjacent agent-guide.md and building.md
+explain the client/server split, source repositories, custom integrations,
+configuration, logs, builds and package layout. These guides ship with the mod.
 
 LICENSE
 -------

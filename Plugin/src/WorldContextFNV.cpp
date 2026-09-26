@@ -10,6 +10,7 @@
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
 #include "TaskManager.h"
+#include "XNVSEAdapter.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -25,6 +26,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace WorldContextFNV {
 namespace {
@@ -33,10 +35,12 @@ static constexpr const char* kWorldContextPath = "Data\\NVSE\\Plugins\\dialectic
 static std::mutex g_contextMutex;
 static Context g_context;
 static std::chrono::steady_clock::time_point g_lastBridgeReadTime;
+static std::chrono::steady_clock::time_point g_lastRadioReadTime;
 static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::string g_lastSentSignature;
 static std::string g_lastCommentLocation;
 static constexpr auto kBridgeReadInterval = std::chrono::milliseconds(500);
+static constexpr auto kRadioReadInterval = std::chrono::milliseconds(500);
 static bool g_saveLoadPending = false;
 static bool g_saveLoadCompleted = false;
 static uint64_t g_bridgeWriteFloor = 0;
@@ -85,6 +89,41 @@ std::string ToLower(std::string value) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
+}
+
+std::string SongTitleFromPath(const std::string& path) {
+    const size_t separator = path.find_last_of("\\/");
+    std::string title = separator == std::string::npos ? path : path.substr(separator + 1);
+    const size_t extension = title.find_last_of('.');
+    if (extension != std::string::npos) {
+        title.erase(extension);
+    }
+    if (title.size() >= 4 && ToLower(title.substr(0, 4)) == "mus_") {
+        title.erase(0, 4);
+    }
+
+    for (char& character : title) {
+        if (character == '_' || character == '-') {
+            character = ' ';
+        }
+    }
+
+    std::string normalized;
+    normalized.reserve(title.size());
+    bool previousWhitespace = false;
+    for (unsigned char character : title) {
+        const bool whitespace = std::isspace(character) != 0;
+        if (!whitespace || !previousWhitespace) {
+            normalized.push_back(whitespace ? ' ' : static_cast<char>(character));
+        }
+        previousWhitespace = whitespace;
+    }
+    normalized = Trim(normalized);
+    if (normalized.size() > 160) {
+        normalized.resize(160);
+        normalized = Trim(normalized);
+    }
+    return normalized;
 }
 
 bool IsUnknown(const std::string& value) {
@@ -331,7 +370,12 @@ bool RefreshFromBridge() {
     next.resolved = !IsUnknown(next.location) || next.gamets > 0;
 
     std::lock_guard<std::mutex> lock(g_contextMutex);
-    g_context = next;
+    // The script bridge has no radio fields, so retain native telemetry until its next sample.
+    next.radioActive = g_context.radioActive;
+    next.radioStation = g_context.radioStation;
+    next.radioStationFormId = g_context.radioStationFormId;
+    next.radioSong = g_context.radioSong;
+    g_context = std::move(next);
     if (g_saveLoadPending) {
         g_saveLoadPending = false;
         g_saveLoadCompleted = false;
@@ -349,11 +393,21 @@ std::string FormatNativeFormId(std::uint32_t formId) {
     return stream.str();
 }
 
-bool ApplyNativeSnapshot() {
+bool ApplyNativeSnapshot(bool forceRadio = false) {
     RuntimeSnapshot::GameState native;
     if (!RuntimeSnapshot::TryGetFreshGameState(native, std::chrono::milliseconds(500))) {
         return false;
     }
+
+    XNVSEAdapter::NativeRadioState radio;
+    bool radioCaptured = false;
+    const auto now = std::chrono::steady_clock::now();
+    if (forceRadio || g_lastRadioReadTime.time_since_epoch().count() == 0 ||
+        now - g_lastRadioReadTime >= kRadioReadInterval) {
+        g_lastRadioReadTime = now;
+        radioCaptured = XNVSEAdapter::CaptureNativeRadioState(radio);
+    }
+
     std::lock_guard<std::mutex> lock(g_contextMutex);
     if (Config::worldContextIncludeCell) {
         g_context.cellFormId = FormatNativeFormId(native.cellFormId);
@@ -373,6 +427,12 @@ bool ApplyNativeSnapshot() {
     g_context.playerY = native.playerY;
     g_context.playerZ = native.playerZ;
     g_context.playerPositionKnown = native.player3DLoaded;
+    if (radioCaptured && radio.valid) {
+        g_context.radioActive = radio.active;
+        g_context.radioStation = radio.active ? Trim(radio.stationName) : "";
+        g_context.radioStationFormId = radio.active ? FormatNativeFormId(radio.stationFormId) : "";
+        g_context.radioSong = radio.active ? SongTitleFromPath(radio.trackPath) : "";
+    }
     g_context.resolved = native.inGame && (native.cellFormId != 0 || native.worldspaceFormId != 0);
     g_context.weather = NormalizeWeather(g_context);
     return true;
@@ -388,7 +448,11 @@ std::string BuildSignature(const Context& context) {
               << context.weather << "|"
               << context.gameYear << "|"
               << context.gameMonth << "|"
-              << context.gameDay;
+              << context.gameDay << "|"
+              << (context.radioActive ? 1 : 0) << "|"
+              << context.radioStation << "|"
+              << context.radioStationFormId << "|"
+              << context.radioSong;
     return signature.str();
 }
 
@@ -408,6 +472,12 @@ std::string BuildJson(const Context& context) {
     json << "\"weather_name\":\"" << HTTPManager::EscapeJson(context.weatherName) << "\",";
     json << "\"weather_editorid\":\"" << HTTPManager::EscapeJson(context.weatherEditorId) << "\",";
     json << "\"weather_formid\":\"" << HTTPManager::EscapeJson(context.weatherFormId) << "\",";
+    json << "\"radio\":{";
+    json << "\"active\":" << (context.radioActive ? "true" : "false") << ",";
+    json << "\"station\":\"" << HTTPManager::EscapeJson(context.radioStation) << "\",";
+    json << "\"station_formid\":\"" << HTTPManager::EscapeJson(context.radioStationFormId) << "\",";
+    json << "\"song\":\"" << HTTPManager::EscapeJson(context.radioSong) << "\"";
+    json << "},";
     json << "\"gamets\":" << context.gamets << ",";
     json << "\"ts\":" << localTs << ",";
     json << "\"player_position\":{";
@@ -476,6 +546,7 @@ void BeginSaveLoad() {
     g_saveLoadCompleted = false;
     g_bridgeWriteFloor = modifiedTicks;
     g_lastBridgeReadTime = {};
+    g_lastRadioReadTime = {};
     g_lastSendTime = {};
     g_lastSentSignature.clear();
     g_lastCommentLocation.clear();
@@ -493,6 +564,7 @@ void CompleteSaveLoad(bool succeeded) {
         g_saveLoadCompleted = false;
         g_bridgeWriteFloor = 0;
         g_lastBridgeReadTime = {};
+        g_lastRadioReadTime = {};
         Logger::LogWarning("WorldContextFNV: save load failed; cancelled post-load bridge gate");
         return;
     }
@@ -502,6 +574,7 @@ void CompleteSaveLoad(bool succeeded) {
     g_saveLoadCompleted = true;
     g_bridgeWriteFloor = (std::max)(g_bridgeWriteFloor, modifiedTicks);
     g_lastBridgeReadTime = {};
+    g_lastRadioReadTime = {};
     Logger::LogInfo("WorldContextFNV: save load completed; awaiting post-load bridge write");
 }
 
@@ -511,7 +584,7 @@ void SendNow(bool force) {
     }
 
     RefreshFromBridge();
-    ApplyNativeSnapshot();
+    ApplyNativeSnapshot(true);
     Context context;
     {
         std::lock_guard<std::mutex> lock(g_contextMutex);

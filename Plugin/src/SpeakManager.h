@@ -3,10 +3,16 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <cstddef>
 
 namespace SpeakManager {
+// Passive listener presentation never resolves actors or reports AI delivery. Game thread only.
+void PlaySharedDialogue(const std::string& speaker, const std::string& text,
+                        const std::string& utterance, const std::vector<uint8_t>& audio);
+void StopSharedDialogue();
+void UpdateSharedDialogue(bool remotePaused);
 struct QueueStatus {
     uint64_t audioGeneration = 0;
     int dialogueLinesQueued = 0;
@@ -62,7 +68,8 @@ void QueueDialogue(const std::string& text,
                    uint64_t runtimeGeneration = 0,
                    uint32_t listenerFormId = 0,
                    uint32_t rechatTargetFormId = 0,
-                   const std::string& displayName = "");
+                   const std::string& displayName = "",
+                   bool directorScene = false);
 
 // Suppress vanilla/radiant dialogue for an actor while an AI turn is pending.
 void GuardActorForPendingDialogue(uint32_t actorFormId, const std::string& actorName);
@@ -147,6 +154,9 @@ void StopSpeaking();
 
 // Hard kill all queued/active speech, including player sidecar lines.
 void HaltAllSpeech();
+
+// Discard future lines while letting current playback finish.
+void DiscardPendingInteraction();
 
 // Clear all queued/active speech for lifecycle resets without reporting a hard halt.
 void ClearAllSpeech(const char* reason);

@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "Console.h"
 #include "GameLoop.h"
+#include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
 #include "ResponseQueueFNV.h"
@@ -488,6 +489,93 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
     return 0;
 }
 
+// A scene is accepted once across streaming and the final action-only pass.
+// Validate the entire cast before queueing speech; ordinary response routing stays unchanged.
+bool QueueDirectorScene(const std::string& lineObject, const char* source, uint64_t generation) {
+    const std::string payload = ExtractJsonStringValue(lineObject, "payload");
+    const std::string id = ExtractJsonStringValue(payload, "id");
+    const auto lines = ExtractJsonArrayObjects(payload, "lines");
+    const auto actions = ExtractJsonArrayObjects(payload, "actions");
+    const std::string schema = ExtractJsonStringValue(payload, "schema");
+    const bool chunked = schema == "dialectic.director_scene.v3";
+    const bool attachedActions = chunked || schema == "dialectic.director_scene.v2";
+    if ((!attachedActions && schema != "dialectic.director_scene.v1")
+        || id.empty() || id.size() > 64 || lines.empty() || lines.size() > (chunked ? 128u : 6u) || actions.size() > 3
+        || !ResponseQueueFNV::IsCurrentGeneration(generation)) {
+        Logger::LogWarning("DirectorScene: rejected invalid or stale scene");
+        return false;
+    }
+    std::vector<ResponseQueueFNV::DialogueLine> dialogue;
+    std::vector<std::string> utteranceIds;
+    std::vector<std::vector<std::string>> actionsAfterLine(lines.size());
+    for (const auto& line : lines) {
+        ResponseQueueFNV::DialogueLine queued;
+        queued.speaker = Trim(ExtractJsonStringValue(line, "speaker"));
+        queued.text = Trim(ExtractJsonStringValue(line, "text"));
+        queued.listenerHint = Trim(ExtractJsonStringValue(line, "listener"));
+        queued.actorFormId = ResolveResponseSpeakerFormId(queued.speaker);
+        queued.listenerFormId = ResolveResponseSpeakerFormId(queued.listenerHint);
+        queued.ttsCacheKey = ExtractJsonStringValue(line, "tts_cache_key");
+        queued.utteranceId = ExtractJsonStringValue(line, "utterance_id");
+        queued.requestId = id;
+        queued.responseGeneration = generation;
+        queued.directorScene = true;
+        const auto actor = ActorPositionResolverFNV::ResolveActor(queued.actorFormId);
+        if (queued.utteranceId.empty() || std::find(utteranceIds.begin(), utteranceIds.end(), queued.utteranceId) != utteranceIds.end()
+            || queued.actorFormId == 0 || IsPlayerSpeakerName(queued.speaker) || queued.text.empty()
+            || queued.text.size() > 2400 || queued.ttsCacheKey.empty() || queued.listenerFormId == 0
+            || !actor.resolved || !ActorPositionResolverFNV::IsPositionInPlayerScene(actor)) {
+            Logger::LogWarning("DirectorScene: unavailable speaker/listener or invalid line in scene %s", id.c_str());
+            return false;
+        }
+        utteranceIds.push_back(queued.utteranceId);
+        dialogue.push_back(std::move(queued));
+    }
+    for (const auto& action : actions) {
+        const std::string speaker = ExtractJsonStringValue(action, "speaker");
+        const std::string command = ExtractJsonStringValue(action, "command_name");
+        const std::string authority = ExtractJsonStringValue(action, "authority");
+        const bool narrator = speaker == "The Narrator" && authority == "narrator";
+        // Older scenes retain their closing actions; v2 attaches actions to a spoken line.
+        const int afterLine = attachedActions ? ExtractJsonIntValue(action, "after_line", 0) : static_cast<int>(lines.size());
+        if (!ActionManager::IsDirectorSceneAction(command, narrator)
+            || (!narrator && (ResolveResponseSpeakerFormId(speaker) == 0 || IsPlayerSpeakerName(speaker)))
+            || (!authority.empty() && !narrator)
+            || afterLine < 1 || afterLine > static_cast<int>(lines.size())
+            || (attachedActions && !narrator && speaker != dialogue[afterLine - 1].speaker)) {
+            Logger::LogWarning("DirectorScene: rejected invalid action or line attachment in scene %s", id.c_str());
+            return false;
+        }
+        std::string closing = "{\"action\":\"rolecommand\",\"action_source\":\"director_scene\",\"speaker\":\""
+            + HTTPManager::EscapeJson(speaker) + "\",\"command_name\":\"" + HTTPManager::EscapeJson(command) + "\"";
+        // Copy only action arguments, never model-supplied dispatch or script fields.
+        for (const char* key : {"target", "item", "location", "speed", "id_quest",
+                               "target_refid", "target_formid", "item_refid", "item_baseid", "location_refid"}) {
+            const std::string value = ExtractJsonStringValue(action, key);
+            if (!value.empty()) closing += ",\"" + std::string(key) + "\":\"" + HTTPManager::EscapeJson(value) + "\"";
+        }
+        closing += ",\"amount\":" + std::to_string(ExtractJsonIntValue(action, "amount", 1));
+        if (narrator) closing += ",\"authority\":\"narrator\"";
+        actionsAfterLine[afterLine - 1].push_back(closing + "}");
+    }
+    static std::mutex sceneMutex;
+    static std::deque<std::string> acceptedScenes;
+    std::lock_guard<std::mutex> lock(sceneMutex);
+    if (std::find(acceptedScenes.begin(), acceptedScenes.end(), id) != acceptedScenes.end()) {
+        return true;
+    }
+    acceptedScenes.push_back(id);
+    if (acceptedScenes.size() > 64) acceptedScenes.pop_front();
+    ResponseQueueFNV::BeginDirectorScene(id, dialogue, actions.size());
+    for (std::size_t index = 0; index < dialogue.size(); ++index) {
+        ResponseQueueFNV::EnqueueDialogue(dialogue[index], source);
+        for (const auto& action : actionsAfterLine[index]) {
+            ResponseQueueFNV::EnqueueAction(action, source, generation, true, id);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool ProcessJsonResponse(const std::string& response, const char* source, uint64_t responseGeneration) {
@@ -531,6 +619,10 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
     std::vector<std::string> responseLines = ExtractJsonArrayObjects(response, "lines");
     for (size_t lineIndex = 0; lineIndex < responseLines.size(); ++lineIndex) {
         const std::string& lineObject = responseLines[lineIndex];
+        if (ExtractJsonStringValue(lineObject, "command_name") == "DirectorScene") {
+            QueueDirectorScene(lineObject, source, responseGeneration);
+            continue;
+        }
         std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
         std::string displayName = Trim(ExtractJsonStringValue(lineObject, "display_name"));
         std::string action = Trim(ExtractJsonStringValue(lineObject, "action"));
@@ -546,6 +638,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
         }
         std::string listenerHint = Trim(ExtractJsonStringValue(lineObject, "listener"));
         std::string rechatTargetHint = Trim(ExtractJsonStringValue(lineObject, "rechat_target"));
+        const uint32_t speakerFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "speaker_formid"));
         const uint32_t listenerFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "listener_formid"));
         const uint32_t rechatTargetFormId = ParseFormIdString(ExtractJsonStringValue(lineObject, "rechat_target_formid"));
         message = StripDialogueMetadata(message);
@@ -603,7 +696,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
                 listenerFormId,
                 rechatTargetFormId,
                 responseRechatDepth,
-                ResolveResponseSpeakerFormId(speaker)
+                speakerFormId != 0 ? speakerFormId : ResolveResponseSpeakerFormId(speaker)
             });
 
             if (!isPlayerTextOnly) {
@@ -668,6 +761,10 @@ bool ProcessJsonActionsOnly(const std::string& response, const char* source, uin
 
     bool processed = false;
     for (const std::string& lineObject : responseLines) {
+        if (ExtractJsonStringValue(lineObject, "command_name") == "DirectorScene") {
+            processed = QueueDirectorScene(lineObject, source, responseGeneration) || processed;
+            continue;
+        }
         const std::string action = Trim(ExtractJsonStringValue(lineObject, "action"));
         const bool isActionCommand = action == "rolecommand" || ActionManager::IsActionCommand(action);
         if (!isActionCommand) {

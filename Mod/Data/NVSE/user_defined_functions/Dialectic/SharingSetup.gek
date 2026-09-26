@@ -1,0 +1,32 @@
+float fValue
+int iMenu
+int iSubmenu
+int iOption
+array_var aJSON
+int iAction
+
+Begin Function {fValue, iMenu, iSubmenu, iOption, aJSON}
+    if eval fValue <= 0
+        return
+    endif
+    let iAction := iOption - 2
+    if eval iOption == 3
+        SetINIIntC "Tools:SharingHost" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    if eval iOption == 4
+        SetINIIntC "Tools:SharingJoin" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    if eval iOption == 5
+        SetINIIntC "Tools:SharingCopy" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    if eval iOption == 6
+        SetINIIntC "Tools:SharingStatus" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    if eval iOption == 7
+        SetINIIntC "Tools:SharingDisconnect" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    if eval iOption == 8
+        SetINIIntC "Tools:SharingSaveInvite" 0 "Data\\NVSE\\Plugins\\dialectic_custom.ini"
+    endif
+    DialecticSharingSetup iAction
+End

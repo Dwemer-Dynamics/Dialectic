@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "MultiplayerSharing.h"
 #include "Logger.h"
 #include "VoiceRecorder.h"
 
@@ -24,6 +25,10 @@ namespace Config {
     static constexpr const char* kDefaultServerHost = "127.0.0.1";
     static constexpr int kDefaultServerPort = 8085;
     static constexpr const char* kDefaultServerPath = "DialecticServer/main.php";
+
+    std::atomic<int> multiplayerMode{0};
+    std::string multiplayerUrl, multiplayerSession, multiplayerKey;
+    std::string multiplayerPublicRelayUrl;
 
     // Server configuration
     std::string serverHost = kDefaultServerHost;
@@ -163,9 +168,6 @@ namespace Config {
     bool pointsOfInterestIncludeLocked = true;
     bool pointsOfInterestIncludeLookingAt = true;
 
-    // Dynamic profile trigger configuration
-    int dynamicProfileTimerMinutes = 30;
-    bool dynamicProfileTimerIncludeNarrator = true;
 
     // Bored/idle event trigger configuration
     bool boredEventsEnabled = true;
@@ -638,6 +640,11 @@ namespace Config {
         Logger::LogDebug("Default INI path: %s", defaultIniPath.c_str());
         Logger::LogDebug("Custom INI path: %s", customIniPath.c_str());
 
+        int sharingMode = 0;
+        multiplayerPublicRelayUrl.clear();
+        multiplayerUrl.clear();
+        multiplayerSession.clear();
+        multiplayerKey.clear();
         for (const std::string& iniPath : { defaultIniPath, customIniPath }) {
             std::ifstream iniFile(iniPath);
             if (!iniFile.is_open()) {
@@ -674,6 +681,17 @@ namespace Config {
                     else if (key == "Port") ParsePort(value, serverPort, iniPath.c_str());
                     else if (key == "Path") serverPath = value;
                     else if (key == "LocalSoundcachePath") localSoundcachePath = value;
+                }
+                else if (currentSection == "Multiplayer") {
+                    if (key == "Mode") {
+                        sharingMode = 0;
+                        if (value == "1") sharingMode = 1;
+                        else if (value == "2") sharingMode = 2;
+                    }
+                    else if (key == "PublicRelayURL") multiplayerPublicRelayUrl = value;
+                    else if (key == "URL") multiplayerUrl = value;
+                    else if (key == "Session") multiplayerSession = value;
+                    else if (key == "Key") multiplayerKey = value;
                 }
                 else if (currentSection == "Player") {
                 // Player name is detected from the live game reference, not loaded from INI.
@@ -812,10 +830,6 @@ namespace Config {
                 else if (key == "IncludeLocked") pointsOfInterestIncludeLocked = (value == "1" || value == "true");
                 else if (key == "IncludeLookingAt") pointsOfInterestIncludeLookingAt = (value == "1" || value == "true");
             }
-            else if (currentSection == "DynamicProfile") {
-                if (key == "TimerMinutes" || key == "UpdateMinutes") dynamicProfileTimerMinutes = std::max(1, std::stoi(value));
-                else if (key == "IncludeNarrator") dynamicProfileTimerIncludeNarrator = (value == "1" || value == "true");
-            }
             else if (currentSection == "BoredEvents") {
                 if (key == "Enabled") boredEventsEnabled = true;
                 else if (key == "TimerSeconds" || key == "BoredEventTimerSeconds") boredEventTimerSeconds = std::max(5, std::stoi(value));
@@ -872,7 +886,8 @@ namespace Config {
             iniFile.close();
         }
 
-        if (resolveConnection) {
+        multiplayerMode.store(sharingMode);
+        if (resolveConnection && sharingMode != 2 && !MultiplayerSharing::IsListener()) {
             ResolveServerConnection();
         }
 
@@ -969,6 +984,14 @@ namespace Config {
             iniFile << "\n";
         }
         
+        // Leave ordinary custom INI saves unchanged until sharing is configured.
+        if (multiplayerMode.load() != 0 || !multiplayerUrl.empty() ||
+            !multiplayerSession.empty() || !multiplayerKey.empty() || !multiplayerPublicRelayUrl.empty()) {
+            iniFile << "[Multiplayer]\nMode=" << multiplayerMode.load() << "\n";
+            iniFile << "PublicRelayURL=" << multiplayerPublicRelayUrl << "\n";
+            iniFile << "URL=" << multiplayerUrl << "\nSession=" << multiplayerSession
+                    << "\nKey=" << multiplayerKey << "\n\n";
+        }
         iniFile << "[Hotkeys]\n";
         iniFile << "; Hotkeys use Fallout DirectInput scan codes. Set them in MCM to enable.\n";
         iniFile << "TalkToNPC=" << hotkeyTalkToNPC << "\n";
@@ -1143,12 +1166,6 @@ namespace Config {
         iniFile << "IncludeDoors=" << (pointsOfInterestIncludeDoors ? "1" : "0") << "\n";
         iniFile << "IncludeLocked=" << (pointsOfInterestIncludeLocked ? "1" : "0") << "\n";
         iniFile << "IncludeLookingAt=" << (pointsOfInterestIncludeLookingAt ? "1" : "0") << "\n\n";
-
-        iniFile << "[DynamicProfile]\n";
-        iniFile << "; Periodic dynamic profile refresh. Manual hotkeys live in [Hotkeys].\n";
-        iniFile << "; Always enabled; TimerMinutes controls how often background refreshes run.\n";
-        iniFile << "TimerMinutes=" << dynamicProfileTimerMinutes << "\n";
-        iniFile << "IncludeNarrator=" << (dynamicProfileTimerIncludeNarrator ? "1" : "0") << "\n\n";
 
         iniFile << "[BoredEvents]\n";
         iniFile << "; Idle/bored NPC comments. Always enabled; server-side BORED_EVENT controls probability.\n";

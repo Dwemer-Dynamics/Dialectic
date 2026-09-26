@@ -415,6 +415,31 @@
       "columns": 1,
       "enable": 1,
       "options": {
+        "11": {
+          "title": {
+            "auxStringMap": "*DialecticInteraction",
+            "key": "title",
+            "default": "DIALECTIC: Syncing..."
+          },
+          "type": 5,
+          "enable": {
+            "auxStringMap": "*DialecticInteraction",
+            "key": "available",
+            "default": 0
+          },
+          "mouse": "Turn AI dialogue and actions on or off. Game events are still recorded. The current line can finish. This uses the same switch as DIALECTIC Control.",
+          "vars": [
+            {
+              "auxStringMap": "*DialecticInteraction",
+              "key": "enabled",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/InteractionToggle.gek"
+          }
+        },
         "1": {
           "title": "Dialogue",
           "enable": 1,
@@ -484,51 +509,6 @@
           "vars": [
             {
               "configINI": "Behavior:SceneSafety",
-              "default": 1
-            }
-          ],
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "6": {
-          "title": "Dynamic Profiles",
-          "enable": 1,
-          "type": 0
-        },
-        "7": {
-          "title": "Dynamic Profile Timer",
-          "type": 2,
-          "enable": 1,
-          "suffix": " min",
-          "mouse": "Minutes between automatic dynamic profile refreshes.",
-          "vars": [
-            {
-              "configINI": "DynamicProfile:TimerMinutes",
-              "default": 30
-            }
-          ],
-          "scale": {
-            "valueDecimal": 0,
-            "valueIncrement": 5,
-            "valueMin": 5,
-            "valueMax": 240,
-            "suffix": " min"
-          },
-          "call": {
-            "type": "file",
-            "value": "Dialectic/MCMReload.gek"
-          }
-        },
-        "8": {
-          "title": "Include Narrator",
-          "type": 5,
-          "enable": 1,
-          "mouse": "Includes The Narrator in timer-triggered profile refreshes.",
-          "vars": [
-            {
-              "configINI": "DynamicProfile:IncludeNarrator",
               "default": 1
             }
           ],
@@ -962,6 +942,106 @@
           "call": {
             "type": "file",
             "value": "Dialectic/InitializeDialectic.gek"
+          }
+        },
+        "2": {
+          "title": "(Beta) Multiplayer Dialogue Sharing",
+          "enable": 1
+        },
+        "3": {
+          "title": "Host session",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Create a session, then use Copy join code to invite friends. Close MCM to connect. Only ordinary NPC speech is shared.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingHost",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "4": {
+          "title": "Join session (copied code)",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Copy the host's join code first. Close MCM to join. Listening disables your own AI conversations until you disconnect.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingJoin",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "5": {
+          "title": "Copy join code",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Copy the current session code to send to friends.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingCopy",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "6": {
+          "title": "Sharing status",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Show whether sharing is Off, connecting, hosting or listening after closing MCM.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingStatus",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "7": {
+          "title": "Disconnect / Off",
+          "type": 5,
+          "enable": 1,
+          "mouse": "End hosting or leave the session and return to normal DIALECTIC. Close MCM to apply.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingDisconnect",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
+          }
+        },
+        "8": {
+          "title": "Save invite to Desktop",
+          "type": 5,
+          "enable": 1,
+          "mouse": "Save the hosted session code and joining instructions to a text file on your Desktop. Close MCM to save. Existing files are kept.",
+          "vars": [
+            {
+              "configINI": "Tools:SharingSaveInvite",
+              "default": 0
+            }
+          ],
+          "call": {
+            "type": "file",
+            "value": "Dialectic/SharingSetup.gek"
           }
         }
       }

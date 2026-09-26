@@ -28,6 +28,10 @@ struct Context {
     float playerY = 0.0f;
     float playerZ = 0.0f;
     bool playerPositionKnown = false;
+    bool radioActive = false;
+    std::string radioStation;
+    std::string radioStationFormId;
+    std::string radioSong;
 };
 
 Context GetCurrent();

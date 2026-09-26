@@ -1,4 +1,8 @@
+#include "PlaythroughSession.h"
+#include "Interaction.h"
+#include "MultiplayerSharing.h"
 #include "HTTPManager.h"
+#include "PlaythroughNotices.h"
 #include "ActorPositionResolverFNV.h"
 #include "Config.h"
 #include "Misc.h"
@@ -27,7 +31,7 @@
 #include <unordered_map>
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "1.0.0"
+#define DIALECTIC_VERSION "1.1.3"
 #endif
 
 #pragma comment(lib, "ws2_32.lib")
@@ -64,7 +68,7 @@ namespace HTTPManager {
         const std::string& jsonBody,
         bool streamResponse = false,
         const std::function<void(const std::string&)>& streamCallback = {},
-        const std::function<bool()>& cancelRequested = {});
+        const std::function<bool()>& cancelRequested = {}, unsigned long* statusOut = nullptr);
 
     static bool ProcessJsonResponsePayload(const std::string& response, const char* source, uint64_t generation = 0);
 
@@ -83,7 +87,8 @@ namespace HTTPManager {
                                     std::function<void()> task,
                                     const std::string& key = "",
                                     bool priority = false) {
-        if (!task) return 0;
+        if (!task || MultiplayerSharing::IsListener() || !PlaythroughSession::Allowed(PlaythroughSession::Context())) return 0;
+        const auto playthroughEpoch = PlaythroughSession::Context();
         const std::string taskType = "http:" + type;
         const std::string taskKey = "http:" + key;
         const bool turnScoped = type == "HTTPStream" || type == "HTTPStreamRechat" ||
@@ -108,8 +113,10 @@ namespace HTTPManager {
             options.timeout = std::chrono::seconds(45);
         }
         const TaskManager::TaskHandle handle = TaskManager::Submit(std::move(options),
-            [type, key, task = std::move(task)](
+            [type, key, playthroughEpoch, task = std::move(task)](
                 const TaskManager::CancellationToken& token) mutable {
+                const PlaythroughSession::Scope playthroughScope(playthroughEpoch);
+                if (!PlaythroughSession::Allowed(playthroughEpoch)) return;
                 t_currentHttpToken = &token;
                 try {
                     Log("HTTPManager: shared worker running type=%s key=%s", type.c_str(), key.c_str());
@@ -700,6 +707,8 @@ namespace HTTPManager {
             : ExtractQueryParam(payload, "audience_snapshot");
         std::ostringstream json;
         json << "{";
+        json << "\"interaction_generation\":" << Interaction::Generation() << ",";
+        json << "\"interaction_passive\":" << (Interaction::Allowed() ? "false" : "true") << ",";
         json << "\"schema\":\"dialectic.event.v1\",";
         json << "\"type\":\"" << EscapeJson(eventType) << "\",";
         json << "\"ts\":" << ts << ",";
@@ -745,6 +754,7 @@ namespace HTTPManager {
     }
 
     void Stream(const std::string& msg, int rechatDepth) {
+        if (!Interaction::Allowed()) return;
         std::string jsonBody = FormatEventJson("inputtext", msg);
         const uint64_t generation = g_responseGeneration.load();
         ExtendHotInputWindow(12000, rechatDepth > 0 ? "rechat stream" : "input stream");
@@ -792,6 +802,7 @@ namespace HTTPManager {
     void SendEvent(const std::string& eventType,
                    const std::string& payload,
                    const std::string& audienceSnapshotJson) {
+        if (Interaction::IsTrigger(eventType) && !Interaction::Allowed()) return;
         std::string jsonBody = FormatEventJson(eventType, payload, audienceSnapshotJson);
         Log("HTTPManager: Sending event [%s]: %s", eventType.c_str(), 
             jsonBody.length() > 100 ? jsonBody.substr(0, 100).c_str() : jsonBody.c_str());
@@ -879,13 +890,14 @@ namespace HTTPManager {
             eventType == "goodnight" ||
             eventType == "waitstart" ||
             eventType == "waitstop";
-        const bool queueResponse = !eventOnlyResponse;
+        const bool queueResponse = !eventOnlyResponse && Interaction::Allowed();
         if (queueResponse) {
             ResponseQueueFNV::SetActiveGeneration(generation, eventType.c_str());
         }
         EnqueueHttpTask(queueResponse ? "HTTPStreamEvent" : eventType, [jsonBody, generation, eventType, queueResponse]() {
             const bool streamTask = queueResponse;
             if (queueResponse && generation != g_responseGeneration.load()) {
+                if (!Interaction::IsTrigger(eventType)) SendJsonRequest("main.php", jsonBody);
                 Log("HTTPManager: Skipping stale queued %s task generation=%llu current=%llu",
                     eventType.c_str(),
                     static_cast<unsigned long long>(generation),
@@ -912,7 +924,7 @@ namespace HTTPManager {
                     queuedStreamedResponse = ResponseRouter::ProcessJsonResponse(envelope, "HTTPManager:event-stream", generation) ||
                         queuedStreamedResponse;
                 },
-                [generation, queueResponse]() { return queueResponse && (!IsCurrentGeneration(generation) || IsCurrentHttpTaskCancelled()); });
+                [generation, queueResponse, eventType]() { return queueResponse && Interaction::IsTrigger(eventType) && (!IsCurrentGeneration(generation) || IsCurrentHttpTaskCancelled()); });
             const bool stale = generation != g_responseGeneration.load();
             const bool generationIndependentResponse = eventType == "setconf";
             if ((!stale || generationIndependentResponse) && !response.empty() && !queuedStreamedResponse) {
@@ -951,6 +963,14 @@ namespace HTTPManager {
         }, eventType, queueResponse);
     }
 
+    void DiscardInteractionResponses() {
+        const uint64_t nextGeneration = g_responseGeneration.fetch_add(1) + 1;
+        ResponseQueueFNV::SetActiveGeneration(nextGeneration, "interaction_off");
+        CancelTasksByType("HTTPStream");
+        CancelTasksByType("HTTPStreamRechat");
+        // HTTPStreamEvent also carries real observations; let those reach the server.
+    }
+
     void CancelPendingResponses() {
         const uint64_t previousGeneration = g_responseGeneration.fetch_add(1);
         const uint64_t nextGeneration = previousGeneration + 1;
@@ -983,7 +1003,11 @@ namespace HTTPManager {
         const std::string& jsonBody,
         bool streamResponse,
         const std::function<void(const std::string&)>& streamCallback,
-        const std::function<bool()>& cancelRequested) {
+        const std::function<bool()>& cancelRequested, unsigned long* statusOut) {
+        const auto playthroughEpoch = PlaythroughSession::Context();
+        const bool control = endpoint == "playthrough_session.php" || endpoint == "interaction.php" || endpoint == "ui/tools/server_version.php";
+        if (!control && !PlaythroughSession::Allowed(playthroughEpoch)) return "";
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized) {
             Log("HTTPManager: Not initialized, cannot send JSON");
             return "";
@@ -1023,6 +1047,8 @@ namespace HTTPManager {
                 ? L"Content-Type: application/json\r\nAccept: application/x-ndjson\r\nX-Dialectic-Stream: 1\r\nConnection: close"
                 : L"Content-Type: application/json\r\nAccept: application/json\r\nConnection: close";
 
+            wideHeaders += Interaction::Headers();
+            if (!control) wideHeaders += PlaythroughSession::Headers(playthroughEpoch);
             HINTERNET hSession = WinHttpOpen(
                 wideUserAgent.c_str(),
                 WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -1075,7 +1101,7 @@ namespace HTTPManager {
                 if (request) WinHttpCloseHandle(request);
             };
 
-            DWORD timeout = Config::aiResponseTimeout * 1000;
+            DWORD timeout = endpoint == "playthrough_session.php" ? 120000 : endpoint == "interaction.php" ? 5000 : Config::aiResponseTimeout * 1000;
             WinHttpSetTimeouts(hRequest, timeout, timeout, timeout, timeout);
 
             if (!WinHttpAddRequestHeaders(hRequest, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD)) {
@@ -1111,6 +1137,21 @@ namespace HTTPManager {
                 return "";
             }
 
+            wchar_t saveHeader[96] = {}; DWORD saveHeaderBytes = sizeof(saveHeader);
+            if (WinHttpQueryHeaders(hRequest,WINHTTP_QUERY_CUSTOM,L"X-Playthrough-Save",saveHeader,&saveHeaderBytes,WINHTTP_NO_HEADER_INDEX)) {
+                const std::wstring value(saveHeader);
+                std::string ascii;
+                for (wchar_t c : value) { if (c > 127) { ascii.clear(); break; } ascii.push_back(static_cast<char>(c)); }
+                PlaythroughNotices::Accept(ascii);
+            }
+            DWORD responseStatus = 0; DWORD responseStatusBytes = sizeof(responseStatus);
+            WinHttpQueryHeaders(hRequest,WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,
+                                &responseStatus,&responseStatusBytes,WINHTTP_NO_HEADER_INDEX);
+            if (statusOut) *statusOut = responseStatus;
+            if (responseStatus >= 400 && !statusOut) {
+                closeRequest(); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+                return "";
+            }
             std::string responseBody;
             std::string lineBuffer;
             DWORD bytesAvailable = 0;
@@ -1125,7 +1166,7 @@ namespace HTTPManager {
                     return;
                 }
 
-                if (streamCallback) {
+                if (streamCallback && PlaythroughSession::Allowed(playthroughEpoch)) {
                     ++streamedLineCount;
                     if (!loggedFirstStreamLine) {
                         loggedFirstStreamLine = true;
@@ -1141,7 +1182,7 @@ namespace HTTPManager {
             };
 
             do {
-                if (cancelRequested && cancelRequested()) {
+                if ((!control && !PlaythroughSession::Allowed(playthroughEpoch)) || (cancelRequested && cancelRequested())) {
                     Log("HTTPManager: JSON POST %s cancelled before read", endpoint.c_str());
                     break;
                 }
@@ -1152,7 +1193,7 @@ namespace HTTPManager {
                 }
 
                 if (bytesAvailable > 0) {
-                    if (cancelRequested && cancelRequested()) {
+                    if ((!control && !PlaythroughSession::Allowed(playthroughEpoch)) || (cancelRequested && cancelRequested())) {
                         Log("HTTPManager: JSON POST %s cancelled with data pending", endpoint.c_str());
                         break;
                     }
@@ -1167,7 +1208,7 @@ namespace HTTPManager {
                             while ((newlinePos = lineBuffer.find('\n')) != std::string::npos) {
                                 std::string line = lineBuffer.substr(0, newlinePos);
                                 lineBuffer.erase(0, newlinePos + 1);
-                                if (cancelRequested && cancelRequested()) {
+                                if ((!control && !PlaythroughSession::Allowed(playthroughEpoch)) || (cancelRequested && cancelRequested())) {
                                     Log("HTTPManager: JSON POST %s cancelled during stream callback", endpoint.c_str());
                                     break;
                                 }
@@ -1196,7 +1237,7 @@ namespace HTTPManager {
                     endpoint.c_str(),
                     responseBody.size());
             }
-            return responseBody;
+            return control || PlaythroughSession::Allowed(playthroughEpoch) ? responseBody : std::string{};
 
         } catch (...) {
             Log("HTTPManager: Exception in SendJson");
@@ -1309,6 +1350,7 @@ namespace HTTPManager {
     }
 
     static bool SendPlayerTtsPlayForGeneration(const std::string& message, uint64_t generation) {
+        if (!Interaction::Allowed() || generation != g_responseGeneration.load()) return false;
         std::ostringstream payload;
         payload << "{"
                 << "\"schema\":\"dialectic.player_tts.v1\","
@@ -1377,6 +1419,54 @@ namespace HTTPManager {
 
         Log("HTTPManager: queued async player_menu_tts_play task id=%llu",
             static_cast<unsigned long long>(taskId));
+        return taskId != 0;
+    }
+
+    bool QueueNpcTtsPlay(uint32_t actorFormId,
+                         const std::string& actorName,
+                         const std::string& message) {
+        if (actorFormId == 0 || actorFormId == 0x00000014 || actorName.empty() ||
+            message.empty() || message.size() > 1000) {
+            Log("HTTPManager: rejected invalid external NPC TTS request actor=0x%08X chars=%zu",
+                actorFormId, message.size());
+            return false;
+        }
+
+        std::ostringstream actorId;
+        actorId << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+                << actorFormId << std::dec;
+        std::ostringstream payload;
+        payload << "{"
+                << "\"schema\":\"dialectic.npc_tts.v1\","
+                << "\"request\":\"tts\","
+                << "\"npc\":\"" << EscapeJson(actorName) << "\","
+                << "\"npc_id\":\"" << actorId.str() << "\","
+                << "\"player\":\"" << EscapeJson(CurrentPlayerName()) << "\","
+                << "\"text\":\"" << EscapeJson(message) << "\","
+                << "\"game\":\"fnv\""
+                << "}";
+
+        const std::string jsonBody = FormatEventJson("external_npc_tts", payload.str());
+        const uint64_t generation = g_responseGeneration.load();
+        ResponseQueueFNV::SetActiveGeneration(generation, "external_npc_tts");
+        const uint64_t taskId = EnqueueHttpTask("ExternalNpcTTS",
+            [jsonBody, actorFormId, generation]() {
+                if (generation != g_responseGeneration.load()) {
+                    Log("HTTPManager: skipping stale external NPC TTS actor=0x%08X", actorFormId);
+                    return;
+                }
+                const std::string response = SendJsonRequest("processor/npc_tts_play.php", jsonBody, false);
+                if (generation != g_responseGeneration.load()) {
+                    Log("HTTPManager: dropping stale external NPC TTS response actor=0x%08X", actorFormId);
+                    return;
+                }
+                if (!ProcessJsonResponsePayload(response, "HTTPManager:external-npc-tts", generation) &&
+                    !ProcessFinalJsonResponseIfCurrent(response, generation, "HTTPManager:external-npc-tts-final")) {
+                    Log("HTTPManager: external NPC TTS produced no playable line actor=0x%08X", actorFormId);
+                }
+            }, "external_npc_tts", true);
+        Log("HTTPManager: queued external NPC TTS actor=0x%08X task=%llu",
+            actorFormId, static_cast<unsigned long long>(taskId));
         return taskId != 0;
     }
 
@@ -1457,6 +1547,9 @@ namespace HTTPManager {
                                   const std::string& actorName,
                                   const std::string& originalName,
                                   const std::string& referenceText) {
+        const auto playthroughEpoch = PlaythroughSession::Context();
+        if (!PlaythroughSession::Allowed(playthroughEpoch)) return "";
+        if (MultiplayerSharing::IsListener()) return "";
         const TaskManager::CancellationToken* token = TaskManager::CurrentToken();
         if (token && token->IsCancellationRequested()) return "";
         if (!g_initialized) {
@@ -1580,6 +1673,7 @@ namespace HTTPManager {
             const int timeoutMs = (Config::aiResponseTimeout > 0 ? Config::aiResponseTimeout : 30) * 1000;
             WinHttpSetTimeouts(hRequest, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
 
+            wideHeaders += PlaythroughSession::Headers(playthroughEpoch);
             if (!WinHttpAddRequestHeaders(hRequest, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD)) {
                 Log("HTTPManager: WinHttpAddRequestHeaders failed for voice sample upload");
                 closeRequest();
@@ -1686,6 +1780,9 @@ namespace HTTPManager {
     std::string UploadCSVFile(const std::string& csvData,
                               const std::string& filename,
                               const std::string& fileType) {
+        const auto playthroughEpoch = PlaythroughSession::Context();
+        if (!PlaythroughSession::Allowed(playthroughEpoch)) return "";
+        if (MultiplayerSharing::IsListener()) return "";
         const TaskManager::CancellationToken* token = TaskManager::CurrentToken();
         if (token && token->IsCancellationRequested()) return "";
         if (!g_initialized) {
@@ -1815,6 +1912,7 @@ namespace HTTPManager {
             const int timeoutMs = (Config::aiResponseTimeout > 0 ? Config::aiResponseTimeout : 30) * 1000;
             WinHttpSetTimeouts(hRequest, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
 
+            wideHeaders += PlaythroughSession::Headers(playthroughEpoch);
             if (!WinHttpAddRequestHeaders(hRequest, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD)) {
                 Log("HTTPManager: WinHttpAddRequestHeaders failed for CSV upload");
                 closeRequest();
@@ -1917,6 +2015,9 @@ namespace HTTPManager {
                                      const std::string& metadataJson,
                                      const std::string& fileName,
                                      const TaskManager::CancellationToken* token) {
+        const auto playthroughEpoch = PlaythroughSession::Context();
+        if (!PlaythroughSession::Allowed(playthroughEpoch)) return "";
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized || imageData.empty() || metadataJson.empty()) {
             Log("HTTPManager: PipVision upload rejected initialized=%d image_bytes=%zu metadata_bytes=%zu",
                 g_initialized.load() ? 1 : 0, imageData.size(), metadataJson.size());
@@ -1961,7 +2062,8 @@ namespace HTTPManager {
             const std::wstring widePath(serverPath.begin(), serverPath.end());
             const std::string headers = "Content-Type: multipart/form-data; boundary=" + boundary +
                 "\r\nAccept: application/json";
-            const std::wstring wideHeaders(headers.begin(), headers.end());
+            std::wstring wideHeaders(headers.begin(), headers.end());
+            wideHeaders += PlaythroughSession::Headers(playthroughEpoch);
 
             HINTERNET session = WinHttpOpen(L"Dialectic PipVision/" DIALECTIC_VERSION,
                 WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -2046,7 +2148,7 @@ namespace HTTPManager {
             if (statusCode < 200 || statusCode >= 300) {
                 Log("HTTPManager: PipVision error response: %s", response.substr(0, 500).c_str());
             }
-            return response;
+            return PlaythroughSession::Allowed(playthroughEpoch) ? response : std::string{};
         } catch (...) {
             Log("HTTPManager: Exception in UploadPipVisionImage");
             return {};
@@ -2056,6 +2158,9 @@ namespace HTTPManager {
     // Upload audio WAV data to server for STT transcription
     std::string UploadAudioForSTT(const std::string& wavData,
                                   const TaskManager::CancellationToken* token) {
+        const auto playthroughEpoch = PlaythroughSession::Context();
+        if (!PlaythroughSession::Allowed(playthroughEpoch)) return "";
+        if (MultiplayerSharing::IsListener()) return "";
         if (!g_initialized) {
             Log("HTTPManager: Not initialized, cannot upload audio");
             return "";
@@ -2163,6 +2268,7 @@ namespace HTTPManager {
             const int timeoutMs = (Config::aiResponseTimeout > 0 ? Config::aiResponseTimeout : 30) * 1000;
             WinHttpSetTimeouts(hRequest, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
 
+            wideHeaders += PlaythroughSession::Headers(playthroughEpoch);
             // Add headers
             if (!WinHttpAddRequestHeaders(hRequest, wideHeaders.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD)) {
                 Log("HTTPManager: WinHttpAddRequestHeaders failed");
@@ -2274,7 +2380,7 @@ namespace HTTPManager {
                         statusCode, error.empty() ? "unspecified" : error.c_str());
                     return "";
                 }
-                return sttText;
+                return PlaythroughSession::Allowed(playthroughEpoch) ? sttText : std::string{};
             }
 
             if (!response.empty()) {
@@ -2290,4 +2396,8 @@ namespace HTTPManager {
             return "";
         }
     }
+}
+
+std::string PlaythroughSession::Transport(const std::string& body, unsigned long& status) {
+    return HTTPManager::SendJsonRequest("playthrough_session.php", body, false, {}, {}, &status);
 }

@@ -1,3 +1,5 @@
+#include "Interaction.h"
+#include "PlaythroughSession.h"
 // Dialectic - xNVSE plugin for AI-powered NPCs in Fallout New Vegas
 
 // The xNVSE SDK prefix must be the first platform include. Several SDK
@@ -37,6 +39,7 @@
 
 // Our subsystem headers
 #include "Config.h"
+#include "MultiplayerSharing.h"
 #include "HTTPManager.h"
 #include "AudioManager.h"
 #include "SpeakManager.h"
@@ -56,16 +59,17 @@
 #include "FalloutStatsManagerFNV.h"
 #include "FNVRuntime.h"
 #include "TaskManager.h"
+#include "ExternalEventAPI.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
 #include "DialecticInitialization.h"
 
 #ifndef DIALECTIC_VERSION
-#define DIALECTIC_VERSION "1.0.0"
+#define DIALECTIC_VERSION "1.1.3"
 #endif
 
 #ifndef DIALECTIC_PLUGIN_INFO_VERSION
-#define DIALECTIC_PLUGIN_INFO_VERSION 10000
+#define DIALECTIC_PLUGIN_INFO_VERSION 10103
 #endif
 
 // Global variables
@@ -359,11 +363,6 @@ static bool GetDialecticConfigValue(const char* section, const char* key, double
         if (k == "endconversationcooldown") { outValue = Config::rechatEndConversationCooldown; return true; }
     }
 
-    if (s == "dynamicprofile") {
-        if (k == "enabled") { outValue = 1.0; return true; }
-        if (k == "timerminutes" || k == "updateminutes") { outValue = Config::dynamicProfileTimerMinutes; return true; }
-        if (k == "includenarrator") { outValue = Config::dynamicProfileTimerIncludeNarrator ? 1.0 : 0.0; return true; }
-    }
 
     if (s == "boredevents") {
         if (k == "enabled") { outValue = 1.0; return true; }
@@ -455,9 +454,6 @@ static bool SetDialecticConfigValue(const char* section, const char* key, double
         else if (k == "avoidwhensneaking") { Config::rechatAvoidWhenSneaking = enabled; changed = true; }
         else if (k == "avoidinmenu") { Config::rechatAvoidInMenu = enabled; changed = true; }
         else if (k == "endconversationcooldown") { Config::rechatEndConversationCooldown = static_cast<int>(value); changed = true; }
-    } else if (s == "dynamicprofile") {
-        if (k == "timerminutes" || k == "updateminutes") { Config::dynamicProfileTimerMinutes = std::max(1, static_cast<int>(value)); changed = true; }
-        else if (k == "includenarrator") { Config::dynamicProfileTimerIncludeNarrator = enabled; changed = true; }
     } else if (s == "boredevents") {
         if (k == "enabled") { Config::boredEventsEnabled = true; return true; }
         else if (k == "timerseconds" || k == "boredeventtimerseconds") { Config::boredEventTimerSeconds = std::max(5, static_cast<int>(value)); changed = true; }
@@ -1185,6 +1181,17 @@ static bool Cmd_DialecticUpdateActiveQuest_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticSharingSetup_Execute(COMMAND_ARGS) {
+    int action = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &action)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        MultiplayerSharing::SetupAction(action);
+        *result = 1;
+    }
+    return true;
+}
+
 static bool Cmd_DialecticOpenModeMenu_Execute(COMMAND_ARGS) {
     if (!g_subsystemsInitialized) {
         InitializeSubsystems();
@@ -1360,6 +1367,18 @@ static CommandInfo kCommandInfo_DialecticSetConfigFloat = {
     kParams_ConfigStringsValueFloat, Cmd_DialecticSetConfigFloat_Execute, nullptr, nullptr, 0
 };
 
+static bool Cmd_DialecticToggleInteraction_Execute(COMMAND_ARGS) {
+    if (!g_subsystemsInitialized) InitializeSubsystems();
+    Interaction::Toggle();
+    *result = Interaction::Status();
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticToggleInteraction = {
+    "DialecticToggleInteraction", "", 0, "Toggles AI dialogue and actions while preserving game events.", 0, 0,
+    nullptr, Cmd_DialecticToggleInteraction_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticReloadConfig = {
     "DialecticReloadConfig", "", 0, "Reloads DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticReloadConfig_Execute, nullptr, nullptr, 0
@@ -1506,6 +1525,11 @@ static CommandInfo kCommandInfo_DialecticUpdateFalloutStat = {
     kParams_TwoIntegers, Cmd_DialecticUpdateFalloutStat_Execute, nullptr, nullptr, 0
 };
 
+static CommandInfo kCommandInfo_DialecticSharingSetup = {
+    "DialecticSharingSetup", "", 0, "Host, join, copy a code, check status or disconnect dialogue sharing.", 0, 1,
+    kParams_Integer, Cmd_DialecticSharingSetup_Execute, nullptr, nullptr, 0
+};
+
 static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
     constexpr UInt32 kDialecticOpcodeBase = 0x6D00;
     nvse->SetOpcodeBase(kDialecticOpcodeBase);
@@ -1545,7 +1569,9 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticUpdateFalloutStat,
         &kCommandInfo_DialecticHandleHotkeyUp,
         &kCommandInfo_DialecticInitialize,
-        &kCommandInfo_DialecticWaitHereTarget
+        &kCommandInfo_DialecticWaitHereTarget,
+        &kCommandInfo_DialecticSharingSetup,
+        &kCommandInfo_DialecticToggleInteraction
     };
 
     for (CommandInfo* command : commands) {
@@ -1710,6 +1736,7 @@ __declspec(dllexport) BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, L
             Logger::LogInfo("=== Dialectic DLL Attached ===");
             break;
         case DLL_PROCESS_DETACH:
+            ExternalEventAPI::Shutdown();
             if (g_subsystemsInitialized) {
                 Logger::LogInfo("DLL detaching, shutting down subsystems...");
                 GameLoop::Shutdown();
@@ -1754,11 +1781,42 @@ __declspec(dllexport) bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInf
     return true;
 }
 
+
+// xNVSE keeps this identity with the character across ordinary saves and copied saves.
+static NVSESerializationInterface* g_playthroughSerialization = nullptr;
+static void SavePlaythroughIdentity(void*) {
+    const std::string id = PlaythroughSession::Character();
+    if (!PlaythroughSession::ValidId(id)) return;
+    const std::string record = id + (PlaythroughSession::NewCharacter() ? "1" : "0");
+    g_playthroughSerialization->WriteRecord('DPTI', 1, record.data(), static_cast<UInt32>(record.size()));
+}
+static void LoadPlaythroughIdentity(void*) {
+    UInt32 type=0, version=0, length=0;
+    while (g_playthroughSerialization->GetNextRecordInfo(&type,&version,&length)) {
+        if(type!='DPTI' || version!=1 || length!=33) continue;
+        char record[33];
+        if(g_playthroughSerialization->ReadRecordData(record,33)==33 && (record[32]=='0'||record[32]=='1'))
+            PlaythroughSession::RestoreCharacter(std::string(record,32),record[32]=='1');
+    }
+}
+static void NewPlaythroughIdentity(void*) { PlaythroughSession::BeginLoad(true); }
+
 // NVSE load function - called after all plugins are queried
 __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface* nvse) {
     Logger::LogInfo("NVSEPlugin_Load called - Dialectic v%s", DIALECTIC_VERSION);
 
     g_pluginHandle = nvse->GetPluginHandle();
+    if (!nvse->isEditor) {
+        g_playthroughSerialization = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
+        if (!g_playthroughSerialization || g_playthroughSerialization->version < 2) {
+            Logger::LogError("Playthrough identity requires xNVSE serialization version 2.");
+            return false;
+        }
+        g_playthroughSerialization->SetSaveCallback(g_pluginHandle, SavePlaythroughIdentity);
+        g_playthroughSerialization->SetLoadCallback(g_pluginHandle, LoadPlaythroughIdentity);
+        g_playthroughSerialization->SetNewGameCallback(g_pluginHandle, NewPlaythroughIdentity);
+    }
+
     Logger::LogDebug("Plugin handle: 0x%08X", g_pluginHandle);
 
     if (!nvse->isEditor) {
@@ -1792,6 +1850,7 @@ __declspec(dllexport) bool NVSEPlugin_Load(const NVSEInterface* nvse) {
     } else {
         Logger::LogWarning("Event Manager Interface not available");
     }
+    ExternalEventAPI::Initialize();
 
     // Query for Array Var interface
     g_arrayInterface = (NVSEArrayVarInterface*)nvse->QueryInterface(kInterface_ArrayVar);

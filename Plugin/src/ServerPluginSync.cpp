@@ -1,3 +1,4 @@
+#include "MultiplayerSharing.h"
 #include "ServerPluginSync.h"
 
 #include "Config.h"
@@ -168,6 +169,7 @@ namespace
                          const char* data, std::size_t size, const TaskManager::CancellationToken& token)
     {
         HttpResponse response;
+        if (MultiplayerSharing::IsListener()) return response;
         if (token.IsCancellationRequested() || path.empty() ||
             size > static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())) return response;
         if (Config::serverHost.empty() || Config::serverPort < 1 || Config::serverPort > 65535) return response;
@@ -360,6 +362,7 @@ namespace
 
 void ScheduleServerPluginSync()
 {
+    if (MultiplayerSharing::IsListener()) return;
     bool expected = false;
     if (!g_syncScheduled.compare_exchange_strong(expected, true)) return;
     TaskManager::Options options;
