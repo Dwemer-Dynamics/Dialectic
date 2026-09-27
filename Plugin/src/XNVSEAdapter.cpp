@@ -2449,7 +2449,7 @@ bool OpenNativeToolMenu(NativeToolMenu menu,
             dynamicSource = R"(
 begin function {}
     MessageBoxExAlt (CompileScript "Dialectic/ModeMenuSelect.gek") "^)" + title +
-                R"(^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Close Menu"
+                R"(^Select active chat mode:|Standard|Whisper|Close|Shout|Narrator|Director|Inject Event|Inject & Chat|Cheat Mode|Hypnosis|Close Menu"
 end
 )";
             source = dynamicSource.c_str();

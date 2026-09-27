@@ -22,8 +22,8 @@ begin function {}
     endif
 
     ; Index order mirrors ModeLabelFromIndex in Plugin/src/GameLoop.cpp.
-    let aModeLabels := ar_List "STANDARD" "WHISPER" "CLOSE" "SHOUT" "NARRATOR" "DIRECTOR" "INJECT EVENT" "INJECT & CHAT" "CHEAT"
-    if eval fModeIndex >= 0 && fModeIndex <= 8
+    let aModeLabels := ar_List "STANDARD" "WHISPER" "CLOSE" "SHOUT" "NARRATOR" "DIRECTOR" "INJECT EVENT" "INJECT & CHAT" "CHEAT" "HYPNOSIS"
+    if eval fModeIndex >= 0 && fModeIndex <= 9
         let sModeLabel := aModeLabels[fModeIndex]
     else
         let sModeLabel := sv_Construct "STANDARD"
