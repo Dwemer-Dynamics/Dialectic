@@ -1067,6 +1067,7 @@ static const char* ModeNameFromIndex(int modeIndex) {
         case 6: return "INJECTION_LOG";
         case 7: return "INJECTION_CHAT";
         case 8: return "CHEATMODE";
+        case 9: return "HYPNOSIS";
         default: return "STANDARD";
     }
 }
@@ -1082,6 +1083,7 @@ static const char* ModeLabelFromIndex(int modeIndex) {
         case 6: return "Inject Event";
         case 7: return "Inject & Chat";
         case 8: return "Cheat Mode";
+        case 9: return "Hypnosis";
         default: return "Standard";
     }
 }
@@ -1098,7 +1100,7 @@ static const char* ModeTitleNameFromIndex(int modeIndex) {
 
 static int ModeIndexFromName(const std::string& rawMode) {
     const std::string mode = ToUpperCopy(TrimInput(rawMode));
-    for (int i = 0; i <= 8; ++i) {
+    for (int i = 0; i <= 9; ++i) {
         if (mode == ModeNameFromIndex(i)) {
             return i;
         }
@@ -1119,7 +1121,7 @@ static const char* ProfileModelLabelFromSlot(int slot) {
 static void MaybeSyncRuntimeStateFromServer(bool force = false);
 
 static void ApplyModeIndex(int modeIndex, bool sendServerUpdate) {
-    modeIndex = std::clamp(modeIndex, 0, 8);
+    modeIndex = std::clamp(modeIndex, 0, 9);
     const char* modeName = ModeNameFromIndex(modeIndex);
     const char* modeLabel = ModeLabelFromIndex(modeIndex);
 
@@ -1225,7 +1227,7 @@ void RequestDialecticControlMenuOpen() {
 
     // Re-read the live mode state on every open so the buttons advertise current values.
     XNVSEAdapter::NativeToolMenuStatus status;
-    status.chatMode = ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8));
+    status.chatMode = ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 9));
     status.llmMode = ToUpperCopy(ProfileModelLabelFromSlot(Config::currentProfileModelSlot));
 
     if (XNVSEAdapter::OpenNativeToolMenu(
@@ -1270,7 +1272,7 @@ void RequestModeMenuOpen() {
         return;
     }
     const std::string modeMenuTitle = std::string("Mode: [") +
-        ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 8)) + "]";
+        ModeTitleNameFromIndex(std::clamp(Config::currentModeIndex, 0, 9)) + "]";
     if (XNVSEAdapter::OpenNativeToolMenu(XNVSEAdapter::NativeToolMenu::Mode, modeMenuTitle.c_str())) {
         Logger::LogInfo("GameLoop: Opened mode selector through native UI adapter");
         return;
@@ -1891,7 +1893,7 @@ static void CaptureRuntimeStatusFromServer(const std::string& response) {
 
     {
         std::lock_guard<std::mutex> lock(g_runtimeStatusMutex);
-        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 8);
+        g_pendingRuntimeModeIndex = std::clamp(modeIndex, 0, 9);
         g_pendingRuntimeModelSlot = modelSlot;
         g_runtimeStatusPending = true;
     }
@@ -2796,7 +2798,13 @@ static void ProcessTextInputBridge() {
             static_cast<unsigned long long>(currentGeneration),
             RuntimeGeneration::LastReason());
     }
-    if (ShouldRouteToNarrator(message, true)) {
+    const bool hypnosisInput = EqualsIgnoreCase(Config::currentMode, "HYPNOSIS");
+    if (hypnosisInput && (!preparedGenerationCurrent || preparedTarget.formId == 0x14 ||
+        (g_conversationActive && (g_conversationIsNarrator || g_conversationPartnerFormId != preparedTarget.formId)))) {
+        Console::Print("[DIALECTIC] Hypnosis target changed. Select the NPC and enter the instruction again.");
+        return;
+    }
+    if (!hypnosisInput && ShouldRouteToNarrator(message, true)) {
         Logger::LogInfo("[TEXT_INPUT_TARGET] routing submitted text to narrator");
         if (!g_conversationActive || !g_conversationIsNarrator) {
             StartNarratorConversation("typed input");
@@ -4723,6 +4731,13 @@ void SendPlayerMessage(const std::string& message) {
         return;
     }
     
+    const bool hypnosisMode = EqualsIgnoreCase(Config::currentMode, "HYPNOSIS");
+    if (hypnosisMode && (g_conversationIsNarrator || g_conversationPartnerFormId == 0 ||
+        g_conversationPartnerFormId == 0x14 || TrimInput(message).empty())) {
+        Console::Print("[DIALECTIC] Hypnosis needs an NPC target and an instruction.");
+        return;
+    }
+
     ResetBoredEventTimer("player message");
 
     const std::uint64_t turnGeneration = RuntimeGeneration::Advance("player_interruption");
@@ -4740,7 +4755,7 @@ void SendPlayerMessage(const std::string& message) {
         !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "CHEATMODE");
     const bool injectionMode = injectionLogMode || injectionChatMode;
     const bool privateConversationMode = !g_conversationIsNarrator && IsPrivateConversationMode();
-    const bool skipPlayerTtsMode = injectionMode || directorMode || cheatMode;
+    const bool skipPlayerTtsMode = injectionMode || directorMode || cheatMode || hypnosisMode;
 
     SpeakManager::CancelDialogueTurn("player_input", true, true);
     if (!g_conversationIsNarrator) {
@@ -4790,7 +4805,7 @@ void SendPlayerMessage(const std::string& message) {
         !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "WHISPER");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
-        : ((injectionMode || targetOnlyConversationMode)
+        : ((injectionMode || hypnosisMode || targetOnlyConversationMode)
             ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
             : BuildAudienceSnapshotJson(EqualsIgnoreCase(Config::currentMode, "CLOSE") ? "player_close" : ""));
     SpeakManager::SetPlayerTurnAudience(ExtractPeopleFromAudienceSnapshotJson(audienceSnapshot));
@@ -4825,11 +4840,11 @@ void SendPlayerMessage(const std::string& message) {
             << "\"game\":\"fnv\""
             << "}";
     
-    const bool shouldResetOneShotMode = EqualsIgnoreCase(Config::currentMode, "DIRECTOR");
+    const bool shouldResetOneShotMode = directorMode || hypnosisMode;
     HTTPManager::SendEvent(playerInputEventType, payload.str(), audienceSnapshot);
     if (shouldResetOneShotMode) {
         ApplyModeIndex(0, false);
-        Log("GameLoop: Director mode consumed one input and reset locally to Standard");
+        Log("GameLoop: One-shot mode consumed one input and reset locally to Standard");
     }
 }
 
@@ -4903,7 +4918,7 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
             Log("GameLoop: STT result: %s", cleanedText.c_str());
             
             // Send the transcribed text as player input
-            if (ShouldRouteToNarrator(cleanedText, false) &&
+            if (!EqualsIgnoreCase(Config::currentMode, "HYPNOSIS") && ShouldRouteToNarrator(cleanedText, false) &&
                 (!g_conversationActive || !g_conversationIsNarrator)) {
                 StartNarratorConversation("voice input explicit phrase");
             }
