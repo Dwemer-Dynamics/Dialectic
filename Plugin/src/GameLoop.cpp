@@ -3080,6 +3080,7 @@ struct RpgBridgeEvent {
     std::string itemBaseId;
     std::string itemName;
     std::vector<std::pair<std::string, std::string>> items;
+    uint64_t generation = RuntimeGeneration::Current();
 };
 
 static std::mutex g_rpgCommentQueueMutex;
@@ -3239,6 +3240,24 @@ static void ProcessRpgEventBridge() {
     flushPendingConsumed();
 
     for (const auto& event : events) {
+        if (event.eventType == "quest_updated") {
+            if (!RuntimeGeneration::IsCurrent(event.generation)) continue;
+            // Quest settings select the speaker on the server, including Narrator-only play.
+            const auto candidates = BuildFreshBoredCandidates(std::max(
+                Config::distanceActivatingNpcInterior, Config::distanceActivatingNpcExterior));
+            const std::string audience = BuildAudienceSnapshotJson("npc_close");
+            std::ostringstream payload;
+            payload << "{\"schema\":\"dialectic.quest_comment.v1\",\"text\":\""
+                    << HTTPManager::EscapeJson(event.eventText) << "\",\"speakers\":[";
+            for (size_t i = 0; i < candidates.size() && i < 32; ++i) {
+                if (i) payload << ",";
+                payload << "{\"name\":\"" << HTTPManager::EscapeJson(candidates[i].second)
+                        << "\",\"refid\":\"" << FormatFormIdJsonValue(candidates[i].first) << "\"}";
+            }
+            payload << "],\"audience_snapshot\":" << audience << "}";
+            HTTPManager::SendEvent("quest_updated", payload.str(), audience);
+            continue;
+        }
         if (event.eventType == "goodnight" ||
             event.eventType == "waitstart" ||
             event.eventType == "waitstop") {
