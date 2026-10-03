@@ -42,5 +42,12 @@ begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
             let sResult += " " + (call (CompileScript "ParityProbe/ListAgents.txt"))
         endif
     endif
+
+    ; Optional addon API level 3 demos, each only for its exact parameter.
+    if eval sParameter == "context" || sParameter == "whisper" || sParameter == "react"
+        if eval (GetCommandOpcode "DialecticSendAddonMessage") != 0
+            let sResult += " " + (call (CompileScript "ParityProbe/AddonLevel3.txt") iHandle rActor sParameter)
+        endif
+    endif
     rActor.DialecticCompleteOwnedCommand iHandle iRequestId 1 $sResult
 end

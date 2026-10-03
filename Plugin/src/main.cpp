@@ -1556,7 +1556,7 @@ static bool Cmd_DialecticStopAllDialogue_Execute(COMMAND_ARGS) {
 }
 
 // Addon API level for capability checks; raise it whenever addon-facing commands are appended.
-constexpr int kAddonApiVersion = 2;
+constexpr int kAddonApiVersion = 3;
 
 static bool Cmd_DialecticGetAddonApiVersion_Execute(COMMAND_ARGS) {
     *result = kAddonApiVersion;
@@ -1721,6 +1721,74 @@ static bool Cmd_DialecticRefreshPlayerContext_Execute(COMMAND_ARGS) {
     }
     return true;
 }
+
+// Addon API level 3: messages and context. Every command needs an owned-bridge handle.
+static ParamInfo kParams_AddonMessage[3] = {
+    { "handle", kParamType_Integer, 0 },
+    { "mode", kParamType_Integer, 0 },
+    { "text", kParamType_String, 0 }
+};
+
+static ParamInfo kParams_AddonContext[4] = {
+    { "handle", kParamType_Integer, 0 },
+    { "type", kParamType_String, 0 },
+    { "name", kParamType_String, 0 },
+    { "text", kParamType_String, 0 }
+};
+
+static bool ExecuteAddonMessageCommand(COMMAND_ARGS,
+                                       int (*operation)(std::uint32_t, int, int, const std::string&)) {
+    int handle = 0;
+    int mode = -1;
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            &handle, &mode, g_extensionTextBuffer)) {
+        return true;
+    }
+    if (!g_subsystemsInitialized) InitializeSubsystems();
+    *result = operation(XNVSEAdapter::ActorFormIdOf(thisObj), handle, mode, g_extensionTextBuffer);
+    return true;
+}
+
+static bool Cmd_DialecticSendAddonMessage_Execute(COMMAND_ARGS) {
+    return ExecuteAddonMessageCommand(PASS_COMMAND_ARGS, ExternalCommandBridge::SendAddonMessage);
+}
+
+static bool Cmd_DialecticRequestAddonReaction_Execute(COMMAND_ARGS) {
+    return ExecuteAddonMessageCommand(PASS_COMMAND_ARGS, ExternalCommandBridge::RequestAddonReaction);
+}
+
+static bool Cmd_DialecticSendAddonContext_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            &handle, g_extensionBridgeBuffer, g_extensionNameBuffer, g_extensionTextBuffer)) {
+        return true;
+    }
+    if (!g_subsystemsInitialized) InitializeSubsystems();
+    *result = ExternalCommandBridge::SendAddonContext(CommandRefId(thisObj), handle, g_extensionBridgeBuffer,
+        g_extensionNameBuffer, g_extensionTextBuffer);
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticSendAddonMessage = {
+    "DialecticSendAddonMessage", "", 0, "Sends player input to the calling actor in mode 0 normal, 1 whisper, 2 shout.",
+    1, 3, kParams_AddonMessage, Cmd_DialecticSendAddonMessage_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticRequestAddonReaction = {
+    "DialecticRequestAddonReaction", "", 0, "Requests a reaction from the calling actor; 0 explicit, 1 eligible only.",
+    1, 3, kParams_AddonMessage, Cmd_DialecticRequestAddonReaction_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSendAddonContext = {
+    "DialecticSendAddonContext", "", 0, "Queues namespaced addon context for the server; never player speech.",
+    0, 4, kParams_AddonContext, Cmd_DialecticSendAddonContext_Execute, nullptr, nullptr, 0
+};
 
 static CommandInfo kCommandInfo_DialecticGetNearbyActors = {
     "DialecticGetNearbyActors", "", 0, "Returns up to 32 loaded actors in the player's scene, closest first.", 0, 3,
@@ -2058,7 +2126,10 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticRegisterAgent,
         &kCommandInfo_DialecticUnregisterAgent,
         &kCommandInfo_DialecticRefreshActorContext,
-        &kCommandInfo_DialecticRefreshPlayerContext
+        &kCommandInfo_DialecticRefreshPlayerContext,
+        &kCommandInfo_DialecticSendAddonMessage,
+        &kCommandInfo_DialecticRequestAddonReaction,
+        &kCommandInfo_DialecticSendAddonContext
     };
 
     for (CommandInfo* command : commands) {

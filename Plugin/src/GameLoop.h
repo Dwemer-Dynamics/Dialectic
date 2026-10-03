@@ -69,6 +69,11 @@ bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text);
 bool RequestExternalComment(uint32_t actorFormId);
 bool RequestExternalReaction(uint32_t actorFormId, const std::string& instruction);
 bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question);
+// Addon API level 3 (game thread). 1 queued on the HTTP queue, -2 invalid mode or text,
+// -3 rejected by a gate (logged). mode: 0 STANDARD, 1 WHISPER, 2 SHOUT for this request only.
+int RequestAddonMessage(uint32_t actorFormId, int mode, const std::string& text);
+// eligibleOnly keeps the automatic activity preference; otherwise only it is skipped.
+int RequestAddonReaction(uint32_t actorFormId, bool eligibleOnly, const std::string& instruction);
 // Quiet form of the exact scene/eligibility gate used by the public event API.
 bool IsExternalActorAvailable(uint32_t actorFormId);
 bool IsTextInputMenuActiveOrRecentlyClosed();

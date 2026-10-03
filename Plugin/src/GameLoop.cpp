@@ -512,16 +512,29 @@ static float GetConversationTargetRadius();
 static bool IsStealthPlayerInputActive();
 static bool EqualsIgnoreCase(const std::string& left, const std::string& right);
 
+// Request-scoped speech mode for one addon message. Thread-local and set only for the duration of
+// RequestAddonMessage, so the global mode, later requests and other threads never see it.
+static thread_local const char* g_requestModeOverride = nullptr;
+
+struct RequestModeScope {
+    explicit RequestModeScope(const char* mode) { g_requestModeOverride = mode; }
+    ~RequestModeScope() { g_requestModeOverride = nullptr; }
+};
+
+static std::string EffectiveMode() {
+    return g_requestModeOverride ? std::string(g_requestModeOverride) : Config::currentMode;
+}
+
 static bool IsPrivateConversationMode() {
-    return EqualsIgnoreCase(Config::currentMode, "WHISPER") ||
-        EqualsIgnoreCase(Config::currentMode, "CLOSE");
+    return EqualsIgnoreCase(EffectiveMode(), "WHISPER") ||
+        EqualsIgnoreCase(EffectiveMode(), "CLOSE");
 }
 
 static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     std::vector<std::string> names;
     std::set<std::string> seen;
     const float playerSpeechDistanceMultiplier = GetPlayerSpeechDistanceMultiplier();
-    const bool closeMode = EqualsIgnoreCase(Config::currentMode, "CLOSE");
+    const bool closeMode = EqualsIgnoreCase(EffectiveMode(), "CLOSE");
     const float closeRadius = closeMode ? GetConversationTargetRadius() : 0.0f;
 
     AppendConversationPartnerAudienceName(names, seen);
@@ -787,7 +800,7 @@ static std::string BuildTargetOnlyAudienceSnapshotJson(bool privateConversation 
 }
 
 static float GetPlayerSpeechDistanceMultiplier() {
-    std::string mode = Config::currentMode;
+    std::string mode = EffectiveMode();
     std::transform(mode.begin(), mode.end(), mode.begin(),
         [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
 
@@ -808,7 +821,7 @@ static float GetPlayerSpeechDistanceMultiplier() {
 static float GetConversationTargetRadius() {
     constexpr float kDefaultTargetRadius = 500.0f;
     constexpr float kCloseRadius = 200.0f;
-    if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+    if (EqualsIgnoreCase(EffectiveMode(), "CLOSE")) {
         return ActorPositionResolverFNV::IsPlayerSneaking()
             ? kCloseRadius * 0.5f
             : kCloseRadius;
@@ -837,7 +850,7 @@ static bool IsConversationTargetWithinModeRadius(uint32_t formId, const std::str
     }
 
     Logger::LogInfo("GameLoop: %s mode rejected %s (0x%08X), distance=%.1f radius=%.1f",
-        Config::currentMode.c_str(), name.c_str(), formId, spatial.airDistance, radius);
+        EffectiveMode().c_str(), name.c_str(), formId, spatial.airDistance, radius);
     if (notify) {
         Console::Print("[DIALECTIC] Move closer to %s", name.empty() ? "the target" : name.c_str());
     }
@@ -4547,8 +4560,10 @@ bool IsExternalActorAvailable(uint32_t actorFormId) {
     return ResolveExternalEventActor(actorFormId, actor, gameState, false);
 }
 
+// explicitTarget skips only the automatic activity preference; every other gate still applies.
 static bool ExternalGeneratedSpeechAllowed(uint32_t actorFormId,
-                                           const RuntimeSnapshot::GameState& gameState) {
+                                           const RuntimeSnapshot::GameState& gameState,
+                                           bool explicitTarget = false) {
     if (gameState.paused || gameState.inMenu || gameState.dialogueMenuOpen ||
         IsTextInputMenuActiveOrRecentlyClosed()) {
         Logger::LogInfo("[xNVSE event API] generated speech rejected because a menu/dialogue is active actor=0x%08X",
@@ -4559,7 +4574,7 @@ static bool ExternalGeneratedSpeechAllowed(uint32_t actorFormId,
         return false;
     }
     std::string activityReason;
-    if (!ActivityStatusFNV::IsAutomaticDialogueAllowed(actorFormId, &activityReason)) {
+    if (!explicitTarget && !ActivityStatusFNV::IsAutomaticDialogueAllowed(actorFormId, &activityReason)) {
         Logger::LogInfo("[xNVSE event API] generated speech rejected by activity gate actor=0x%08X reason=%s",
             actorFormId, activityReason.c_str());
         return false;
@@ -4751,17 +4766,18 @@ void StopConversation() {
     g_conversationPartnerFormId = 0;
 }
 
-void SendPlayerMessage(const std::string& message) {
-    if (!Interaction::ManualInputAllowed()) return;
-    if (MultiplayerSharing::IsListener()) return;
+// addonMode is STANDARD, WHISPER or SHOUT for an addon message, or nullptr for player input.
+static bool SendPlayerMessageImpl(const std::string& message, const char* addonMode) {
+    if (!Interaction::ManualInputAllowed()) return false;
+    if (MultiplayerSharing::IsListener()) return false;
     if (!g_conversationActive) {
         Log("GameLoop: Cannot send message - no active conversation");
     Console::Print("[DIALECTIC] No active conversation");
-        return;
+        return false;
     }
 
     if (!EnforceCombatDialogueGate(g_conversationPartnerFormId, "player_message", true)) {
-        return;
+        return false;
     }
 
     if (!g_conversationIsNarrator && ExternalCommandBridge::IsActorTalkBlocked(g_conversationPartnerFormId)) {
@@ -4769,7 +4785,7 @@ void SendPlayerMessage(const std::string& message) {
             g_conversationPartner.c_str(), g_conversationPartnerFormId.load(),
             ExternalCommandBridge::ActorBlockReason(g_conversationPartnerFormId));
         Console::Print("[DIALECTIC] %s is busy right now.", g_conversationPartner.c_str());
-        return;
+        return false;
     }
 
     if (!g_conversationIsNarrator &&
@@ -4777,18 +4793,18 @@ void SendPlayerMessage(const std::string& message) {
         g_conversationActive = false;
         g_conversationPartner.clear();
         g_conversationPartnerFormId = 0;
-        return;
+        return false;
     }
     if (!g_conversationIsNarrator &&
         !IsConversationTargetWithinModeRadius(g_conversationPartnerFormId, g_conversationPartner, true)) {
-        return;
+        return false;
     }
     
-    const bool hypnosisMode = EqualsIgnoreCase(Config::currentMode, "HYPNOSIS");
+    const bool hypnosisMode = EqualsIgnoreCase(EffectiveMode(), "HYPNOSIS");
     if (hypnosisMode && (g_conversationIsNarrator || g_conversationPartnerFormId == 0 ||
         g_conversationPartnerFormId == 0x14 || TrimInput(message).empty())) {
         Console::Print("[DIALECTIC] Hypnosis needs an NPC target and an instruction.");
-        return;
+        return false;
     }
 
     ResetBoredEventTimer("player message");
@@ -4797,15 +4813,16 @@ void SendPlayerMessage(const std::string& message) {
     RuntimeSnapshot::RebaseGeneration(turnGeneration);
     GameThreadDispatcher::CancelAll("player_interruption");
     TaskManager::CancelOlderThanGeneration(turnGeneration);
+    SpeakManager::SetAddonTurnMode(turnGeneration, addonMode);
 
     const bool injectionLogMode =
-        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "INJECTION_LOG");
+        !g_conversationIsNarrator && EqualsIgnoreCase(EffectiveMode(), "INJECTION_LOG");
     const bool injectionChatMode =
-        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "INJECTION_CHAT");
+        !g_conversationIsNarrator && EqualsIgnoreCase(EffectiveMode(), "INJECTION_CHAT");
     const bool directorMode =
-        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "DIRECTOR");
+        !g_conversationIsNarrator && EqualsIgnoreCase(EffectiveMode(), "DIRECTOR");
     const bool cheatMode =
-        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "CHEATMODE");
+        !g_conversationIsNarrator && EqualsIgnoreCase(EffectiveMode(), "CHEATMODE");
     const bool injectionMode = injectionLogMode || injectionChatMode;
     const bool privateConversationMode = !g_conversationIsNarrator && IsPrivateConversationMode();
     const bool skipPlayerTtsMode = injectionMode || directorMode || cheatMode || hypnosisMode;
@@ -4823,7 +4840,7 @@ void SendPlayerMessage(const std::string& message) {
         playerTtsQueued = HTTPManager::QueuePlayerTtsPlay(message);
         Log("GameLoop: Priority player TTS async queued=%d before inputtext", playerTtsQueued ? 1 : 0);
     } else {
-        Log("GameLoop: Skipping player TTS for mode %s", Config::currentMode.c_str());
+        Log("GameLoop: Skipping player TTS for mode %s", EffectiveMode().c_str());
     }
     if (!g_conversationIsNarrator && g_conversationPartnerFormId != 0) {
         const bool metadataOk = AgentManager::RefreshActorMetadataForPrompt(
@@ -4855,12 +4872,12 @@ void SendPlayerMessage(const std::string& message) {
         ? "narrator_inputtext"
         : (stealthPlayerInput ? "inputtext_s" : "inputtext");
     const bool targetOnlyConversationMode =
-        !g_conversationIsNarrator && EqualsIgnoreCase(Config::currentMode, "WHISPER");
+        !g_conversationIsNarrator && EqualsIgnoreCase(EffectiveMode(), "WHISPER");
     const std::string audienceSnapshot = g_conversationIsNarrator
         ? BuildPrivateNarratorAudienceSnapshotJson()
         : ((injectionMode || hypnosisMode || targetOnlyConversationMode)
             ? BuildTargetOnlyAudienceSnapshotJson(privateConversationMode)
-            : BuildAudienceSnapshotJson(EqualsIgnoreCase(Config::currentMode, "CLOSE") ? "player_close" : ""));
+            : BuildAudienceSnapshotJson(EqualsIgnoreCase(EffectiveMode(), "CLOSE") ? "player_close" : ""));
     SpeakManager::SetPlayerTurnAudience(ExtractPeopleFromAudienceSnapshotJson(audienceSnapshot));
     Log("GameLoop: Audience snapshot for player input type=%s stealth=%d distanceMultiplier=%.3f: %s",
         playerInputEventType,
@@ -4879,10 +4896,15 @@ void SendPlayerMessage(const std::string& message) {
             << "\"npc_id\":\"" << npcId.str() << "\","
             << "\"player\":\"" << HTTPManager::EscapeJson(playerName) << "\","
             << "\"text\":\"" << HTTPManager::EscapeJson(message) << "\","
-            << "\"skip_player_tts\":" << ((skipPlayerTtsMode || playerTtsQueued) ? "true" : "false") << ","
-            << "\"dialectic_mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\","
-            << "\"mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\","
-            << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(g_conversationPartner) << "\",\"refid\":\"" << npcId.str() << "\"},"
+            << "\"skip_player_tts\":" << ((skipPlayerTtsMode || playerTtsQueued) ? "true" : "false") << ",";
+    if (addonMode) {
+        // Applies to this request only. The global mode is omitted so the server does not store it.
+        payload << "\"addon_message\":{\"mode\":\"" << addonMode << "\"},";
+    } else {
+        payload << "\"dialectic_mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\","
+                << "\"mode\":\"" << HTTPManager::EscapeJson(Config::currentMode) << "\",";
+    }
+    payload << "\"target\":{\"name\":\"" << HTTPManager::EscapeJson(g_conversationPartner) << "\",\"refid\":\"" << npcId.str() << "\"},"
             << "\"player_actor\":{\"name\":\"" << HTTPManager::EscapeJson(playerName) << "\"},";
     if (g_conversationIsNarrator || privateConversationMode) {
         payload << "\"private\":true,\"listener\":\""
@@ -4899,6 +4921,63 @@ void SendPlayerMessage(const std::string& message) {
         ApplyModeIndex(0, false);
         Log("GameLoop: One-shot mode consumed one input and reset locally to Standard");
     }
+    return true;
+}
+
+void SendPlayerMessage(const std::string& message) {
+    SendPlayerMessageImpl(message, nullptr);
+}
+
+int RequestAddonMessage(uint32_t actorFormId, int mode, const std::string& text) {
+    static constexpr const char* kAddonModes[] = { "STANDARD", "WHISPER", "SHOUT" };
+    const std::string cleanText = TrimInput(text);
+    if (mode < 0 || mode > 2 || cleanText.empty() || cleanText.size() > 1000) return -2;
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    if (!Interaction::Allowed() || MultiplayerSharing::IsListener() ||
+        !ResolveExternalEventActor(actorFormId, actor, gameState) ||
+        ExternalCommandBridge::IsActorTalkBlocked(actorFormId)) {
+        return -3;
+    }
+    if (g_conversationActive &&
+        (g_conversationIsNarrator || g_conversationPartnerFormId != actorFormId)) {
+        Logger::LogInfo("[ADDON_MESSAGE] rejected because another actor owns the conversation actor=0x%08X owner=0x%08X",
+            actorFormId, g_conversationPartnerFormId.load());
+        return -3;
+    }
+    // Unlike typed input, an addon message never interrupts active speech or an in-flight request:
+    // the explicit-target generated-speech gate (menu, combat, busy pipeline) runs before any mutation.
+    if (!ExternalGeneratedSpeechAllowed(actorFormId, gameState, true)) return -3;
+    // The request mode also governs the initial target radius, so a global Close or Whisper
+    // radius never decides an addon Standard or Shout message.
+    RequestModeScope requestMode(kAddonModes[mode]);
+    if (!IsConversationTargetWithinModeRadius(actorFormId, actor.name, false)) return -3;
+    if (!g_conversationActive && !StartConversationForActor(actorFormId, actor.name, false)) {
+        return -3;
+    }
+    return SendPlayerMessageImpl(cleanText, kAddonModes[mode]) ? 1 : -3;
+}
+
+int RequestAddonReaction(uint32_t actorFormId, bool eligibleOnly, const std::string& instruction) {
+    const std::string cleanInstruction = TrimInput(instruction);
+    if (cleanInstruction.empty() || cleanInstruction.size() > 1000) return -2;
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    if (!Interaction::Allowed() || !ResolveExternalEventActor(actorFormId, actor, gameState) ||
+        ExternalCommandBridge::IsActorTalkBlocked(actorFormId)) {
+        return -3;
+    }
+    if (g_conversationActive &&
+        (g_conversationIsNarrator || g_conversationPartnerFormId != actorFormId)) {
+        Logger::LogInfo("[ADDON_MESSAGE] reaction rejected because another actor owns the conversation actor=0x%08X",
+            actorFormId);
+        return -3;
+    }
+    if (!ExternalGeneratedSpeechAllowed(actorFormId, gameState, !eligibleOnly)) return -3;
+    const std::string audience = BuildAudienceSnapshotJson("external_reaction");
+    HTTPManager::SendEvent("external_reaction",
+        BuildExternalSpeechPayload(actor, "reaction", cleanInstruction, audience), audience);
+    return 1;
 }
 
 bool IsConversationActive() {

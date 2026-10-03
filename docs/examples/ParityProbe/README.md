@@ -33,6 +33,28 @@ appends `agents=<n>` (at most 4 nearby registered agents) and, when there is
 one, `closest=<name>`. It only reads; ParityProbe never registers,
 unregisters or refreshes an agent.
 
+Optional message demos (addon API level `3`), each only for its exact
+parameter and only when the DLL registers `DialecticSendAddonMessage`:
+
+- `context`: `AddonLevel3.txt` sends one `DialecticSendAddonContext` line
+  (`state` / `parity.check`) on the actor and appends `context=<result>`
+  (`1` queued). It is context, never player speech, and starts no dialogue.
+- `whisper`: appends `scheduled=whisper`; 10 seconds later `AddonMessage.txt`
+  sends one whisper (`mode` `1`) addon message to the actor and prints
+  `[ParityProbe] whisper message result=<n>`. This starts a real dialogue turn
+  with player TTS and an NPC reply, so use it only when you want one.
+- `react`: appends `scheduled=react`; 10 seconds later `AddonMessage.txt`
+  requests one explicit (`0`) reaction and prints
+  `[ParityProbe] explicit reaction result=<n>`. It is an instruction, not
+  player speech, and also produces a spoken reply.
+
+The delay exists because both are refused (`-3`) while the actor's reply to
+the Ping is still queued or playing; a `-3` after the delay means another gate
+refused it (reason in `dialectic.log`). Use eligible-only reactions
+(`DialecticRequestAddonReaction` with `1`) in your own addon when the activity
+preference should still apply. Default Pings, and every other parameter,
+remain read-only.
+
 ## Files
 
 Copy the contents of `Data/` into a separate mod; do not add them to
@@ -45,6 +67,8 @@ Data/NVSE/user_defined_functions/ParityProbe/OnExternalCommand.txt
 Data/NVSE/user_defined_functions/ParityProbe/HoldTalk.txt
 Data/NVSE/user_defined_functions/ParityProbe/ReleaseTalk.txt
 Data/NVSE/user_defined_functions/ParityProbe/ListAgents.txt
+Data/NVSE/user_defined_functions/ParityProbe/AddonLevel3.txt
+Data/NVSE/user_defined_functions/ParityProbe/AddonMessage.txt
 ```
 
 The scripts are compiled at runtime by xNVSE `CompileScript`. No ESP or GECK
@@ -65,7 +89,8 @@ opcode of every Dialectic command the compiled scripts use. `GetCommandOpcode`
 returns `0` for an unregistered name, so with an older DLL the runner prints
 one console line and never compiles `Register.txt`. The control and agent
 demos are checked separately in the handler, so an older DLL still runs Ping
-and only skips `hold` (before level `1`) or `agents` (before level `2`).
+and only skips `hold` (before level `1`), `agents` (before level `2`) or
+`context`, `whisper` and `react` (before level `3`).
 
 Runtime-compiled scripts share load-order index `0xFF`, so the legacy
 `DialecticRegisterExternalBridge` cannot tell this addon apart from another
@@ -159,3 +184,13 @@ To validate in game with a disposable save:
 6. Optional: trigger Ping with parameter `agents` near a registered agent.
    Expect `agents=<n>` with `n` from 1 to 4 and `closest=<name>` in the result,
    and no `[ADDON_AGENT]` line in the log.
+7. Optional: trigger Ping with parameter `context`. Expect `context=1` in the
+   result, one `pluginevent` with schema `dialectic.addon_context.v1`, and on a
+   current server an `infoaction` line `(Addon ParityProbe state parity.check
+   about <actor>: ParityProbe context check)` with no model call.
+8. Optional: trigger Ping with `whisper`, then with `react`, while the actor is
+   idle. After 10 seconds expect `result=1`, one `inputtext` carrying
+   `addon_message.mode` `WHISPER` (no `dialectic_mode`) or one
+   `external_reaction`, an unchanged Dialectic mode menu, and no rechat after
+   the whisper reply. Repeat while another line is playing and expect `-3` with
+   `dialogue pipeline is busy` in the log and the playing line uninterrupted.

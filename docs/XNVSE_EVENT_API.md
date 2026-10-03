@@ -77,10 +77,11 @@ Keep the check in a script that calls only xNVSE commands, and call the
 Dialectic commands only in scripts compiled after it passes. A script that
 names an unknown command fails to compile as a whole.
 
-`DialecticGetAddonApiVersion` returns the addon API level, currently `2`.
+`DialecticGetAddonApiVersion` returns the addon API level, currently `3`.
 Builds without that command predate it; check their commands individually.
 Level `1` adds the [addon control](#addon-control) commands to the owned-bridge
 commands below. Level `2` adds the [agent and context](#agents-and-context)
+commands. Level `3` adds the [message and context](#messages-and-context)
 commands. New commands are only appended, so existing opcodes and
 compiled scripts keep working; a higher level always includes the lower ones.
 
@@ -97,7 +98,7 @@ compiled scripts keep working; a higher level always includes the lower ones.
 | `actor.DialecticIsActorAvailable` | Required | `1` when this actor passes the same exact scene and eligibility gate as the public events, including addon talk locks and animation-busy flags. Busy-pipeline and menu gates are checked only when a request is made. |
 | `DialecticGetInteractionState` | None | `0` off, `1` on, `2` updating, `3` connection failed. |
 | `DialecticStopAllDialogue` | None | `1` after stopping Dialectic speech and pending replies. Actor actions and conversation history are unchanged. |
-| `DialecticGetAddonApiVersion` | None | The addon API level, currently `2`. |
+| `DialecticGetAddonApiVersion` | None | The addon API level, currently `3`. |
 | `DialecticSetInteractionEnabled handle, enabled` | None | `1` when interaction is already in the requested state; `2` when the change was accepted or is already synchronizing toward it. `-1` unknown handle, `-2` value other than `0` or `1`. See [addon control](#addon-control). |
 | `actor.DialecticSetActorTalkLock handle, locked` | Required | `1` applied (also when already in that state), `2` released while another addon still holds a lock on the actor, `-1` unknown handle, `-2` not an NPC or creature reference (or the player), `-3` 64 actors already have flags, `-4` value other than `0` or `1`. |
 | `actor.DialecticSetActorAnimationBusy handle, busy` | Required | Same results as `DialecticSetActorTalkLock`, for the animation-busy flag. |
@@ -109,6 +110,9 @@ compiled scripts keep working; a higher level always includes the lower ones.
 | `actor.DialecticRegisterAgent handle` | Required | `1` registered (or an automatic agent marked manual), `2` already manually registered, `-1` unknown handle, `-2` actor not loaded, alive and in the current scene, `-3` refused by activation policy, `-4` unavailable as a multiplayer listener. |
 | `actor.DialecticUnregisterAgent handle` | Required | `1` removed, `0` not an AI agent, `-1` unknown handle, `-2` not an NPC or creature reference, `-4` unavailable as a multiplayer listener. |
 | `actor.DialecticRefreshActorContext handle` | Required | `1` upload queued, `2` coalesced with a refresh in the last 5 seconds, `-1` unknown handle, `-2` actor not loaded, alive and in the current scene, `-3` not an AI agent, `-4` unavailable as a multiplayer listener. |
+| `actor.DialecticSendAddonMessage handle, mode, "text"` | Required | `1` queued as player input to this actor; `-1` unknown handle, `-2` invalid mode or text, `-3` refused by a gate, `-4` multiplayer listener. See [messages and context](#messages-and-context). |
+| `actor.DialecticRequestAddonReaction handle, eligibility, "text"` | Required | Same codes; `1` means an `external_reaction` request was queued. |
+| `[actor.]DialecticSendAddonContext handle, "type", "name", "text"` | Optional | `1` context queued, `-1` unknown handle, `-2` invalid type, name or text, `-3` interaction off, actor not in the scene or rate limited, `-4` multiplayer listener. |
 | `DialecticRefreshPlayerContext handle, flags` | None | `flags` is `1` player inventory plus `2` world context. `1` at least one refresh requested, `2` every requested part coalesced with one in the last 5 seconds, `-1` unknown handle, `-2` invalid flags, `-4` unavailable as a multiplayer listener. |
 
 Bridge names are 1 to 32 ASCII letters or digits and start with a letter.
@@ -284,6 +288,64 @@ if eval rAgent
 endif
 ```
 
+### Messages and context
+
+These commands take an owned-bridge handle. `1` means the request is on
+Dialectic's asynchronous HTTP queue; it does not mean a reply was generated,
+spoken or acknowledged by the server, and there is no completion status. Every
+call returns without waiting for the network. Results are logged as
+`[ADDON_MESSAGE]`.
+
+- `DialecticSendAddonMessage` sends `text` as player input to the calling actor
+  through the same request path as typed input, including player TTS and
+  metadata refresh. Unlike typed input it never interrupts: it is refused with
+  `-3` while any line is queued, preparing or playing, or any HTTP request or
+  response is in flight, and that check runs before a conversation is started
+  or anything is cancelled. `mode` is `0` normal, `1` whisper or `2` shout and
+  applies to this request only: it selects the initial listener radius
+  (including when it starts the conversation), audience snapshot and privacy
+  flags for this turn, and the server applies the matching prompt instruction.
+  The selected chat mode, the INI and the server's stored mode are not changed,
+  and the next request uses the selected mode again; a normal addon message
+  under a selected Whisper or Close mode is a normal turn. Director, hypnosis,
+  injection and cheat modes never apply to addon messages. The mode is kept for
+  the turn's runtime generation, so automatic rechat after a whisper message is
+  suppressed like a Whisper turn, and rechat after any addon message uses the
+  message's audience rather than a selected Close mode's. A selected Whisper
+  mode still suppresses rechat after a normal or shout addon message, because
+  the server gates rechat on its stored mode. Playback volume and distance are
+  spatial and identical in every mode (as for typed input), so a whisper
+  message is a private, target-only turn rather than a whisper voice effect.
+  The actor must pass the exact scene and eligibility gate. It is refused while
+  interaction is off, during menus, loading or combat dialogue blocks, when the
+  actor is talk-locked or animation-busy, outside the request mode's listener
+  radius, and when another actor or the Narrator owns the conversation. The
+  automatic activity preference does not apply, as for an explicit reaction.
+  Without a conversation it starts one with the actor.
+- `DialecticRequestAddonReaction` requests a generated reaction through the
+  existing `external_reaction` path; `text` is an instruction, never player
+  speech. `eligibility` `1` applies every gate `DialecticReact` applies.
+  `0` (explicit) skips only the automatic activity preference (for example,
+  sleeping or working actors), and still requires interaction on, the scene
+  and eligibility gate, no menu, no combat block, no talk lock or animation-busy
+  flag, an idle dialogue pipeline and no conversation owned by another actor.
+- `DialecticSendAddonContext` sends namespaced state as `pluginevent` with
+  schema `dialectic.addon_context.v1` (`bridge`, `type`, `name`, `text`, and
+  `actor`/`actor_refid` when called on an actor). `type` and `name` follow the
+  event-name rules, `text` is 1 to 1000 bytes, and the bridge's plugin-event
+  limit of 20 events per 10 seconds is shared. Current DialecticServer logs it
+  as a context line, not as player input, and never starts dialogue from it.
+
+Older servers ignore the request-scoped mode and use their stored mode, and
+end addon context after `prerequest.php` without logging it.
+
+```geck
+let iHandle := DialecticRegisterOwnedBridge "MyBridge" "MyAddon"
+rActor.DialecticSendAddonMessage iHandle 1 "Keep your voice down."
+rActor.DialecticRequestAddonReaction iHandle 0 "React to the alarm going off."
+DialecticSendAddonContext iHandle "state" "alarm" "The base alarm is sounding."
+```
+
 ### Server actions: `ExtCmd<Bridge>_<Action>`
 
 DialecticServer can emit a `rolecommand` line whose `command_name` uses CHIM's
@@ -369,10 +431,10 @@ API and may change.
 | `IntCmd` (`AIAgentAIMind.SendInternalEvent`) | Not applicable | Papyrus-internal dispatch |
 | `WebCmd` (immediate `funcret` echo) | Not provided | Server plugins handle it without a game round trip |
 | `commandEnded` / `commandEndedForActor` | `actor.DialecticCompleteOwnedCommand` (legacy: `actor.DialecticCompleteExternalCommand`) | Equivalent; adds request ID and success flag. Dialectic reports `timed_out` after 30 seconds; `DialecticGetExternalCommandStatus` shows the outcome |
-| `sendMessageToActor` | `DialecticAsk` event | Partial: player-input path only; no message type |
+| `sendMessageToActor` | `actor.DialecticSendAddonMessage` (or the `DialecticAsk` event) | Partial: player-input path with normal, whisper or shout for one request; other CHIM input types are not provided |
 | `sendMessage`, `requestMessage`, `sendRequest` | Not provided | Deliberate: every request is bound to an actor |
-| `requestMessageForActor` / `requestMessageForEligibleActor` | `DialecticReact` and `DialecticComment` events | Partial: always gated; no message type |
-| `logMessage` / `logMessageForActor` | `DialecticSendPluginEvent` | Partial: namespaced by bridge, no arbitrary event type, 20 events per 10 seconds |
+| `requestMessageForActor` / `requestMessageForEligibleActor` | `actor.DialecticRequestAddonReaction` with eligibility `0` or `1`; `DialecticReact` and `DialecticComment` events | Partial: by ref; explicit skips only the activity preference; no message type |
+| `logMessage` / `logMessageForActor` | `[actor.]DialecticSendAddonContext` (context the server logs); `DialecticSendPluginEvent` (observers only) | Partial: namespaced by bridge with a bounded type and name, never player speech, 20 events per 10 seconds |
 | `PostGameData` | `DialecticSendPluginEvent` | Partial: one bounded string (1000 bytes) per event, not arbitrary JSON |
 | `isActorTalking` | `actor.DialecticIsActorTalking` | Equivalent for Dialectic speech only |
 | `getChimInteractionState` | `DialecticGetInteractionState` | Equivalent |
