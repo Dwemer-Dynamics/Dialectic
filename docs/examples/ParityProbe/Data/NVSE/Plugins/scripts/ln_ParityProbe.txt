@@ -2,7 +2,24 @@
 ; Bridge registration is idempotent for the same plugin, so repeating it per load is expected.
 
 if GetPluginVersion "Dialectic" < 10103
-    PrintC "[ParityProbe] Dialectic is not loaded."
+    Print "[ParityProbe] Dialectic is not loaded."
+    return
+endif
+
+; The plugin version does not identify the extension API, so look up every
+; Dialectic command the compiled scripts use. GetCommandOpcode returns 0 for an
+; unknown name, which keeps an older Dialectic DLL from compiling them.
+if GetCommandOpcode "DialecticRegisterExternalBridge" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
+    return
+elseif GetCommandOpcode "DialecticCompleteExternalCommand" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
+    return
+elseif GetCommandOpcode "DialecticSendPluginEvent" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
+    return
+elseif GetCommandOpcode "DialecticIsActorTalking" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
     return
 endif
 

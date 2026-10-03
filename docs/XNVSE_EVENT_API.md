@@ -52,10 +52,27 @@ server endpoints, action names, JSON payloads, or remote actor selection.
 
 ## Plugin extension API
 
-Version 2 adds CHIM-equivalent extension points for xNVSE addons. Every
+These commands give xNVSE addons extension points comparable to CHIM's. Every
 command below returns immediately; `1` means accepted and `0` means rejected,
 with the reason in the Dialectic plugin log. Requests to the server and
 in-game speech remain asynchronous.
+
+The plugin version reported to `GetPluginVersion "Dialectic"` does not change
+with this API, so it cannot tell a capable DLL from an older one. Before
+compiling a script that calls these commands, check each command with xNVSE's
+`GetCommandOpcode` (xNVSE 6.1 beta 6 and later), which returns `0` for a name
+no plugin registered:
+
+```geck
+if GetCommandOpcode "DialecticRegisterExternalBridge" == 0
+    return
+endif
+call (CompileScript "MyAddon/Register.txt")
+```
+
+Keep the check in a script that calls only xNVSE commands, and call the
+Dialectic commands only in scripts compiled after it passes. A script that
+names an unknown command fails to compile as a whole.
 
 | Command | Calling reference | Returns |
 | --- | --- | --- |
@@ -136,22 +153,48 @@ sending it does not request dialogue.
 
 ### CHIM equivalents
 
-| CHIM (`AIAgentFunctions` / `Commands.cpp`) | Dialectic |
-| --- | --- |
-| `ExtCmd<Bridge>_<Action>` to `<Bridge>.DispatchExternalCommand(npc, command, parameter)` | `DialecticExternalCommand` on the exact actor, after `DialecticRegisterExternalBridge` |
-| `commandEnded` / `commandEndedForActor` | `actor.DialecticCompleteExternalCommand` (adds request ID and success flag) |
-| `sendMessageToActor` | `DialecticAsk` event |
-| `requestMessageForActor` / `requestMessageForEligibleActor` | `DialecticReact` and `DialecticComment` events (always gated) |
-| `logMessage` / `logMessageForActor` | `DialecticSendPluginEvent` (namespaced by bridge, no arbitrary event type) |
-| `isActorTalking` | `actor.DialecticIsActorTalking` |
-| `getChimInteractionState` | `DialecticGetInteractionState` |
-| `stopAllDialogue` | `DialecticStopAllDialogue` |
-| `ExtCmd` fallback to `AIAgentAIMind.SendExternalEvent` | Not provided; unregistered bridges report failure |
-| `IntCmd` (`AIAgentAIMind.SendInternalEvent`) | Not applicable: internal Papyrus script dispatch |
-| `WebCmd` (immediate `funcret` echo) | Not provided; server plugins handle it without a game round trip |
-| Name-based targets (`npc` strings), `getAgentByName`, `getClosestAgent` | Not provided; all actor-bound commands use the calling reference |
-| `sendMessage`, `requestMessage`, `sendRequest` | Not provided; use an actor-bound event |
-| MCM snapshot/agent publishing, Prisma UI panels, Soulgaze, VR, `setConf`, agent profile and Papyrus helper natives | Not applicable: Skyrim or CHIM-internal UI/configuration |
+This table covers every native in CHIM's `AIAgentFunctions.psc` and the
+`ExtCmd`/`IntCmd`/`WebCmd` paths in `Commands.cpp`. "Not provided" means
+Dialectic has no addon-facing equivalent. Commands described as internal are
+registered for Dialectic's own scripts and MCM; they are not a supported addon
+API and may change.
+
+| CHIM | Dialectic | Parity |
+| --- | --- | --- |
+| `ExtCmd<Bridge>_<Action>` to `<Bridge>.DispatchExternalCommand(npc, command, parameter)` | `DialecticExternalCommand` on the exact actor, after `DialecticRegisterExternalBridge` | Equivalent; routed by actor ref instead of NPC name |
+| `ExtCmd` fallback to `AIAgentAIMind.SendExternalEvent` | Not provided; unregistered bridges report failure | Gap |
+| `IntCmd` (`AIAgentAIMind.SendInternalEvent`) | Not applicable | Papyrus-internal dispatch |
+| `WebCmd` (immediate `funcret` echo) | Not provided | Server plugins handle it without a game round trip |
+| `commandEnded` / `commandEndedForActor` | `actor.DialecticCompleteExternalCommand` | Equivalent; adds request ID and success flag. Dialectic reports `timed_out` after 30 seconds |
+| `sendMessageToActor` | `DialecticAsk` event | Partial: player-input path only; no message type |
+| `sendMessage`, `requestMessage`, `sendRequest` | Not provided | Deliberate: every request is bound to an actor |
+| `requestMessageForActor` / `requestMessageForEligibleActor` | `DialecticReact` and `DialecticComment` events | Partial: always gated; no message type |
+| `logMessage` / `logMessageForActor` | `DialecticSendPluginEvent` | Partial: namespaced by bridge, no arbitrary event type, 20 events per 10 seconds |
+| `PostGameData` | `DialecticSendPluginEvent` | Partial: one bounded string (1000 bytes) per event, not arbitrary JSON |
+| `isActorTalking` | `actor.DialecticIsActorTalking` | Equivalent for Dialectic speech only |
+| `getChimInteractionState` | `DialecticGetInteractionState` | Equivalent |
+| `setChimInteractionEnabled` | `DialecticToggleInteraction` (internal) | Partial: toggles instead of setting a value, and does nothing while the state is `2` (updating). There is no deterministic setter |
+| `stopAllDialogue` | `DialecticStopAllDialogue` | Equivalent |
+| `setLocked`, `setAnimationBusy` | Not provided | Gap: no per-actor talk lock or busy flag. `actor.DialecticIsActorAvailable` only reads the request gate |
+| `setDrivenByAI`, `setDrivenByAIA`, `addBasicProfile`, `setAIKeyWord` | `DialecticRecruit` event | Partial: Dialectic registers AI agents itself on activation and exposes no command to add one. Recruiting makes the actor a teammate; it does not add a profile |
+| `removeAgentByName` | `DialecticDismiss` event | Partial: dismisses a teammate by ref; it does not remove the actor from Dialectic's agent registry |
+| `getClosestAgent`, `getAgentByName`, `findAllNearbyAgents`, `findAllAgents`, `findAllNearbyNonAgents`, `findAllNearbyActors`, `findAllAgentsFormId`, `getHerikaFormId` | Not provided | Gap: the agent registry is internal and has no read command. Use the game's own actor scans and `DialecticIsActorAvailable` |
+| `isGameFocused` | Not provided | Gap |
+| `scanActorsAroundOffline`, `updateRemoteCombatSnapshot` | Not provided | Dialectic sends nearby-actor context itself; addons cannot request a scan |
+| `updateRemoteInventory` | `DialecticMarkPlayerInventoryDirty` (internal) | Partial: marks the player inventory for upload. Dialectic uploads agent inventory and equipment itself; addons cannot request it for an actor |
+| `sendLocationFast`, `sendFactionFast`, `sendNPCFast` | `DialecticSyncWorldData` (internal) | Partial: full faction and location sync, not one record |
+| `sendAllVoices` | `DialecticSendAllVoiceSamples` (internal) | Equivalent for configured voice samples |
+| `setConf`, `get_conf_i` | `DialecticSendSetConf` (internal); `DialecticGetConfigInt` and related commands read local INI settings | Partial; not an addon API |
+| `SayTo` | Not provided | FNV scripts can call the game's own `Say`/`SayTo` |
+| `recordSoundEx`, `stopRecording`, open-mic natives, `getCurrentRecordingDeviceName` | Dialectic hotkeys and `DialecticGetCurrentRecordingDevice` (internal) | Not an addon API |
+| `setNewActionMode`, `getPlayerBountyForGuard`, `requestMoveInventoryItemConfirmation`, `requestArrestConfirmation`, `isUsingFurniture`, `isInContainer`, `loadReference`, location-marker and door helpers, `jsonGet*` helpers, music scenes, `removeFromRenamedNPCList`, `hardResetExpression` | Not provided | CHIM-internal Papyrus helpers. FNV scripts use xNVSE and JIP LN commands for similar game queries |
+| MCM snapshot and agent publishing, Prisma UI panels, `shotAndUpload`, `startSoulgazeCapture`, `isGameVR`, `startPlayerMenuDialogueTTS`, test natives | Not applicable | Skyrim or CHIM-internal UI, capture and debugging |
+
+Engine differences: Fallout: New Vegas has no Papyrus, so addons use xNVSE
+script commands and events instead of global native functions. Actors are
+passed as references, never NPC names. Every runtime-compiled script shares
+load-order index `0xFF` for bridge ownership. Dialectic runs on the 32-bit
+game, has no VR build, and has no Prisma UI.
 
 The API does not accept URLs, server endpoints or arbitrary event types, and
 it does not replace Dialectic's bundled scripts. See

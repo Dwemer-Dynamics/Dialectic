@@ -33,6 +33,7 @@ void TestCommandParsing() {
     Expect(!ParseCommand("ExtCmdParityProbe", bridge, action), "missing separator rejected");
     Expect(!ParseCommand("IntCmdParityProbe_Ping", bridge, action), "other prefixes rejected");
     Expect(!ParseCommand("ExtCmdhttp://x_Ping", bridge, action), "bridge names are identifiers only");
+    Expect(!ParseCommand("ExtCmd1Probe_Ping", bridge, action), "bridge names start with a letter");
     Expect(OwnerKeyFromScriptFormId(0x12001234) == 0x12000000, "regular plugin owner key");
     Expect(OwnerKeyFromScriptFormId(0xFE003ABC) == 0xFE000000, "FNV has no light-plugin sub-slot");
     Expect(OwnerKeyFromScriptFormId(0xFF000801) == OwnerKeyFromScriptFormId(0xFF123456),

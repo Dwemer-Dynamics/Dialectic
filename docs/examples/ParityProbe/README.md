@@ -28,10 +28,21 @@ Data/NVSE/user_defined_functions/ParityProbe/Register.txt
 Data/NVSE/user_defined_functions/ParityProbe/OnExternalCommand.txt
 ```
 
-The scripts are compiled at runtime by xNVSE `CompileScript`; JIP LN runs the
-`ln_` file. No ESP or GECK compilation is needed. They require a Dialectic
-build that includes the extension commands. With an older DLL, `Register.txt`
-fails to compile and xNVSE logs the unknown command. Runtime-compiled scripts
+The scripts are compiled at runtime by xNVSE `CompileScript`. No ESP or GECK
+compilation is needed. Requirements:
+
+- xNVSE 6.3.3 or newer, which Dialectic already requires. The scripts use
+  only xNVSE commands (`CompileScript`, `SetEventHandlerAlt`,
+  `GetCommandOpcode`, `GetPluginVersion`, `Print`) and Dialectic commands.
+- JIP LN NVSE, only for its script runner, which runs `ln_ParityProbe.txt` on
+  each new game or loaded save. Dialectic already requires JIP LN 57 or newer.
+- A Dialectic DLL with the plugin extension commands.
+
+The plugin version (`10103`) is not raised for the extension API, so it cannot
+identify a capable DLL. `ln_ParityProbe.txt` therefore also asks xNVSE for the
+opcode of every Dialectic command the compiled scripts use. `GetCommandOpcode`
+returns `0` for an unregistered name, so with an older DLL the runner prints
+one console line and never compiles `Register.txt`. Runtime-compiled scripts
 share load-order index `0xFF`, so bridge ownership cannot tell this addon apart
 from another runtime-compiled addon that registers `ParityProbe`.
 
@@ -82,9 +93,10 @@ and `result`, `@`, `|`, tabs and newlines become spaces.
 
 The server example's `prerequest.php` observer reads both JSON schemas. A
 DialecticServer build with the plugin runtime accepts `pluginevent` passively,
-without a model call. Bridge names must start with a letter: the client accepts
-a leading digit, but the server only registers `ExtCmd<Bridge>_<Action>` codes
-whose bridge and action start with a letter.
+without a model call. Bridge names must start with a letter on both sides. The
+server only registers codes of at most 64 characters whose action part is a
+letter followed by letters or digits. The client also accepts a leading digit
+or `_` in the action part, but the server never emits such a code.
 
 ## Validation
 
