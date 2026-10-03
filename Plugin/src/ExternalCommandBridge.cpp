@@ -4,6 +4,7 @@
 #include "ActivationManager.h"
 #include "AgentManager.h"
 #include "ExternalCommandRegistry.h"
+#include "GameLoop.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
 #include "Interaction.h"
@@ -480,6 +481,59 @@ int RefreshPlayerContext(int handle, int flags) {
         }
     }
     LogAgentOperation("refresh_player_context", 0, handle, code);
+    return code;
+}
+
+int SendAddonMessage(std::uint32_t actorFormId, int handle, int mode, const std::string& text) {
+    int code = -1;
+    if (IsOwnedHandle(handle)) {
+        code = MultiplayerSharing::IsListener() ? -4 : GameLoop::RequestAddonMessage(actorFormId, mode, text);
+    }
+    Logger::LogInfo("[ADDON_MESSAGE] message actor=0x%08X handle=%d mode=%d chars=%zu result=%d",
+        actorFormId, handle, mode, text.size(), code);
+    return code;
+}
+
+int RequestAddonReaction(std::uint32_t actorFormId, int handle, int eligibility, const std::string& text) {
+    int code = -1;
+    if (!IsOwnedHandle(handle)) {
+        code = -1;
+    } else if (eligibility != 0 && eligibility != 1) {
+        code = -2;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else {
+        code = GameLoop::RequestAddonReaction(actorFormId, eligibility == 1, text);
+    }
+    Logger::LogInfo("[ADDON_MESSAGE] reaction actor=0x%08X handle=%d eligibility=%d chars=%zu result=%d",
+        actorFormId, handle, eligibility, text.size(), code);
+    return code;
+}
+
+int SendAddonContext(std::uint32_t actorFormId, int handle, const std::string& type,
+                     const std::string& name, const std::string& text) {
+    const std::string bridge = handle > 0 ? g_registry.OwnedBridgeName(static_cast<std::uint32_t>(handle)) : "";
+    const std::string cleanType = Trim(type);
+    const std::string cleanName = Trim(name);
+    std::string actorName;
+    int code = 1;
+    if (bridge.empty()) {
+        code = -1;
+    } else if (!ExternalCommandRegistry::IsValidEventName(cleanType) ||
+               !ExternalCommandRegistry::IsValidEventName(cleanName) ||
+               text.empty() || text.size() > ExternalCommandRegistry::kMaxTextLength) {
+        code = -2;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else if (!Interaction::Allowed() || (actorFormId != 0 && !ActorInCurrentScene(actorFormId, &actorName)) ||
+               !g_registry.AllowPluginEvent(bridge, std::chrono::steady_clock::now())) {
+        code = -3;
+    } else {
+        HTTPManager::SendEvent("pluginevent", ExternalCommandRegistry::BuildAddonContextPayload(
+            bridge, cleanType, cleanName, text, actorName, actorFormId));
+    }
+    Logger::LogInfo("[ADDON_MESSAGE] context bridge=%s type=%s name=%s actor=0x%08X chars=%zu result=%d",
+        bridge.c_str(), cleanType.c_str(), cleanName.c_str(), actorFormId, text.size(), code);
     return code;
 }
 

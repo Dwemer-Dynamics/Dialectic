@@ -69,6 +69,14 @@ int RegisterAgent(std::uint32_t actorFormId, int handle);
 int UnregisterAgent(std::uint32_t actorFormId, int handle);
 int RefreshActorContext(std::uint32_t actorFormId, int handle);
 int RefreshPlayerContext(int handle, int flags);
+// Messages and context (addon API level 3, game thread). Each needs an owned-bridge handle.
+// 1 means queued for the server, not generated, spoken or acknowledged. -1 unknown handle,
+// -2 invalid argument, -3 rejected by a gate (logged), -4 unavailable as a multiplayer listener.
+int SendAddonMessage(std::uint32_t actorFormId, int handle, int mode, const std::string& text);
+int RequestAddonReaction(std::uint32_t actorFormId, int handle, int eligibility, const std::string& text);
+// actorFormId 0 sends global context. Shares the bridge's plugin-event rate limit.
+int SendAddonContext(std::uint32_t actorFormId, int handle, const std::string& type,
+                     const std::string& name, const std::string& text);
 // Drops every actor flag and refresh throttle (save load, main menu, exit, API shutdown).
 void ClearActorFlags(const char* reason);
 

@@ -275,6 +275,15 @@ bool Registry::IsOwnedHandle(std::uint32_t handle) const {
     });
 }
 
+std::string Registry::OwnedBridgeName(std::uint32_t handle) const {
+    if (handle == 0) return {};
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& bridge : m_bridges) {
+        if (bridge.second.handle == handle) return bridge.second.name;
+    }
+    return {};
+}
+
 bool Registry::IsPending(std::uint32_t requestId) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_pending.count(requestId) != 0;
@@ -496,6 +505,22 @@ std::string BuildPluginEventPayload(const std::string& bridge,
                                     std::uint32_t actorFormId) {
     std::string payload = "{\"schema\":\"dialectic.plugin_event.v1\",\"bridge\":\"" + EscapeJson(bridge) +
         "\",\"name\":\"" + EscapeJson(name) + "\",\"data\":\"" + EscapeJson(data) + "\"";
+    if (actorFormId != 0) {
+        payload += ",\"actor\":\"" + EscapeJson(actorName) + "\",\"actor_refid\":\"" + FormatRefId(actorFormId) + "\"";
+    }
+    payload += "}";
+    return payload;
+}
+
+std::string BuildAddonContextPayload(const std::string& bridge,
+                                     const std::string& type,
+                                     const std::string& name,
+                                     const std::string& text,
+                                     const std::string& actorName,
+                                     std::uint32_t actorFormId) {
+    std::string payload = "{\"schema\":\"dialectic.addon_context.v1\",\"bridge\":\"" + EscapeJson(bridge) +
+        "\",\"type\":\"" + EscapeJson(type) + "\",\"name\":\"" + EscapeJson(name) +
+        "\",\"text\":\"" + EscapeJson(text) + "\"";
     if (actorFormId != 0) {
         payload += ",\"actor\":\"" + EscapeJson(actorName) + "\",\"actor_refid\":\"" + FormatRefId(actorFormId) + "\"";
     }

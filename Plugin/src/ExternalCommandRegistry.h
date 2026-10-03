@@ -107,6 +107,8 @@ public:
     bool Get(std::uint32_t requestId, PendingRequest& pending) const;
     // True for a handle returned by RegisterOwnedBridge this session.
     bool IsOwnedHandle(std::uint32_t handle) const;
+    // The registered spelling of an owned bridge, or an empty string.
+    std::string OwnedBridgeName(std::uint32_t handle) const;
     bool Cancel(std::uint32_t requestId, PendingRequest& cancelled, Outcome outcome = Outcome::Cancelled);
     bool IsPending(std::uint32_t requestId) const;
     std::size_t PendingCount() const;
@@ -217,6 +219,15 @@ private:
     std::mutex m_mutex;
     std::map<std::uint32_t, Clock::time_point> m_last;
 };
+
+// JSON body for an addon context event, sent as "pluginevent". type and name follow the
+// event-name rules; text is 1 to kMaxTextLength bytes. The bridge namespaces the state.
+std::string BuildAddonContextPayload(const std::string& bridge,
+                                     const std::string& type,
+                                     const std::string& name,
+                                     const std::string& text,
+                                     const std::string& actorName,
+                                     std::uint32_t actorFormId);
 
 // JSON body for HTTPManager::SendEvent("pluginevent", ...).
 std::string BuildPluginEventPayload(const std::string& bridge,

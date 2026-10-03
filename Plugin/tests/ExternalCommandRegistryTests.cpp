@@ -267,6 +267,24 @@ void TestAgentQueries() {
         "throttle evicts its oldest key once full");
 }
 
+void TestAddonContextEnvelope() {
+    Registry registry;
+    std::uint32_t handle = 0;
+    registry.RegisterOwnedBridge("ParityProbe", "ParityProbe.Example", handle);
+    registry.RegisterBridge("LegacyProbe", kProbeOwner);
+    Expect(registry.OwnedBridgeName(handle) == "ParityProbe", "owned handle resolves its bridge");
+    Expect(registry.OwnedBridgeName(0).empty() && registry.OwnedBridgeName(handle + 7).empty(),
+        "unknown and legacy handles resolve no bridge");
+
+    const std::string payload = BuildAddonContextPayload("ParityProbe", "state", "quest.stage",
+        "says \"hi\"\n|done\\", "Veronica", 0x000E32A9);
+    Expect(payload == "{\"schema\":\"dialectic.addon_context.v1\",\"bridge\":\"ParityProbe\",\"type\":\"state\","
+        "\"name\":\"quest.stage\",\"text\":\"says \\\"hi\\\"\\n|done\\\\\",\"actor\":\"Veronica\","
+        "\"actor_refid\":\"0x000E32A9\"}", "addon context payload is namespaced and escaped");
+    Expect(BuildAddonContextPayload("ParityProbe", "state", "x", "y", "", 0).find("actor") == std::string::npos,
+        "global addon context omits actor fields");
+}
+
 } // namespace
 
 int main() {
@@ -277,6 +295,7 @@ int main() {
     TestActorControlClaims();
     TestPluginEventEnvelope();
     TestAgentQueries();
+    TestAddonContextEnvelope();
     if (g_failures != 0) {
         std::cerr << g_failures << " external command registry test(s) failed\n";
         return 1;
