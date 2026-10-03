@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -230,6 +231,42 @@ void TestPluginEventEnvelope() {
         "global plugin event omits actor fields");
 }
 
+void TestAgentQueries() {
+    const std::vector<AgentCandidate> candidates = {
+        { 0x30, "Boone", 300.0f, true },
+        { 0x20, "Raul", 100.0f, true },
+        { 0x10, "Trader", 100.0f, false },
+        { 0x40, "raul", 900.0f, true },
+        { 0x50, "Guard", 50.0f, false },
+    };
+    Expect(SelectAgentCandidates(candidates, AgentFilter::Agents, 8, 0.0f) ==
+        std::vector<std::uint32_t>({ 0x20, 0x30, 0x40 }), "agents are ordered closest first");
+    Expect(SelectAgentCandidates(candidates, AgentFilter::All, 3, 0.0f) ==
+        std::vector<std::uint32_t>({ 0x50, 0x10, 0x20 }), "equal distances order by form id and limit applies");
+    Expect(SelectAgentCandidates(candidates, AgentFilter::NonAgents, 8, 75.0f) ==
+        std::vector<std::uint32_t>({ 0x50 }), "non-agent filter honors max distance");
+    Expect(SelectAgentCandidates(candidates, AgentFilter::All, 0, 0.0f).empty(), "non-positive limit selects nothing");
+    std::vector<AgentCandidate> many;
+    for (std::uint32_t i = 1; i <= 40; ++i) many.push_back({ i, "Agent", static_cast<float>(i), true });
+    Expect(SelectAgentCandidates(many, AgentFilter::Agents, 1000, 0.0f).size() == kMaxAgentQueryResults,
+        "results are capped");
+    Expect(!IsValidAgentFilter(-1) && IsValidAgentFilter(2) && !IsValidAgentFilter(3), "filters are bounded");
+
+    bool ambiguous = false;
+    Expect(FindUniqueAgentByName(candidates, "BOONE", ambiguous) == 0x30 && !ambiguous, "unique name resolves");
+    Expect(FindUniqueAgentByName(candidates, "Raul", ambiguous) == 0 && ambiguous, "duplicate names are rejected");
+    Expect(FindUniqueAgentByName(candidates, "Trader", ambiguous) == 0 && !ambiguous, "non-agents never match");
+
+    RefreshThrottle throttle;
+    const auto now = Clock::now();
+    Expect(throttle.TryBegin(0x30, now), "first refresh starts");
+    Expect(!throttle.TryBegin(0x30, now + std::chrono::seconds(1)), "repeat refresh coalesces");
+    Expect(throttle.TryBegin(0x30, now + RefreshThrottle::kWindow), "refresh window recovers");
+    for (std::uint32_t i = 1; i <= RefreshThrottle::kMaxKeys + 4; ++i) throttle.TryBegin(0x1000 + i, now);
+    Expect(throttle.TryBegin(0x1001, now) && !throttle.TryBegin(0x30, now + std::chrono::seconds(6)),
+        "throttle evicts its oldest key once full");
+}
+
 } // namespace
 
 int main() {
@@ -239,6 +276,7 @@ int main() {
     TestRuntimeOwnersAndOutcomes();
     TestActorControlClaims();
     TestPluginEventEnvelope();
+    TestAgentQueries();
     if (g_failures != 0) {
         std::cerr << g_failures << " external command registry test(s) failed\n";
         return 1;

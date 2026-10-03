@@ -31,6 +31,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <new>
 #include <thread>
 
 // Our logger
@@ -1555,7 +1556,7 @@ static bool Cmd_DialecticStopAllDialogue_Execute(COMMAND_ARGS) {
 }
 
 // Addon API level for capability checks; raise it whenever addon-facing commands are appended.
-constexpr int kAddonApiVersion = 1;
+constexpr int kAddonApiVersion = 2;
 
 static bool Cmd_DialecticGetAddonApiVersion_Execute(COMMAND_ARGS) {
     *result = kAddonApiVersion;
@@ -1599,6 +1600,167 @@ static bool Cmd_DialecticGetActorControlFlags_Execute(COMMAND_ARGS) {
     }
     return true;
 }
+
+// Addon API level 2: agents and context. Reads need no handle; writes do.
+extern NVSEArrayVarInterface* g_arrayInterface;
+
+static ParamInfo kParams_ActorQuery[3] = {
+    { "filter", kParamType_Integer, 0 },
+    { "max count", kParamType_Integer, 0 },
+    { "max distance", kParamType_Float, 1 }
+};
+
+static ParamInfo kParams_OptionalDistance[1] = {
+    { "max distance", kParamType_Float, 1 }
+};
+
+static ParamInfo kParams_AgentName[1] = {
+    { "name", kParamType_String, 0 }
+};
+
+static ParamInfo kParams_Handle[1] = {
+    { "handle", kParamType_Integer, 0 }
+};
+
+static void SetFormResult(double* result, std::uint32_t formId) {
+    *result = 0;
+    *reinterpret_cast<UInt32*>(result) = formId;
+}
+
+static bool Cmd_DialecticGetNearbyActors_Execute(COMMAND_ARGS) {
+    int filter = -1;
+    int maxCount = 0;
+    float maxDistance = 0.0f;
+    *result = 0;
+    if (!g_arrayInterface || !g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            &filter, &maxCount, &maxDistance)) {
+        return true;
+    }
+    // Form elements own no heap memory. Constructing them in place avoids Element's copy
+    // constructor and destructor, which need xNVSE heap helpers this plugin does not link.
+    using Element = NVSEArrayVarInterface::Element;
+    alignas(Element) unsigned char storage[ExternalCommandRegistry::kMaxAgentQueryResults][sizeof(Element)];
+    Element* elements = reinterpret_cast<Element*>(storage);
+    UInt32 count = 0;
+    for (const std::uint32_t formId : ExternalCommandBridge::QueryActors(filter, maxCount, maxDistance)) {
+        if (count >= ExternalCommandRegistry::kMaxAgentQueryResults) break;
+        if (void* reference = XNVSEAdapter::FindLoadedActorReference(formId)) {
+            new (&elements[count++]) Element(static_cast<TESForm*>(reference));
+        }
+    }
+    NVSEArrayVarInterface::Array* actors = g_arrayInterface->CreateArray(count ? elements : nullptr, count, scriptObj);
+    if (actors) g_arrayInterface->AssignCommandResult(actors, result);
+    return true;
+}
+
+static bool Cmd_DialecticGetClosestAgent_Execute(COMMAND_ARGS) {
+    float maxDistance = 0.0f;
+    SetFormResult(result, 0);
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            &maxDistance)) {
+        return true;
+    }
+    const auto agents = ExternalCommandBridge::QueryActors(0, 1, maxDistance);
+    if (!agents.empty() && XNVSEAdapter::FindLoadedActorReference(agents.front())) {
+        SetFormResult(result, agents.front());
+    }
+    return true;
+}
+
+static bool Cmd_DialecticFindAgentByName_Execute(COMMAND_ARGS) {
+    SetFormResult(result, 0);
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            g_extensionNameBuffer)) {
+        return true;
+    }
+    const std::uint32_t formId = ExternalCommandBridge::FindAgentByName(g_extensionNameBuffer);
+    if (formId != 0 && XNVSEAdapter::FindLoadedActorReference(formId)) {
+        SetFormResult(result, formId);
+    }
+    return true;
+}
+
+static bool Cmd_DialecticGetAgentState_Execute(COMMAND_ARGS) {
+    *result = ExternalCommandBridge::GetAgentState(XNVSEAdapter::ActorFormIdOf(thisObj));
+    return true;
+}
+
+static bool ExecuteActorHandleCommand(COMMAND_ARGS, int (*operation)(std::uint32_t, int)) {
+    int handle = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &handle)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = operation(XNVSEAdapter::ActorFormIdOf(thisObj), handle);
+    }
+    return true;
+}
+
+static bool Cmd_DialecticRegisterAgent_Execute(COMMAND_ARGS) {
+    return ExecuteActorHandleCommand(PASS_COMMAND_ARGS, ExternalCommandBridge::RegisterAgent);
+}
+
+static bool Cmd_DialecticUnregisterAgent_Execute(COMMAND_ARGS) {
+    return ExecuteActorHandleCommand(PASS_COMMAND_ARGS, ExternalCommandBridge::UnregisterAgent);
+}
+
+static bool Cmd_DialecticRefreshActorContext_Execute(COMMAND_ARGS) {
+    return ExecuteActorHandleCommand(PASS_COMMAND_ARGS, ExternalCommandBridge::RefreshActorContext);
+}
+
+static bool Cmd_DialecticRefreshPlayerContext_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    int flags = 0;
+    *result = 0;
+    if (ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &handle, &flags)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = ExternalCommandBridge::RefreshPlayerContext(handle, flags);
+    }
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticGetNearbyActors = {
+    "DialecticGetNearbyActors", "", 0, "Returns up to 32 loaded actors in the player's scene, closest first.", 0, 3,
+    kParams_ActorQuery, Cmd_DialecticGetNearbyActors_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetClosestAgent = {
+    "DialecticGetClosestAgent", "", 0, "Returns the closest registered AI agent in the player's scene.", 0, 1,
+    kParams_OptionalDistance, Cmd_DialecticGetClosestAgent_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticFindAgentByName = {
+    "DialecticFindAgentByName", "", 0, "Returns the only registered AI agent in the scene with this name.", 0, 1,
+    kParams_AgentName, Cmd_DialecticFindAgentByName_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetAgentState = {
+    "DialecticGetAgentState", "", 0, "Returns 1 registered plus 2 manual plus 4 auto-managed for the calling actor.",
+    1, 0, nullptr, Cmd_DialecticGetAgentState_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticRegisterAgent = {
+    "DialecticRegisterAgent", "", 0, "Registers the calling actor as a manual AI agent for a bridge handle.", 1, 1,
+    kParams_Handle, Cmd_DialecticRegisterAgent_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticUnregisterAgent = {
+    "DialecticUnregisterAgent", "", 0, "Removes the calling actor from the runtime AI-agent registry.", 1, 1,
+    kParams_Handle, Cmd_DialecticUnregisterAgent_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticRefreshActorContext = {
+    "DialecticRefreshActorContext", "", 0, "Queues a profile, equipment and inventory upload for the calling agent.",
+    1, 1, kParams_Handle, Cmd_DialecticRefreshActorContext_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticRefreshPlayerContext = {
+    "DialecticRefreshPlayerContext", "", 0, "Requests player inventory (1) and world (2) context uploads.", 0, 2,
+    kParams_HandleValue, Cmd_DialecticRefreshPlayerContext_Execute, nullptr, nullptr, 0
+};
 
 static CommandInfo kCommandInfo_DialecticGetAddonApiVersion = {
     "DialecticGetAddonApiVersion", "", 0, "Returns the Dialectic addon API level.", 0, 0,
@@ -1888,7 +2050,15 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticSetInteractionEnabled,
         &kCommandInfo_DialecticSetActorTalkLock,
         &kCommandInfo_DialecticSetActorAnimationBusy,
-        &kCommandInfo_DialecticGetActorControlFlags
+        &kCommandInfo_DialecticGetActorControlFlags,
+        &kCommandInfo_DialecticGetNearbyActors,
+        &kCommandInfo_DialecticGetClosestAgent,
+        &kCommandInfo_DialecticFindAgentByName,
+        &kCommandInfo_DialecticGetAgentState,
+        &kCommandInfo_DialecticRegisterAgent,
+        &kCommandInfo_DialecticUnregisterAgent,
+        &kCommandInfo_DialecticRefreshActorContext,
+        &kCommandInfo_DialecticRefreshPlayerContext
     };
 
     for (CommandInfo* command : commands) {
@@ -1896,8 +2066,15 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
             command == &kCommandInfo_DialecticGetRecordingDeviceName ||
             command == &kCommandInfo_DialecticGetCurrentRecordingDevice ||
             command == &kCommandInfo_DialecticSetRecordingDevice;
+        const bool returnsForm =
+            command == &kCommandInfo_DialecticGetClosestAgent ||
+            command == &kCommandInfo_DialecticFindAgentByName;
         const bool registered = returnsString
             ? nvse->RegisterTypedCommand(command, kRetnType_String)
+            : returnsForm
+            ? nvse->RegisterTypedCommand(command, kRetnType_Form)
+            : command == &kCommandInfo_DialecticGetNearbyActors
+            ? nvse->RegisterTypedCommand(command, kRetnType_Array)
             : nvse->RegisterCommand(command);
         if (registered) {
             Logger::LogInfo("Registered NVSE command: %s", command->longName);

@@ -35,5 +35,12 @@ begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
             let sResult += " hold=" + $iHold
         endif
     endif
+
+    ; Optional read-only agent demo, for an explicit "agents" parameter on addon API level 2.
+    if eval sParameter == "agents"
+        if eval (GetCommandOpcode "DialecticGetNearbyActors") != 0
+            let sResult += " " + (call (CompileScript "ParityProbe/ListAgents.txt"))
+        endif
+    endif
     rActor.DialecticCompleteOwnedCommand iHandle iRequestId 1 $sResult
 end

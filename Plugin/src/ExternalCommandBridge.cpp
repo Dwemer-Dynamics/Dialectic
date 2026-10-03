@@ -1,14 +1,19 @@
 #include "ExternalCommandBridge.h"
 
 #include "ActionManager.h"
+#include "ActivationManager.h"
+#include "AgentManager.h"
 #include "ExternalCommandRegistry.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
 #include "Interaction.h"
 #include "Logger.h"
 #include "MultiplayerSharing.h"
+#include "NPCDetector.h"
+#include "PlayerInventoryManagerFNV.h"
 #include "RuntimeGeneration.h"
 #include "RuntimeSnapshot.h"
+#include "WorldContextFNV.h"
 #include "XNVSEAdapter.h"
 
 #include <chrono>
@@ -24,6 +29,10 @@ constexpr const char* kDispatchType = "external_command";
 
 ExternalCommandRegistry::Registry g_registry;
 ExternalCommandRegistry::ActorControlTable g_actorControl;
+ExternalCommandRegistry::RefreshThrottle g_actorRefresh;
+ExternalCommandRegistry::RefreshThrottle g_playerRefresh;
+constexpr int kRefreshInventory = 1;
+constexpr int kRefreshWorld = 2;
 std::chrono::steady_clock::time_point g_lastUpdate;
 
 std::string Trim(const std::string& value) {
@@ -335,6 +344,145 @@ const char* ActorBlockReason(std::uint32_t actorFormId) {
     return (flags & ExternalCommandRegistry::kTalkLock) != 0 ? "talk_locked" : nullptr;
 }
 
+bool IsOwnedHandle(int handle) {
+    return handle > 0 && g_registry.IsOwnedHandle(static_cast<std::uint32_t>(handle));
+}
+
+namespace {
+
+// Loaded, living, non-excluded actors in the player's scene, from the existing native snapshot.
+std::vector<ExternalCommandRegistry::AgentCandidate> SceneActorCandidates() {
+    std::vector<ExternalCommandRegistry::AgentCandidate> candidates;
+    RuntimeSnapshot::GameState gameState;
+    if (MultiplayerSharing::IsListener() ||
+        !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
+        !gameState.inGame || gameState.loadingMenuOpen) {
+        return candidates;
+    }
+    for (const RuntimeSnapshot::ActorState& actor : RuntimeSnapshot::GetActors()) {
+        if (actor.formId == gameState.playerFormId || actor.name.empty() ||
+            !RuntimeSnapshot::IsActorInScene(actor, gameState) ||
+            NPCDetector::IsExcluded(actor.formId, actor.name)) {
+            continue;
+        }
+        candidates.push_back({ actor.formId, actor.name, actor.distanceToPlayer,
+            AgentManager::IsAIAgent(actor.formId) });
+    }
+    return candidates;
+}
+
+void LogAgentOperation(const char* operation, std::uint32_t actorFormId, int handle, int code) {
+    if (code > 0) {
+        Logger::LogInfo("[ADDON_AGENT] %s actor=0x%08X handle=%d result=%d", operation, actorFormId, handle, code);
+    } else {
+        Logger::LogWarning("[ADDON_AGENT] %s rejected actor=0x%08X handle=%d result=%d",
+            operation, actorFormId, handle, code);
+    }
+}
+
+} // namespace
+
+std::vector<std::uint32_t> QueryActors(int filter, int limit, float maxDistance) {
+    if (!ExternalCommandRegistry::IsValidAgentFilter(filter) || limit <= 0) return {};
+    return ExternalCommandRegistry::SelectAgentCandidates(SceneActorCandidates(),
+        static_cast<ExternalCommandRegistry::AgentFilter>(filter), limit, maxDistance);
+}
+
+std::uint32_t FindAgentByName(const std::string& name) {
+    const std::string trimmed = Trim(name);
+    if (trimmed.empty() || trimmed.size() > ExternalCommandRegistry::kMaxTextLength) return 0;
+    bool ambiguous = false;
+    const std::uint32_t formId = ExternalCommandRegistry::FindUniqueAgentByName(
+        SceneActorCandidates(), trimmed, ambiguous);
+    if (ambiguous) {
+        Logger::LogWarning("[ADDON_AGENT] name lookup rejected name=%s reason=ambiguous", trimmed.c_str());
+    }
+    return formId;
+}
+
+int GetAgentState(std::uint32_t actorFormId) {
+    if (actorFormId == 0 || !AgentManager::IsAIAgent(actorFormId)) return 0;
+    return 1 | (AgentManager::IsManuallyActivated(actorFormId) ? 2 : 0) |
+        (AgentManager::IsAutoManaged(actorFormId) ? 4 : 0);
+}
+
+int RegisterAgent(std::uint32_t actorFormId, int handle) {
+    int code = 1;
+    if (!IsOwnedHandle(handle)) {
+        code = -1;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else if (!ActorInCurrentScene(actorFormId)) {
+        code = -2;
+    } else if (AgentManager::IsManuallyActivated(actorFormId)) {
+        code = 2;
+    } else if (!ActivationManager::ActivateActor(actorFormId, ActivationManager::ActivationSource::Manual)) {
+        // The activation manager logs the policy reason (exclusion, eligibility, scene package).
+        code = -3;
+    }
+    LogAgentOperation("register", actorFormId, handle, code);
+    return code;
+}
+
+int UnregisterAgent(std::uint32_t actorFormId, int handle) {
+    int code = 1;
+    if (!IsOwnedHandle(handle)) {
+        code = -1;
+    } else if (actorFormId == 0) {
+        code = -2;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else if (!ActivationManager::DeactivateActor(actorFormId)) {
+        code = 0;
+    }
+    LogAgentOperation("unregister", actorFormId, handle, code);
+    return code;
+}
+
+int RefreshActorContext(std::uint32_t actorFormId, int handle) {
+    int code = 1;
+    std::string actorName;
+    if (!IsOwnedHandle(handle)) {
+        code = -1;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else if (!ActorInCurrentScene(actorFormId, &actorName)) {
+        code = -2;
+    } else if (!AgentManager::IsAIAgent(actorFormId)) {
+        code = -3;
+    } else if (!g_actorRefresh.TryBegin(actorFormId, std::chrono::steady_clock::now())) {
+        code = 2;
+    } else if (!AgentManager::RefreshActorMetadataForPrompt(actorFormId, actorName)) {
+        code = -2;
+    }
+    LogAgentOperation("refresh_actor_context", actorFormId, handle, code);
+    return code;
+}
+
+int RefreshPlayerContext(int handle, int flags) {
+    int code = 2;
+    if (!IsOwnedHandle(handle)) {
+        code = -1;
+    } else if (flags <= 0 || (flags & ~(kRefreshInventory | kRefreshWorld)) != 0) {
+        code = -2;
+    } else if (MultiplayerSharing::IsListener()) {
+        code = -4;
+    } else {
+        const auto now = std::chrono::steady_clock::now();
+        if ((flags & kRefreshInventory) != 0 && g_playerRefresh.TryBegin(kRefreshInventory, now)) {
+            PlayerInventoryManagerFNV::MarkDirty("addon_context_refresh", 200);
+            code = 1;
+        }
+        if ((flags & kRefreshWorld) != 0 && g_playerRefresh.TryBegin(kRefreshWorld, now)) {
+            // Uploads only when the location, weather, time or radio signature changed.
+            WorldContextFNV::SendNow(false);
+            code = 1;
+        }
+    }
+    LogAgentOperation("refresh_player_context", 0, handle, code);
+    return code;
+}
+
 int SetInteractionEnabled(int handle, int enabled) {
     if (handle <= 0 || !g_registry.IsOwnedHandle(static_cast<std::uint32_t>(handle))) {
         Logger::LogWarning("[ADDON_CONTROL] interaction=%d rejected handle=%d reason=unknown_handle", enabled, handle);
@@ -352,6 +500,8 @@ int SetInteractionEnabled(int handle, int enabled) {
 
 void ClearActorFlags(const char* reason) {
     const std::size_t cleared = g_actorControl.Clear();
+    g_actorRefresh.Clear();
+    g_playerRefresh.Clear();
     if (cleared != 0) {
         Logger::LogInfo("[ADDON_CONTROL] cleared flags actors=%zu reason=%s", cleared, reason ? reason : "unknown");
     }
