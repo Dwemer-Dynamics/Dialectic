@@ -1260,6 +1260,13 @@ std::uint32_t ActorFormIdOf(const void* reference) {
     }
 }
 
+void* FindLoadedActorReference(std::uint32_t actorFormId) {
+    if (actorFormId == 0 || !GameThreadDispatcher::IsGameThread()) return nullptr;
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* reference = FindKnownReference(player, actorFormId);
+    return ActorFormIdOf(reference) == actorFormId ? reference : nullptr;
+}
+
 bool RegisterExternalCommandEvent() {
     if (g_externalCommandEventRegistered && g_ownedExternalCommandEventRegistered) {
         return true;

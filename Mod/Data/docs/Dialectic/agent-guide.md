@@ -74,7 +74,8 @@ The same guide documents the plugin extension API: a registered bridge
 receives CHIM-style `ExtCmd<Bridge>_<Action>` server actions on the exact
 speaking actor and reports completion or failure as a `funcret` result. It also
 covers plugin events, status queries, the interaction switch, per-actor talk
-locks and animation-busy flags, and the CHIM function mapping. The source
+locks and animation-busy flags, agent queries and registration, context
+refresh requests, and the CHIM function mapping. The source
 checkout's `docs/examples/ParityProbe` is a minimal addon.
 
 For server packages, read the companion server's

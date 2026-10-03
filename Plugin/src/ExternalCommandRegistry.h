@@ -176,6 +176,48 @@ private:
     std::atomic<std::size_t> m_count{0};
 };
 
+// Addon agent queries. Candidates come from the existing native actor snapshot,
+// already limited to loaded, living actors in the player's scene.
+constexpr std::size_t kMaxAgentQueryResults = 32;
+// Script-visible actor filter; values are part of the public API.
+enum class AgentFilter { Agents = 0, NonAgents = 1, All = 2 };
+
+struct AgentCandidate {
+    std::uint32_t formId = 0;
+    std::string name;
+    float distance = 0.0f;
+    bool agent = false;
+};
+
+bool IsValidAgentFilter(int filter);
+// Closest first (form ID breaks ties), at most min(limit, kMaxAgentQueryResults).
+// maxDistance <= 0 keeps every candidate.
+std::vector<std::uint32_t> SelectAgentCandidates(std::vector<AgentCandidate> candidates,
+                                                 AgentFilter filter,
+                                                 int limit,
+                                                 float maxDistance);
+// The only registered agent whose name matches case-insensitively, or 0 when
+// none or several match. Lookup only; operations stay bound to the returned ref.
+std::uint32_t FindUniqueAgentByName(const std::vector<AgentCandidate>& candidates,
+                                    std::string_view name,
+                                    bool& ambiguous);
+
+// Coalesces repeated addon context-refresh requests per key (actor ref, or a
+// player-context key). Bounded: the oldest entries are dropped past the cap.
+class RefreshThrottle {
+public:
+    static constexpr std::size_t kMaxKeys = 64;
+    static constexpr auto kWindow = std::chrono::seconds(5);
+
+    // True when no refresh for key started within kWindow.
+    bool TryBegin(std::uint32_t key, Clock::time_point now);
+    void Clear();
+
+private:
+    std::mutex m_mutex;
+    std::map<std::uint32_t, Clock::time_point> m_last;
+};
+
 // JSON body for HTTPManager::SendEvent("pluginevent", ...).
 std::string BuildPluginEventPayload(const std::string& bridge,
                                     const std::string& name,

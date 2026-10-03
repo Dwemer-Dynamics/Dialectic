@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // CHIM-compatible ExtCmd<Bridge>_<Action> routing to registered xNVSE addons.
 // Acceptance only means the request is pending; the server receives a funcret
@@ -56,7 +57,19 @@ bool IsActorAnimationBusy(std::uint32_t actorFormId);
 const char* ActorBlockReason(std::uint32_t actorFormId);
 // 1 already in that state, 2 change accepted (synchronizing), -1 unknown handle, -2 bad value.
 int SetInteractionEnabled(int handle, int enabled);
-// Drops every actor flag (save load, main menu, exit, API shutdown).
+// Agents and context (addon API level 2, game thread). Reads use the native actor
+// snapshot; writes require an owned-bridge handle and reuse the activation and
+// metadata managers. Return codes are documented in docs/XNVSE_EVENT_API.md.
+bool IsOwnedHandle(int handle);
+// Empty for an invalid filter or limit, or when no fresh snapshot is available.
+std::vector<std::uint32_t> QueryActors(int filter, int limit, float maxDistance);
+std::uint32_t FindAgentByName(const std::string& name);
+int GetAgentState(std::uint32_t actorFormId);
+int RegisterAgent(std::uint32_t actorFormId, int handle);
+int UnregisterAgent(std::uint32_t actorFormId, int handle);
+int RefreshActorContext(std::uint32_t actorFormId, int handle);
+int RefreshPlayerContext(int handle, int flags);
+// Drops every actor flag and refresh throttle (save load, main menu, exit, API shutdown).
 void ClearActorFlags(const char* reason);
 
 // Expires timed-out requests and silently drops requests from older runtime generations.

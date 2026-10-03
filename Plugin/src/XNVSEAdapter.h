@@ -325,6 +325,8 @@ void UnregisterPublicDialecticEvents();
 std::uint32_t FormIdOf(const void* form);
 // Reads refID only for an NPC or creature reference other than the player, or 0.
 std::uint32_t ActorFormIdOf(const void* reference);
+// Game thread only. The loaded TESObjectREFR for an actor form ID, or nullptr.
+void* FindLoadedActorReference(std::uint32_t actorFormId);
 // Registers the Dialectic-only DialecticExternalCommand and DialecticOwnedExternalCommand
 // events (not script-dispatchable).
 bool RegisterExternalCommandEvent();

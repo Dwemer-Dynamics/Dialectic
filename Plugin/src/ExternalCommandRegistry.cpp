@@ -392,6 +392,74 @@ std::size_t ActorControlTable::Clear() {
     return cleared;
 }
 
+bool IsValidAgentFilter(int filter) {
+    return filter >= static_cast<int>(AgentFilter::Agents) && filter <= static_cast<int>(AgentFilter::All);
+}
+
+std::vector<std::uint32_t> SelectAgentCandidates(std::vector<AgentCandidate> candidates,
+                                                 AgentFilter filter,
+                                                 int limit,
+                                                 float maxDistance) {
+    std::vector<std::uint32_t> selected;
+    if (limit <= 0) return selected;
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+        [filter, maxDistance](const AgentCandidate& candidate) {
+            return candidate.formId == 0 ||
+                (filter == AgentFilter::Agents && !candidate.agent) ||
+                (filter == AgentFilter::NonAgents && candidate.agent) ||
+                (maxDistance > 0.0f && candidate.distance > maxDistance);
+        }), candidates.end());
+    std::sort(candidates.begin(), candidates.end(), [](const AgentCandidate& left, const AgentCandidate& right) {
+        return left.distance != right.distance ? left.distance < right.distance : left.formId < right.formId;
+    });
+    const std::size_t count = std::min({ candidates.size(), static_cast<std::size_t>(limit), kMaxAgentQueryResults });
+    selected.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        selected.push_back(candidates[i].formId);
+    }
+    return selected;
+}
+
+std::uint32_t FindUniqueAgentByName(const std::vector<AgentCandidate>& candidates,
+                                    std::string_view name,
+                                    bool& ambiguous) {
+    ambiguous = false;
+    if (name.empty()) return 0;
+    std::uint32_t match = 0;
+    for (const AgentCandidate& candidate : candidates) {
+        if (!candidate.agent || candidate.formId == 0 || candidate.name.size() != name.size() ||
+            !std::equal(name.begin(), name.end(), candidate.name.begin(), [](char left, char right) {
+                return std::tolower(static_cast<unsigned char>(left)) ==
+                    std::tolower(static_cast<unsigned char>(right));
+            })) {
+            continue;
+        }
+        if (match != 0 && match != candidate.formId) {
+            ambiguous = true;
+            return 0;
+        }
+        match = candidate.formId;
+    }
+    return match;
+}
+
+bool RefreshThrottle::TryBegin(std::uint32_t key, Clock::time_point now) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_last.find(key);
+    if (it != m_last.end() && now - it->second < kWindow) return false;
+    if (it == m_last.end() && m_last.size() >= kMaxKeys) {
+        m_last.erase(std::min_element(m_last.begin(), m_last.end(),
+            [](const auto& left, const auto& right) { return left.second < right.second; }));
+    }
+    m_last[key] = now;
+    return true;
+}
+
+void RefreshThrottle::Clear() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_last.clear();
+}
+
 std::string EscapeJson(std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size() + 8);

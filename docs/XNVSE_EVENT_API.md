@@ -77,10 +77,11 @@ Keep the check in a script that calls only xNVSE commands, and call the
 Dialectic commands only in scripts compiled after it passes. A script that
 names an unknown command fails to compile as a whole.
 
-`DialecticGetAddonApiVersion` returns the addon API level, currently `1`.
+`DialecticGetAddonApiVersion` returns the addon API level, currently `2`.
 Builds without that command predate it; check their commands individually.
 Level `1` adds the [addon control](#addon-control) commands to the owned-bridge
-commands below. New commands are only appended, so existing opcodes and
+commands below. Level `2` adds the [agent and context](#agents-and-context)
+commands. New commands are only appended, so existing opcodes and
 compiled scripts keep working; a higher level always includes the lower ones.
 
 | Command | Calling reference | Returns |
@@ -96,11 +97,19 @@ compiled scripts keep working; a higher level always includes the lower ones.
 | `actor.DialecticIsActorAvailable` | Required | `1` when this actor passes the same exact scene and eligibility gate as the public events, including addon talk locks and animation-busy flags. Busy-pipeline and menu gates are checked only when a request is made. |
 | `DialecticGetInteractionState` | None | `0` off, `1` on, `2` updating, `3` connection failed. |
 | `DialecticStopAllDialogue` | None | `1` after stopping Dialectic speech and pending replies. Actor actions and conversation history are unchanged. |
-| `DialecticGetAddonApiVersion` | None | The addon API level, currently `1`. |
+| `DialecticGetAddonApiVersion` | None | The addon API level, currently `2`. |
 | `DialecticSetInteractionEnabled handle, enabled` | None | `1` when interaction is already in the requested state; `2` when the change was accepted or is already synchronizing toward it. `-1` unknown handle, `-2` value other than `0` or `1`. See [addon control](#addon-control). |
 | `actor.DialecticSetActorTalkLock handle, locked` | Required | `1` applied (also when already in that state), `2` released while another addon still holds a lock on the actor, `-1` unknown handle, `-2` not an NPC or creature reference (or the player), `-3` 64 actors already have flags, `-4` value other than `0` or `1`. |
 | `actor.DialecticSetActorAnimationBusy handle, busy` | Required | Same results as `DialecticSetActorTalkLock`, for the animation-busy flag. |
 | `actor.DialecticGetActorControlFlags [handle]` | Required | `1` talk locked plus `2` animation busy, by any addon; with a handle, only that addon's own flags. `0` when none. |
+| `DialecticGetNearbyActors filter, maxCount [, maxDistance]` | None | An array of actor refs, closest first. See [agents and context](#agents-and-context). |
+| `DialecticGetClosestAgent [maxDistance]` | None | The closest registered AI agent, or `0`. |
+| `DialecticFindAgentByName "name"` | None | The only registered AI agent in the scene with that name, or `0` for none or several. |
+| `actor.DialecticGetAgentState` | Required | `1` registered plus `2` manually registered plus `4` auto-managed; `0` when not an AI agent. |
+| `actor.DialecticRegisterAgent handle` | Required | `1` registered (or an automatic agent marked manual), `2` already manually registered, `-1` unknown handle, `-2` actor not loaded, alive and in the current scene, `-3` refused by activation policy, `-4` unavailable as a multiplayer listener. |
+| `actor.DialecticUnregisterAgent handle` | Required | `1` removed, `0` not an AI agent, `-1` unknown handle, `-2` not an NPC or creature reference, `-4` unavailable as a multiplayer listener. |
+| `actor.DialecticRefreshActorContext handle` | Required | `1` upload queued, `2` coalesced with a refresh in the last 5 seconds, `-1` unknown handle, `-2` actor not loaded, alive and in the current scene, `-3` not an AI agent, `-4` unavailable as a multiplayer listener. |
+| `DialecticRefreshPlayerContext handle, flags` | None | `flags` is `1` player inventory plus `2` world context. `1` at least one refresh requested, `2` every requested part coalesced with one in the last 5 seconds, `-1` unknown handle, `-2` invalid flags, `-4` unavailable as a multiplayer listener. |
 
 Bridge names are 1 to 32 ASCII letters or digits and start with a letter.
 They are case-insensitive. Event names and owner names are 1 to 64 letters,
@@ -204,6 +213,77 @@ if eval (VeronicaREF.DialecticSetActorAnimationBusy iHandle 1) == 1
 endif
 ```
 
+### Agents and context
+
+Dialectic keeps a runtime registry of AI agents: the actors it has activated
+for conversation and context uploads. Registration is not recruitment. A
+registered actor does not become a teammate, and `DialecticRecruit` does not
+register one. These commands read and change that registry and request
+context uploads through the same managers as the hotkeys and MCM.
+
+Queries need no handle and change nothing. They read Dialectic's existing
+native snapshot of nearby actors, so they see only actors that are loaded,
+alive, not excluded in Dialectic's settings and in the player's current cell or
+exterior worldspace. The normal game loop keeps that snapshot current; a query
+does not scan the game, upload data or call the server. Results are empty
+during loading, on the main menu and on a multiplayer listener. An actor that
+left the scene since the last snapshot is omitted.
+
+- `DialecticGetNearbyActors filter, maxCount [, maxDistance]` returns an array
+  of actor references sorted by distance, then form ID. `filter` is `0`
+  registered agents, `1` actors that are not agents, or `2` both. `maxCount`
+  must be positive and is capped at 32. A positive `maxDistance` drops farther
+  actors. An invalid filter or count returns an empty array.
+- `DialecticGetClosestAgent` returns the first result of filter `0`.
+- `DialecticFindAgentByName` compares trimmed names case-insensitively, among
+  registered agents in the scene. It returns `0` when several agents share the
+  name and logs `reason=ambiguous`. Use it only to find a reference; every
+  command that changes something takes an actor reference, never a name.
+- `actor.DialecticGetAgentState` reads the registry for any actor reference,
+  including one that is no longer loaded.
+
+Changes need an owned-bridge handle. They are logged as `[ADDON_AGENT]` with
+the handle and result:
+
+- `DialecticRegisterAgent` performs a manual activation, like the activation
+  hotkey. The actor must be loaded, alive and in the current scene, and must
+  pass the same exclusion, eligibility and scene-package checks. The activation
+  manager logs the reason for a `-3` refusal. On success Dialectic queues the
+  actor's basic profile, voice, equipment and inventory uploads on its existing
+  asynchronous task queue. `1` means the actor is in the client registry and the
+  uploads are queued, not that the server has stored a profile. A manual
+  registration stays manual: automatic activation only adds its own
+  auto-managed mark and never removes an agent.
+- `DialecticUnregisterAgent` removes the actor from the runtime registry, like
+  the MCM agent manager. It does not delete the server profile, memories or
+  conversation history, and it does not dismiss a teammate. It also accepts a
+  reference that is no longer loaded. While automatic activation is enabled,
+  Dialectic may register the actor again when it is next in range.
+- `DialecticRefreshActorContext` queues the agent's profile, equipment and
+  inventory from the native snapshot. Unchanged equipment and inventory are
+  not sent again. Another request for the same actor within 5 seconds returns
+  `2` and does nothing.
+- `DialecticRefreshPlayerContext` with `1` marks the player inventory for its
+  normal debounced upload. With `2` it sends the world context (location,
+  weather, game time and radio) if it changed since the last upload. Each part
+  is coalesced for 5 seconds.
+
+Registration and refreshes are passive context, so they also work while
+interaction is off or updating, and they never start dialogue. Talk locks and
+animation-busy flags neither block nor change them. Dialectic forgets the
+5-second coalescing whenever it drops actor flags (save load, main menu, exit).
+
+```geck
+let iHandle := DialecticRegisterOwnedBridge "MyBridge" "MyAddon"
+array_var aAgents
+let aAgents := DialecticGetNearbyActors 0 4
+ref rAgent
+let rAgent := DialecticGetClosestAgent 2000
+if eval rAgent
+    rAgent.DialecticRefreshActorContext iHandle
+endif
+```
+
 ### Server actions: `ExtCmd<Bridge>_<Action>`
 
 DialecticServer can emit a `rolecommand` line whose `command_name` uses CHIM's
@@ -300,13 +380,18 @@ API and may change.
 | `stopAllDialogue` | `DialecticStopAllDialogue` | Equivalent |
 | `setLocked` | `actor.DialecticSetActorTalkLock` | Equivalent purpose; per-owner claims on the actor ref instead of an NPC name, cleared on load |
 | `setAnimationBusy` | `actor.DialecticSetActorAnimationBusy` | Equivalent purpose; also blocks Dialectic actions on the actor, cleared on load |
-| `setDrivenByAI`, `setDrivenByAIA`, `addBasicProfile`, `setAIKeyWord` | `DialecticRecruit` event | Partial: Dialectic registers AI agents itself on activation and exposes no command to add one. Recruiting makes the actor a teammate; it does not add a profile |
-| `removeAgentByName` | `DialecticDismiss` event | Partial: dismisses a teammate by ref; it does not remove the actor from Dialectic's agent registry |
-| `getClosestAgent`, `getAgentByName`, `findAllNearbyAgents`, `findAllAgents`, `findAllNearbyNonAgents`, `findAllNearbyActors`, `findAllAgentsFormId`, `getHerikaFormId` | Not provided | Gap: the agent registry is internal and has no read command. Use the game's own actor scans and `DialecticIsActorAvailable` |
+| `setDrivenByAI`, `setDrivenByAIA`, `addBasicProfile` | `actor.DialecticRegisterAgent` | Equivalent purpose: manual registration by ref with a handle, queuing a basic profile upload. Separate from `DialecticRecruit`, which makes a teammate |
+| `setAIKeyWord` | Not provided | Dialectic has no keyword-based registration |
+| `removeAgentByName` | `actor.DialecticUnregisterAgent` | Equivalent purpose, by ref instead of name; keeps the server profile and memories. `DialecticDismiss` dismisses a teammate instead |
+| `getClosestAgent` | `DialecticGetClosestAgent` | Equivalent within the current scene |
+| `getAgentByName` | `DialecticFindAgentByName` | Equivalent within the current scene; refuses ambiguous names |
+| `findAllNearbyAgents`, `findAllNearbyNonAgents`, `findAllNearbyActors` | `DialecticGetNearbyActors` with filter `0`, `1` or `2` | Equivalent; at most 32 actors in the current scene |
+| `findAllAgents`, `findAllAgentsFormId` | `DialecticGetNearbyActors 0`, `actor.DialecticGetAgentState` | Partial: lists loaded agents in the scene only |
+| `getHerikaFormId` | Not applicable | Dialectic has no single default companion |
 | `isGameFocused` | Not provided | Gap |
 | `scanActorsAroundOffline`, `updateRemoteCombatSnapshot` | Not provided | Dialectic sends nearby-actor context itself; addons cannot request a scan |
-| `updateRemoteInventory` | `DialecticMarkPlayerInventoryDirty` (internal) | Partial: marks the player inventory for upload. Dialectic uploads agent inventory and equipment itself; addons cannot request it for an actor |
-| `sendLocationFast`, `sendFactionFast`, `sendNPCFast` | `DialecticSyncWorldData` (internal) | Partial: full faction and location sync, not one record |
+| `updateRemoteInventory` | `actor.DialecticRefreshActorContext`, `DialecticRefreshPlayerContext handle 1` | Equivalent purpose; coalesced, and unchanged agent inventory is not sent again |
+| `sendLocationFast`, `sendFactionFast`, `sendNPCFast` | `DialecticRefreshPlayerContext handle 2`, `actor.DialecticRefreshActorContext`; `DialecticSyncWorldData` (internal) | Partial: current world context and one agent's profile; no single faction or location record |
 | `sendAllVoices` | `DialecticSendAllVoiceSamples` (internal) | Equivalent for configured voice samples |
 | `setConf`, `get_conf_i` | `DialecticSendSetConf` (internal); `DialecticGetConfigInt` and related commands read local INI settings | Partial; not an addon API |
 | `SayTo` | Not provided | FNV scripts can call the game's own `Say`/`SayTo` |

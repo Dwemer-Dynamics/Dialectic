@@ -27,6 +27,12 @@ that actor are dropped until `ReleaseTalk.txt` runs by `CallAfterSeconds`.
 Every other parameter leaves the actor and the interaction switch untouched,
 and ParityProbe never turns interaction off.
 
+Optional agent demo: when the parameter is exactly `agents` and the DLL
+registers `DialecticGetNearbyActors` (addon API level `2`), `ListAgents.txt`
+appends `agents=<n>` (at most 4 nearby registered agents) and, when there is
+one, `closest=<name>`. It only reads; ParityProbe never registers,
+unregisters or refreshes an agent.
+
 ## Files
 
 Copy the contents of `Data/` into a separate mod; do not add them to
@@ -38,6 +44,7 @@ Data/NVSE/user_defined_functions/ParityProbe/Register.txt
 Data/NVSE/user_defined_functions/ParityProbe/OnExternalCommand.txt
 Data/NVSE/user_defined_functions/ParityProbe/HoldTalk.txt
 Data/NVSE/user_defined_functions/ParityProbe/ReleaseTalk.txt
+Data/NVSE/user_defined_functions/ParityProbe/ListAgents.txt
 ```
 
 The scripts are compiled at runtime by xNVSE `CompileScript`. No ESP or GECK
@@ -56,9 +63,9 @@ The plugin version (`10103`) is not raised for the extension API, so it cannot
 identify a capable DLL. `ln_ParityProbe.txt` therefore also asks xNVSE for the
 opcode of every Dialectic command the compiled scripts use. `GetCommandOpcode`
 returns `0` for an unregistered name, so with an older DLL the runner prints
-one console line and never compiles `Register.txt`. The control demo is
-checked separately in the handler, so a DLL without addon API level `1` still
-runs Ping and only skips `hold`.
+one console line and never compiles `Register.txt`. The control and agent
+demos are checked separately in the handler, so an older DLL still runs Ping
+and only skips `hold` (before level `1`) or `agents` (before level `2`).
 
 Runtime-compiled scripts share load-order index `0xFF`, so the legacy
 `DialecticRegisterExternalBridge` cannot tell this addon apart from another
@@ -125,8 +132,9 @@ or `_` in the action part, but the server never emits such a code.
 Status: these scripts have not been compiled or run in game. The client
 regression test (`DialecticExternalCommandRegistryTests`) covers bridge parsing,
 legacy and owned ownership, distinct runtime owners, duplicate completions,
-request status, pending bounds, timeouts, envelopes and per-owner actor flag
-claims; it does not run xNVSE.
+request status, pending bounds, timeouts, envelopes, per-owner actor flag
+claims, agent query ordering, limits and ambiguous names, and refresh
+coalescing; it does not run xNVSE.
 
 To validate in game with a disposable save:
 
@@ -148,3 +156,6 @@ To validate in game with a disposable save:
    result, `[ADDON_CONTROL] talk_lock=1` in the log, later lines for that actor
    logged as `Dropping stale queued ...: speaker is talk_locked by an addon`, and
    `[ADDON_CONTROL] talk_lock=0` about 10 seconds later.
+6. Optional: trigger Ping with parameter `agents` near a registered agent.
+   Expect `agents=<n>` with `n` from 1 to 4 and `closest=<name>` in the result,
+   and no `[ADDON_AGENT]` line in the log.
