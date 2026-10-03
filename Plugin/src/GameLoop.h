@@ -69,6 +69,8 @@ bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text);
 bool RequestExternalComment(uint32_t actorFormId);
 bool RequestExternalReaction(uint32_t actorFormId, const std::string& instruction);
 bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question);
+// Quiet form of the exact scene/eligibility gate used by the public event API.
+bool IsExternalActorAvailable(uint32_t actorFormId);
 bool IsTextInputMenuActiveOrRecentlyClosed();
 void MarkRuntimeConfigDirty();
 void RequestDialecticControlMenuOpen();

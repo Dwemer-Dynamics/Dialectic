@@ -1,0 +1,20 @@
+ref rHandler
+int iRegistered
+
+begin function {}
+    let iRegistered := DialecticRegisterExternalBridge "ParityProbe"
+    if eval !iRegistered
+        Print "[ParityProbe] bridge name unavailable; see dialectic.log"
+        return
+    endif
+
+    let rHandler := CompileScript "ParityProbe/OnExternalCommand.txt"
+    if eval !rHandler
+        Print "[ParityProbe] external command handler failed to compile"
+        return
+    endif
+
+    ; Argument 1 is the bridge name, so this handler only receives ParityProbe commands.
+    SetEventHandlerAlt "DialecticExternalCommand" rHandler 1::"ParityProbe"
+    DialecticSendPluginEvent "ParityProbe" "state" "loaded=1"
+end

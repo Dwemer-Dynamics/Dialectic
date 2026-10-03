@@ -142,6 +142,8 @@ void UpdatePlaybackFrame();
 
 // Check if currently speaking
 bool IsSpeaking();
+// Exact actor whose Dialectic line is playing now, or 0.
+uint32_t GetActivePlaybackSpeakerFormId();
 QueueStatus GetQueueStatus();
 SpeechDiagnostics GetDiagnostics();
 

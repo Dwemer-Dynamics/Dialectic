@@ -1,0 +1,26 @@
+; Receives DialecticExternalCommand on the exact speaking actor.
+; Ping reads actor state only; it changes no game data.
+string_var sBridge
+string_var sCommand
+string_var sParameter
+int iRequestId
+ref rActor
+string_var sResult
+int iTalking
+
+begin function {sBridge, sCommand, sParameter, iRequestId, rActor}
+    if eval sBridge != "ParityProbe"
+        return
+    endif
+
+    if eval sCommand != "ExtCmdParityProbe_Ping"
+        let sResult := "ParityProbe has no action " + sCommand
+        rActor.DialecticCompleteExternalCommand "ParityProbe" iRequestId 0 $sResult
+        return
+    endif
+
+    let iTalking := rActor.DialecticIsActorTalking
+    rActor.DialecticSendPluginEvent "ParityProbe" "ping" $sParameter
+    let sResult := "Pong from " + $rActor + " to [" + sParameter + "] talking=" + $iTalking
+    rActor.DialecticCompleteExternalCommand "ParityProbe" iRequestId 1 $sResult
+end

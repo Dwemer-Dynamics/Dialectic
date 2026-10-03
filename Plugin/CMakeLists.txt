@@ -22,6 +22,8 @@ add_library(${PROJECT_NAME} SHARED
     src/Logger.cpp
     src/ActionManager.cpp
     src/ExternalEventAPI.cpp
+    src/ExternalCommandBridge.cpp
+    src/ExternalCommandRegistry.cpp
     src/Interaction.cpp
     src/HTTPManager.cpp
     src/PlaythroughSession.cpp
@@ -163,6 +165,16 @@ if(BUILD_TESTING)
         target_compile_options(DialecticHeadVoiceVolumeTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
     endif()
     add_test(NAME DialecticHeadVoiceVolumeTests COMMAND DialecticHeadVoiceVolumeTests)
+
+    add_executable(DialecticExternalCommandRegistryTests
+        tests/ExternalCommandRegistryTests.cpp
+        src/ExternalCommandRegistry.cpp
+    )
+    target_include_directories(DialecticExternalCommandRegistryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(DialecticExternalCommandRegistryTests PRIVATE /W3 /std:c++20 /Zc:__cplusplus)
+    endif()
+    add_test(NAME DialecticExternalCommandRegistryTests COMMAND DialecticExternalCommandRegistryTests)
 endif()
 
 # Link against Windows libraries

@@ -3175,6 +3175,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
         return false;
     }
 
+    uint32_t GetActivePlaybackSpeakerFormId() {
+        return g_currentPlaybackLineActive ? g_currentSpeakerFormId : 0;
+    }
+
     QueueStatus GetQueueStatus() {
         QueueStatus status;
         status.audioGeneration = g_audioGeneration.load();

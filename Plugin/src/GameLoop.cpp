@@ -4505,7 +4505,8 @@ bool StartConversation() {
 
 static bool ResolveExternalEventActor(uint32_t actorFormId,
                                       RuntimeSnapshot::ActorState& actor,
-                                      RuntimeSnapshot::GameState& gameState) {
+                                      RuntimeSnapshot::GameState& gameState,
+                                      bool logRejection = true) {
     if (actorFormId == 0 || actorFormId == 0x00000014 ||
         !RuntimeSnapshot::TryGetFreshGameState(gameState, std::chrono::milliseconds(500)) ||
         !gameState.inGame || gameState.loadingMenuOpen ||
@@ -4514,11 +4515,20 @@ static bool ResolveExternalEventActor(uint32_t actorFormId,
         !RuntimeSnapshot::IsActorInScene(actor, gameState) ||
         actor.name.empty() || NPCDetector::IsExcluded(actorFormId, actor.name) ||
         !IsConversationTargetEligible(actorFormId, actor.name, false, true, actor.creature)) {
-        Logger::LogWarning("[xNVSE event API] actor rejected by exact scene/eligibility gate actor=0x%08X",
-            actorFormId);
+        if (logRejection) {
+            Logger::LogWarning("[xNVSE event API] actor rejected by exact scene/eligibility gate actor=0x%08X",
+                actorFormId);
+        }
         return false;
     }
     return true;
+}
+
+bool IsExternalActorAvailable(uint32_t actorFormId) {
+    if (MultiplayerSharing::IsListener() || !Interaction::Allowed()) return false;
+    RuntimeSnapshot::ActorState actor;
+    RuntimeSnapshot::GameState gameState;
+    return ResolveExternalEventActor(actorFormId, actor, gameState, false);
 }
 
 static bool ExternalGeneratedSpeechAllowed(uint32_t actorFormId,
