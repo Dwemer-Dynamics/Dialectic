@@ -4,6 +4,7 @@
 #include "PlaythroughSession.h"
 
 #include "Logger.h"
+#include "GameThreadDispatcher.h"
 
 #include "nvse/prefix.h"
 #include "nvse/PluginAPI.h"
@@ -1200,6 +1201,87 @@ bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback) {
     Logger::LogInfo("XNVSEAdapter: public Dialectic event API registered events=%zu/%zu",
         registeredCount, kPublicDialecticEventBindings.size());
     return registeredCount == kPublicDialecticEventBindings.size();
+}
+
+namespace {
+
+constexpr const char* kExternalCommandEventName = "DialecticExternalCommand";
+bool g_externalCommandEventRegistered = false;
+
+bool CountExternalCommandHandler(NVSEArrayVarInterface::Element&, void* data) {
+    ++*static_cast<std::size_t*>(data);
+    return true;
+}
+
+bool DispatchExternalCommandEventGuarded(TESObjectREFR* actor,
+                                         const char* bridge,
+                                         const char* command,
+                                         const char* parameter,
+                                         std::uint32_t requestId,
+                                         std::size_t* scriptHandlers) {
+    __try {
+        const auto result = g_eventManager->DispatchEventAlt(
+            kExternalCommandEventName, CountExternalCommandHandler, scriptHandlers, actor,
+            bridge, command, parameter, static_cast<UInt32>(requestId), actor);
+        return result >= NVSEEventManagerInterface::kRetn_Normal;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+} // namespace
+
+std::uint32_t FormIdOf(const void* form) {
+    if (!form) return 0;
+    __try {
+        return static_cast<const TESForm*>(form)->refID;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+bool RegisterExternalCommandEvent() {
+    if (g_externalCommandEventRegistered) {
+        return true;
+    }
+    if (!g_eventManager || !g_eventManager->RegisterEvent || !g_eventManager->DispatchEventAlt) {
+        Logger::LogWarning("XNVSEAdapter: event manager unavailable; external command bridge disabled");
+        return false;
+    }
+    // bridge, full command, parameter, request id, actor.
+    static NVSEEventManagerInterface::ParamType params[] = {
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_Int,
+        NVSEEventManagerInterface::eParamType_Reference
+    };
+    g_externalCommandEventRegistered = g_eventManager->RegisterEvent(
+        kExternalCommandEventName, 5, params, NVSEEventManagerInterface::kFlags_None);
+    if (!g_externalCommandEventRegistered) {
+        Logger::LogWarning("XNVSEAdapter: external command event name collision event=%s",
+            kExternalCommandEventName);
+    }
+    return g_externalCommandEventRegistered;
+}
+
+bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
+                                  const std::string& bridge,
+                                  const std::string& command,
+                                  const std::string& parameter,
+                                  std::uint32_t requestId,
+                                  std::size_t& scriptHandlers) {
+    scriptHandlers = 0;
+    if (!g_externalCommandEventRegistered || actorFormId == 0 || !GameThreadDispatcher::IsGameThread()) {
+        return false;
+    }
+    auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
+    TESObjectREFR* actor = FindKnownReference(player, actorFormId);
+    if (!actor || actor == player) {
+        return false;
+    }
+    return DispatchExternalCommandEventGuarded(
+        actor, bridge.c_str(), command.c_str(), parameter.c_str(), requestId, &scriptHandlers);
 }
 
 void UnregisterPublicDialecticEvents() {

@@ -321,6 +321,17 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCa
 void Shutdown();
 bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
 void UnregisterPublicDialecticEvents();
+// Reads TESForm::refID from a script command reference or Script, or 0.
+std::uint32_t FormIdOf(const void* form);
+// Registers the Dialectic-only DialecticExternalCommand event (not script-dispatchable).
+bool RegisterExternalCommandEvent();
+// Game thread only. Dispatches on the exact loaded reference; never substitutes another actor.
+bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
+                                  const std::string& bridge,
+                                  const std::string& command,
+                                  const std::string& parameter,
+                                  std::uint32_t requestId,
+                                  std::size_t& scriptHandlers);
 bool IsInitialized();
 bool HasMessaging();
 void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);

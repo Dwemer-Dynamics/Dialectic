@@ -1,0 +1,9 @@
+; ParityProbe example: JIP LN runs this once for each new game or loaded save.
+; Bridge registration is idempotent for the same plugin, so repeating it per load is expected.
+
+if GetPluginVersion "Dialectic" < 10103
+    PrintC "[ParityProbe] Dialectic is not loaded."
+    return
+endif
+
+call (CompileScript "ParityProbe/Register.txt")

@@ -6,6 +6,7 @@
 #include "AgentManager.h"
 #include "Config.h"
 #include "Console.h"
+#include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
@@ -74,6 +75,10 @@ struct ActionRequest {
     bool narratorAuthority = false;
     bool emitFuncret = true;
     bool directorScene = false;
+    // ExtCmd results identify their request separately from the CHIM command string.
+    std::string resultStatus;
+    std::string externalBridge;
+    uint32_t externalRequestId = 0;
 };
 
 struct NativePackageState {
@@ -913,8 +918,13 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
     }
     payload
             << "\"target\":\"" << HTTPManager::EscapeJson(target.empty() ? "result" : target) << "\","
-            << "\"result\":\"" << HTTPManager::EscapeJson(cleanResult) << "\""
-            << "}";
+            << "\"result\":\"" << HTTPManager::EscapeJson(cleanResult) << "\"";
+    if (!request.resultStatus.empty()) {
+        payload << ",\"status\":\"" << HTTPManager::EscapeJson(request.resultStatus) << "\","
+                << "\"bridge\":\"" << HTTPManager::EscapeJson(request.externalBridge) << "\","
+                << "\"request_id\":" << request.externalRequestId;
+    }
+    payload << "}";
 
     Logger::LogInfo("ActionManager: Sending funcret for %s speaker=[%s] target=[%s] result=[%s]",
         request.action.c_str(),
@@ -3207,6 +3217,24 @@ bool HandleRoleCommandJson(const std::string& lineObject,
 
     const std::vector<std::string> commandArgs = ExtractJsonStringArrayValue(lineObject, "command_args");
 
+    if (command.rfind("ExtCmd", 0) == 0 &&
+        Trim(ExtractJsonStringValue(lineObject, "action_source")) != "director_scene") {
+        // CHIM passes one parameter string; the exact speaker ref is required separately.
+        // Director scenes keep their catalog-only action gate below.
+        std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
+        if (speaker.empty()) {
+            speaker = Trim(ExtractJsonStringValue(lineObject, "character"));
+        }
+        uint32_t speakerFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "speaker_refid"));
+        if (speakerFormId == 0) {
+            speakerFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "speaker_formid"));
+        }
+        const std::string parameter = commandArgs.empty() ? std::string() : commandArgs[0];
+        return ExternalCommandBridge::HandleServerCommand(command, parameter, speaker, speakerFormId,
+            runtimeGeneration != 0 ? runtimeGeneration : RuntimeGeneration::Current(),
+            source ? source : "ActionManager");
+    }
+
     if (command == "DebugNotification") {
         std::string notification;
         if (!commandArgs.empty()) {
@@ -3243,8 +3271,28 @@ bool HandleRoleCommandJson(const std::string& lineObject,
     return ExecuteActionRequest(request, source);
 }
 
+void SendExternalCommandResult(const std::string& command,
+                               const std::string& speaker,
+                               uint32_t speakerFormId,
+                               const std::string& parameter,
+                               const std::string& bridge,
+                               uint32_t requestId,
+                               bool completed,
+                               const std::string& result) {
+    ActionRequest request;
+    request.action = command;
+    request.speaker = speaker;
+    request.speakerFormId = speakerFormId;
+    request.target = parameter;
+    request.resultStatus = completed ? "completed" : "failed";
+    request.externalBridge = bridge;
+    request.externalRequestId = requestId;
+    SendFuncretResult(request, result);
+}
+
 int HaltAIActions(const char* source) {
     const std::vector<std::pair<uint32_t, std::string>> targets = BuildHaltTargetSnapshot();
+    ExternalCommandBridge::CancelAll(source ? source : "halt_ai_actions");
     ClearAllNativePackageStates();
     RequestNativeAttackCleanup("halt_ai_actions");
     CancelNativePickups("halt_ai_actions");
@@ -3598,6 +3646,7 @@ static bool HasActiveWork() {
 }
 
 void Update() {
+    ExternalCommandBridge::Update();
     const auto now = std::chrono::steady_clock::now();
     const auto interval = HasActiveWork()
         ? std::chrono::milliseconds(50)

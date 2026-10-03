@@ -70,6 +70,12 @@ the actor must be loaded, alive and eligible; requests are asynchronous and
 their acceptance/rejection is logged. Test with the intended actor, busy states,
 save/load and both FNV/TTW environments you claim to support.
 
+The same guide documents the plugin extension API: a registered bridge
+receives CHIM-style `ExtCmd<Bridge>_<Action>` server actions on the exact
+speaking actor and reports completion or failure as a `funcret` result. It also
+covers plugin events, status queries and the CHIM function mapping. The source
+checkout's `docs/examples/ParityProbe` is a minimal addon.
+
 For server packages, read the companion server's
 [agent guide](https://github.com/Dwemer-Dynamics/DialecticServer/blob/unstable/docs/agent-guide.md)
 and `lib/plugin_package_manager.php`. `ServerPluginSync.cpp` owns game-side

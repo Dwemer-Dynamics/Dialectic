@@ -60,6 +60,7 @@
 #include "FNVRuntime.h"
 #include "TaskManager.h"
 #include "ExternalEventAPI.h"
+#include "ExternalCommandBridge.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
 #include "DialecticInitialization.h"
@@ -1379,6 +1380,155 @@ static CommandInfo kCommandInfo_DialecticToggleInteraction = {
     nullptr, Cmd_DialecticToggleInteraction_Execute, nullptr, nullptr, 0
 };
 
+// Plugin-facing extension API. See docs/XNVSE_EVENT_API.md for acceptance and completion semantics.
+static ParamInfo kParams_ExternalBridgeName[1] = {
+    { "bridge", kParamType_String, 0 }
+};
+
+static ParamInfo kParams_ExternalCommandCompletion[4] = {
+    { "bridge", kParamType_String, 0 },
+    { "request id", kParamType_Integer, 0 },
+    { "succeeded", kParamType_Integer, 0 },
+    { "result", kParamType_String, 1 }
+};
+
+static ParamInfo kParams_PluginEvent[3] = {
+    { "bridge", kParamType_String, 0 },
+    { "event name", kParamType_String, 0 },
+    { "data", kParamType_String, 1 }
+};
+
+// Game-thread buffers sized well above the 1000-byte API limit; callers enforce that limit.
+constexpr std::size_t kExtensionStringBufferSize = 0x4000;
+static char g_extensionBridgeBuffer[kExtensionStringBufferSize];
+static char g_extensionNameBuffer[kExtensionStringBufferSize];
+static char g_extensionTextBuffer[kExtensionStringBufferSize];
+
+static void ClearExtensionBuffers() {
+    g_extensionBridgeBuffer[0] = '\0';
+    g_extensionNameBuffer[0] = '\0';
+    g_extensionTextBuffer[0] = '\0';
+}
+
+static std::uint32_t CommandRefId(const void* reference) {
+    return XNVSEAdapter::FormIdOf(reference);
+}
+
+static bool Cmd_DialecticRegisterExternalBridge_Execute(COMMAND_ARGS) {
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            g_extensionBridgeBuffer)) {
+        return true;
+    }
+    *result = ExternalCommandBridge::RegisterBridge(g_extensionBridgeBuffer, CommandRefId(scriptObj));
+    return true;
+}
+
+static bool Cmd_DialecticCompleteExternalCommand_Execute(COMMAND_ARGS) {
+    int requestId = 0;
+    int succeeded = 0;
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            g_extensionBridgeBuffer, &requestId, &succeeded, g_extensionTextBuffer)) {
+        return true;
+    }
+    *result = ExternalCommandBridge::CompleteRequest(CommandRefId(thisObj), g_extensionBridgeBuffer,
+        requestId, succeeded != 0, g_extensionTextBuffer);
+    return true;
+}
+
+static bool Cmd_DialecticIsExternalCommandPending_Execute(COMMAND_ARGS) {
+    int requestId = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &requestId)) {
+        *result = ExternalCommandBridge::IsRequestPending(requestId);
+    }
+    return true;
+}
+
+static bool Cmd_DialecticSendPluginEvent_Execute(COMMAND_ARGS) {
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            g_extensionBridgeBuffer, g_extensionNameBuffer, g_extensionTextBuffer)) {
+        return true;
+    }
+    *result = ExternalCommandBridge::SendPluginEvent(CommandRefId(thisObj), g_extensionBridgeBuffer,
+        g_extensionNameBuffer, g_extensionTextBuffer);
+    return true;
+}
+
+static bool Cmd_DialecticIsActorTalking_Execute(COMMAND_ARGS) {
+    const std::uint32_t actorFormId = CommandRefId(thisObj);
+    *result = actorFormId != 0 && SpeakManager::GetActivePlaybackSpeakerFormId() == actorFormId ? 1 : 0;
+    return true;
+}
+
+static bool Cmd_DialecticIsActorAvailable_Execute(COMMAND_ARGS) {
+    *result = GameLoop::IsExternalActorAvailable(CommandRefId(thisObj)) ? 1 : 0;
+    return true;
+}
+
+static bool Cmd_DialecticGetInteractionState_Execute(COMMAND_ARGS) {
+    *result = Interaction::Status();
+    return true;
+}
+
+static bool Cmd_DialecticStopAllDialogue_Execute(COMMAND_ARGS) {
+    *result = 0;
+    if (MultiplayerSharing::IsListener()) return true;
+    // Matches CHIM stopAllDialogue: speech and pending replies only, not actor actions or history.
+    HTTPManager::DiscardInteractionResponses();
+    SpeakManager::CancelDialogueTurn("external_stop_all_dialogue", false, true);
+    *result = 1;
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticRegisterExternalBridge = {
+    "DialecticRegisterExternalBridge", "", 0, "Claims an ExtCmd bridge name for the calling plugin.", 0, 1,
+    kParams_ExternalBridgeName, Cmd_DialecticRegisterExternalBridge_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticCompleteExternalCommand = {
+    "DialecticCompleteExternalCommand", "", 0, "Reports an ExtCmd result for the calling actor.", 1, 4,
+    kParams_ExternalCommandCompletion, Cmd_DialecticCompleteExternalCommand_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticIsExternalCommandPending = {
+    "DialecticIsExternalCommandPending", "", 0, "Returns 1 while an ExtCmd request can still be completed.", 0, 1,
+    kParams_Integer, Cmd_DialecticIsExternalCommandPending_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSendPluginEvent = {
+    "DialecticSendPluginEvent", "", 0, "Sends a bounded plugin event for a registered bridge.", 0, 3,
+    kParams_PluginEvent, Cmd_DialecticSendPluginEvent_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticIsActorTalking = {
+    "DialecticIsActorTalking", "", 0, "Returns 1 while Dialectic speech plays for the calling actor.", 1, 0,
+    nullptr, Cmd_DialecticIsActorTalking_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticIsActorAvailable = {
+    "DialecticIsActorAvailable", "", 0, "Returns 1 when the calling actor passes the public request gate.", 1, 0,
+    nullptr, Cmd_DialecticIsActorAvailable_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetInteractionState = {
+    "DialecticGetInteractionState", "", 0, "Returns 0 off, 1 on, 2 updating or 3 connection failed.", 0, 0,
+    nullptr, Cmd_DialecticGetInteractionState_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticStopAllDialogue = {
+    "DialecticStopAllDialogue", "", 0, "Stops Dialectic speech and pending replies.", 0, 0,
+    nullptr, Cmd_DialecticStopAllDialogue_Execute, nullptr, nullptr, 0
+};
+
 static CommandInfo kCommandInfo_DialecticReloadConfig = {
     "DialecticReloadConfig", "", 0, "Reloads DIALECTIC INI settings.", 0, 0,
     nullptr, Cmd_DialecticReloadConfig_Execute, nullptr, nullptr, 0
@@ -1571,7 +1721,15 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticInitialize,
         &kCommandInfo_DialecticWaitHereTarget,
         &kCommandInfo_DialecticSharingSetup,
-        &kCommandInfo_DialecticToggleInteraction
+        &kCommandInfo_DialecticToggleInteraction,
+        &kCommandInfo_DialecticRegisterExternalBridge,
+        &kCommandInfo_DialecticCompleteExternalCommand,
+        &kCommandInfo_DialecticIsExternalCommandPending,
+        &kCommandInfo_DialecticSendPluginEvent,
+        &kCommandInfo_DialecticIsActorTalking,
+        &kCommandInfo_DialecticIsActorAvailable,
+        &kCommandInfo_DialecticGetInteractionState,
+        &kCommandInfo_DialecticStopAllDialogue
     };
 
     for (CommandInfo* command : commands) {
