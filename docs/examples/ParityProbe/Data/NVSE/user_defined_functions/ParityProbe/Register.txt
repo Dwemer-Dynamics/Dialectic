@@ -1,9 +1,11 @@
 ref rHandler
-int iRegistered
+int iHandle
 
 begin function {}
-    let iRegistered := DialecticRegisterExternalBridge "ParityProbe"
-    if eval !iRegistered
+    ; The owner name identifies this addon; runtime-compiled scripts share one
+    ; load-order index, so the bridge name alone cannot.
+    let iHandle := DialecticRegisterOwnedBridge "ParityProbe" "ParityProbe.Example"
+    if eval iHandle <= 0
         Print "[ParityProbe] bridge name unavailable; see dialectic.log"
         return
     endif
@@ -14,7 +16,7 @@ begin function {}
         return
     endif
 
-    ; Argument 1 is the bridge name, so this handler only receives ParityProbe commands.
-    SetEventHandlerAlt "DialecticExternalCommand" rHandler 1::"ParityProbe"
+    ; Argument 1 is the owner handle, so this handler only receives this addon's commands.
+    SetEventHandlerAlt "DialecticOwnedExternalCommand" rHandler 1::iHandle
     DialecticSendPluginEvent "ParityProbe" "state" "loaded=1"
 end

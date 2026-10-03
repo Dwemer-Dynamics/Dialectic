@@ -323,10 +323,13 @@ bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
 void UnregisterPublicDialecticEvents();
 // Reads TESForm::refID from a script command reference or Script, or 0.
 std::uint32_t FormIdOf(const void* form);
-// Registers the Dialectic-only DialecticExternalCommand event (not script-dispatchable).
+// Registers the Dialectic-only DialecticExternalCommand and DialecticOwnedExternalCommand
+// events (not script-dispatchable).
 bool RegisterExternalCommandEvent();
 // Game thread only. Dispatches on the exact loaded reference; never substitutes another actor.
+// A nonzero owned-bridge handle selects DialecticOwnedExternalCommand.
 bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
+                                  std::uint32_t handle,
                                   const std::string& bridge,
                                   const std::string& command,
                                   const std::string& parameter,

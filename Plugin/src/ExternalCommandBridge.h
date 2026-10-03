@@ -27,6 +27,16 @@ int CompleteRequest(std::uint32_t actorFormId,
                     bool succeeded,
                     const std::string& result);
 int IsRequestPending(int requestId);
+// Owned-bridge entry points (game thread). RegisterOwnedBridge returns a positive
+// handle, or -1 invalid bridge name, -2 invalid owner, -3 owned by another, -4 full.
+int RegisterOwnedBridge(const std::string& name, const std::string& owner);
+int CompleteOwnedRequest(std::uint32_t actorFormId,
+                         int handle,
+                         int requestId,
+                         bool succeeded,
+                         const std::string& result);
+// ExternalCommandRegistry::Outcome value; handle 0 queries legacy-bridge requests.
+int GetRequestStatus(int handle, int requestId);
 int SendPluginEvent(std::uint32_t actorFormId,
                     const std::string& bridge,
                     const std::string& name,

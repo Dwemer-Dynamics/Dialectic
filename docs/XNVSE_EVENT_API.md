@@ -76,8 +76,11 @@ names an unknown command fails to compile as a whole.
 
 | Command | Calling reference | Returns |
 | --- | --- | --- |
-| `DialecticRegisterExternalBridge "Name"` | None | `1` when the calling plugin owns the bridge name (repeat calls from the same plugin also return `1`); `0` for an invalid name, a name owned by another plugin, or a full table (32 bridges). |
-| `actor.DialecticCompleteExternalCommand "Name", requestId, succeeded, "result"` | Required; must be the request's actor | `1` when the result was handed to the server `funcret` path; `0` for an unknown, expired, cancelled, wrong-bridge or wrong-actor request. |
+| `DialecticRegisterOwnedBridge "Name", "Owner"` | None | A positive bridge handle when `Owner` owns the bridge name. Repeat calls with the same owner return the same handle for the rest of the game session. Otherwise `-1` invalid bridge name, `-2` invalid owner name, `-3` name owned by another owner or by a legacy registration, `-4` full table (32 bridges). |
+| `actor.DialecticCompleteOwnedCommand handle, requestId, succeeded, "result"` | Required; must be the request's actor | `1` when the result was handed to the server `funcret` path; `0` for an unknown, expired, cancelled, already completed, wrong-handle or wrong-actor request. |
+| `DialecticGetExternalCommandStatus handle, requestId` | None | `1` pending, `2` completed, `3` failed (reported by the addon or by Dialectic), `4` timed out, `5` cancelled, `0` unknown or another handle's request. Handle `0` reads legacy-bridge requests. Dialectic keeps the last 64 outcomes. |
+| `DialecticRegisterExternalBridge "Name"` | None | Legacy. `1` when the calling plugin owns the bridge name (repeat calls from the same plugin also return `1`); `0` for an invalid name, a name owned by another plugin or owner, or a full table (32 bridges). |
+| `actor.DialecticCompleteExternalCommand "Name", requestId, succeeded, "result"` | Required; must be the request's actor | Legacy. `1` when the result was handed to the server `funcret` path; `0` for an unknown, expired, cancelled, wrong-bridge or wrong-actor request, or a request for an owned bridge. |
 | `DialecticIsExternalCommandPending requestId` | None | `1` while the request can still be completed. |
 | `[actor.]DialecticSendPluginEvent "Name", "event", "data"` | Optional | `1` when one `pluginevent` was queued for the server; `0` if the bridge is unregistered, the event name or data is invalid, the actor is not in the current scene, Dialectic is off, or the bridge exceeded 20 events in 10 seconds. |
 | `actor.DialecticIsActorTalking` | Required | `1` while Dialectic speech plays for this actor. |
@@ -86,20 +89,47 @@ names an unknown command fails to compile as a whole.
 | `DialecticStopAllDialogue` | None | `1` after stopping Dialectic speech and pending replies. Actor actions and conversation history are unchanged. |
 
 Bridge names are 1 to 32 ASCII letters or digits and start with a letter.
-They are case-insensitive. Ownership is the FNV load-order index of the calling
+They are case-insensitive. Event names and owner names are 1 to 64 letters,
+digits, `_`, `.` or `-`; owner names are case-insensitive. Strings are limited
+to 1000 bytes.
+
+### Bridge ownership
+
+Use `DialecticRegisterOwnedBridge` for new addons. The owner name identifies
+the addon, so choose one that stays the same across sessions and is unlikely to
+collide, for example its mod name. Owned bridges work the same for
+runtime-compiled scripts and plugin scripts.
+
+The legacy command keys ownership on the FNV load-order index of the calling
 script's form ID (its top byte; FNV has no light-plugin sub-slots). Scripts
 compiled at runtime (for example JIP LN script-runner files and `CompileScript`
 UDFs) all share index `0xFF`, so two runtime-compiled addons that pick the same
-bridge name both register successfully and both receive its commands. Event
-names are 1 to 64 letters, digits, `_`, `.` or `-`. Strings are limited to
-1000 bytes.
+legacy bridge name both register successfully and both receive its commands.
+The full form ID cannot separate them: each addon compiles several scripts, and
+runtime form IDs are not stable across sessions. The legacy behavior is kept
+unchanged for existing addons.
+
+The two forms share one bridge table. A name claimed by either form is refused
+to the other form and to every other owner.
+
+| | Legacy bridge | Owned bridge |
+| --- | --- | --- |
+| Register | `DialecticRegisterExternalBridge` | `DialecticRegisterOwnedBridge` |
+| Command event | `DialecticExternalCommand`, filtered on bridge name | `DialecticOwnedExternalCommand`, filtered on handle |
+| Complete | `DialecticCompleteExternalCommand` with bridge name | `DialecticCompleteOwnedCommand` with handle |
+| Status | `DialecticIsExternalCommandPending`, or status with handle `0` | `DialecticGetExternalCommandStatus` |
+
+Commands for an owned bridge are dispatched only as
+`DialecticOwnedExternalCommand`, never as `DialecticExternalCommand`. A
+second addon whose registration was refused gets no handle, so a handler
+filtered on its result never matches; positive handles start at `1`.
 
 Bridge ownership only prevents accidental name collisions between trusted,
 installed mods. It is not a sandbox or an authorization check: every xNVSE
-script runs with full game access, completion and plugin-event calls check the
-bridge name, request ID and actor but not the calling plugin, and any loaded
-script can call them. Only Dialectic can dispatch `DialecticExternalCommand`
-because the event is registered without `kFlag_AllowScriptDispatch`.
+script runs with full game access, an unfiltered handler receives every
+command, plugin-event calls check only the bridge name, and handles are small
+sequential numbers rather than secrets. Only Dialectic can dispatch the two
+command events because they are registered without `kFlag_AllowScriptDispatch`.
 
 ### Server actions: `ExtCmd<Bridge>_<Action>`
 
@@ -114,17 +144,35 @@ Dialectic never resolves these commands by speaker name, crosshair or distance.
    The same command, parameter and actor is ignored while pending and for 1.5
    seconds after it is first received, because a response can deliver it twice.
 2. On the game thread, the actor must still be loaded, alive and in the current
-   scene. Dialectic then dispatches `DialecticExternalCommand` on that exact
-   reference with arguments `bridge`, `command`, `parameter`, `requestId`,
-   `actor`. Only Dialectic can dispatch this event.
-3. The addon reports the outcome with `DialecticCompleteExternalCommand`, in
-   the same frame or later. Acceptance and dispatch never report completion.
+   scene. For an owned bridge, Dialectic then dispatches
+   `DialecticOwnedExternalCommand` on that exact reference with arguments
+   `handle`, `bridge`, `command`, `parameter`, `requestId`, `actor`. For a
+   legacy bridge it dispatches `DialecticExternalCommand` with arguments
+   `bridge`, `command`, `parameter`, `requestId`, `actor`.
+3. The addon reports the outcome with `DialecticCompleteOwnedCommand` (or the
+   legacy `DialecticCompleteExternalCommand`), in the same frame or later.
+   Acceptance and dispatch never report completion. Only the first completion
+   counts; later calls return `0`.
+
+```geck
+let iHandle := DialecticRegisterOwnedBridge "MyBridge" "MyAddon"
+SetEventHandlerAlt "DialecticOwnedExternalCommand" MyHandler 1::iHandle
+; MyHandler: begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
+rActor.DialecticCompleteOwnedCommand iHandle iRequestId 1 "Done."
+```
+
+The legacy form, which existing addons keep using:
 
 ```geck
 SetEventHandlerAlt "DialecticExternalCommand" MyHandler 1::"MyBridge"
 ; MyHandler: begin function {sBridge, sCommand, sParameter, iRequestId, rActor}
 rActor.DialecticCompleteExternalCommand "MyBridge" iRequestId 1 "Done."
 ```
+
+An addon that finishes later, for example after a timer, should call
+`DialecticGetExternalCommandStatus handle requestId` before acting and act only
+while it returns `1`. Status `4` means Dialectic already reported a timeout to
+the server; `5` means the request was cancelled without a server result.
 
 The server receives one `funcret` event with schema
 `dialectic.action_result.v1`: `action` is the full command, `target` is the
@@ -136,7 +184,9 @@ not registered, the speaker ref is missing, the actor left the scene, no script
 handler received the event, the queue is full, or 30 seconds pass without
 completion. Requests are dropped without a server result when Dialectic halts
 AI actions, a save is loaded, a new game starts or the runtime generation
-changes; later completion calls return `0`.
+changes; later completion calls return `0` and status reads `5`. Cancellation
+on save, load or new game is local: a result from the previous playthrough is
+never sent to the server.
 
 ### Plugin events
 
@@ -161,11 +211,11 @@ API and may change.
 
 | CHIM | Dialectic | Parity |
 | --- | --- | --- |
-| `ExtCmd<Bridge>_<Action>` to `<Bridge>.DispatchExternalCommand(npc, command, parameter)` | `DialecticExternalCommand` on the exact actor, after `DialecticRegisterExternalBridge` | Equivalent; routed by actor ref instead of NPC name |
+| `ExtCmd<Bridge>_<Action>` to `<Bridge>.DispatchExternalCommand(npc, command, parameter)` | `DialecticOwnedExternalCommand` on the exact actor, after `DialecticRegisterOwnedBridge` (legacy: `DialecticExternalCommand` after `DialecticRegisterExternalBridge`) | Equivalent; routed by actor ref instead of NPC name |
 | `ExtCmd` fallback to `AIAgentAIMind.SendExternalEvent` | Not provided; unregistered bridges report failure | Gap |
 | `IntCmd` (`AIAgentAIMind.SendInternalEvent`) | Not applicable | Papyrus-internal dispatch |
 | `WebCmd` (immediate `funcret` echo) | Not provided | Server plugins handle it without a game round trip |
-| `commandEnded` / `commandEndedForActor` | `actor.DialecticCompleteExternalCommand` | Equivalent; adds request ID and success flag. Dialectic reports `timed_out` after 30 seconds |
+| `commandEnded` / `commandEndedForActor` | `actor.DialecticCompleteOwnedCommand` (legacy: `actor.DialecticCompleteExternalCommand`) | Equivalent; adds request ID and success flag. Dialectic reports `timed_out` after 30 seconds; `DialecticGetExternalCommandStatus` shows the outcome |
 | `sendMessageToActor` | `DialecticAsk` event | Partial: player-input path only; no message type |
 | `sendMessage`, `requestMessage`, `sendRequest` | Not provided | Deliberate: every request is bound to an actor |
 | `requestMessageForActor` / `requestMessageForEligibleActor` | `DialecticReact` and `DialecticComment` events | Partial: always gated; no message type |
@@ -193,7 +243,8 @@ API and may change.
 Engine differences: Fallout: New Vegas has no Papyrus, so addons use xNVSE
 script commands and events instead of global native functions. Actors are
 passed as references, never NPC names. Every runtime-compiled script shares
-load-order index `0xFF` for bridge ownership. Dialectic runs on the 32-bit
+load-order index `0xFF`, so owned bridges use an addon-supplied owner name
+instead. Dialectic runs on the 32-bit
 game, has no VR build, and has no Prisma UI.
 
 The API does not accept URLs, server endpoints or arbitrary event types, and

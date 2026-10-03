@@ -1392,6 +1392,23 @@ static ParamInfo kParams_ExternalCommandCompletion[4] = {
     { "result", kParamType_String, 1 }
 };
 
+static ParamInfo kParams_OwnedBridge[2] = {
+    { "bridge", kParamType_String, 0 },
+    { "owner", kParamType_String, 0 }
+};
+
+static ParamInfo kParams_OwnedCommandCompletion[4] = {
+    { "handle", kParamType_Integer, 0 },
+    { "request id", kParamType_Integer, 0 },
+    { "succeeded", kParamType_Integer, 0 },
+    { "result", kParamType_String, 1 }
+};
+
+static ParamInfo kParams_OwnedCommandStatus[2] = {
+    { "handle", kParamType_Integer, 0 },
+    { "request id", kParamType_Integer, 0 }
+};
+
 static ParamInfo kParams_PluginEvent[3] = {
     { "bridge", kParamType_String, 0 },
     { "event name", kParamType_String, 0 },
@@ -1450,6 +1467,44 @@ static bool Cmd_DialecticIsExternalCommandPending_Execute(COMMAND_ARGS) {
     return true;
 }
 
+static bool Cmd_DialecticRegisterOwnedBridge_Execute(COMMAND_ARGS) {
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            g_extensionBridgeBuffer, g_extensionNameBuffer)) {
+        return true;
+    }
+    *result = ExternalCommandBridge::RegisterOwnedBridge(g_extensionBridgeBuffer, g_extensionNameBuffer);
+    return true;
+}
+
+static bool Cmd_DialecticCompleteOwnedCommand_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    int requestId = 0;
+    int succeeded = 0;
+    *result = 0;
+    ClearExtensionBuffers();
+    if (!g_scriptInterface || !g_scriptInterface->ExtractArgsEx ||
+        !g_scriptInterface->ExtractArgsEx(paramInfo, scriptData, opcodeOffsetPtr, scriptObj, eventList,
+            &handle, &requestId, &succeeded, g_extensionTextBuffer)) {
+        return true;
+    }
+    *result = ExternalCommandBridge::CompleteOwnedRequest(CommandRefId(thisObj), handle, requestId,
+        succeeded != 0, g_extensionTextBuffer);
+    return true;
+}
+
+static bool Cmd_DialecticGetExternalCommandStatus_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    int requestId = 0;
+    *result = 0;
+    if (ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &handle, &requestId)) {
+        *result = ExternalCommandBridge::GetRequestStatus(handle, requestId);
+    }
+    return true;
+}
+
 static bool Cmd_DialecticSendPluginEvent_Execute(COMMAND_ARGS) {
     *result = 0;
     ClearExtensionBuffers();
@@ -1502,6 +1557,21 @@ static CommandInfo kCommandInfo_DialecticCompleteExternalCommand = {
 static CommandInfo kCommandInfo_DialecticIsExternalCommandPending = {
     "DialecticIsExternalCommandPending", "", 0, "Returns 1 while an ExtCmd request can still be completed.", 0, 1,
     kParams_Integer, Cmd_DialecticIsExternalCommandPending_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticRegisterOwnedBridge = {
+    "DialecticRegisterOwnedBridge", "", 0, "Claims an ExtCmd bridge for a named owner and returns its handle.", 0, 2,
+    kParams_OwnedBridge, Cmd_DialecticRegisterOwnedBridge_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticCompleteOwnedCommand = {
+    "DialecticCompleteOwnedCommand", "", 0, "Reports an owned-bridge ExtCmd result for the calling actor.", 1, 4,
+    kParams_OwnedCommandCompletion, Cmd_DialecticCompleteOwnedCommand_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetExternalCommandStatus = {
+    "DialecticGetExternalCommandStatus", "", 0, "Returns an ExtCmd request status for a bridge handle.", 0, 2,
+    kParams_OwnedCommandStatus, Cmd_DialecticGetExternalCommandStatus_Execute, nullptr, nullptr, 0
 };
 
 static CommandInfo kCommandInfo_DialecticSendPluginEvent = {
@@ -1729,7 +1799,10 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticIsActorTalking,
         &kCommandInfo_DialecticIsActorAvailable,
         &kCommandInfo_DialecticGetInteractionState,
-        &kCommandInfo_DialecticStopAllDialogue
+        &kCommandInfo_DialecticStopAllDialogue,
+        &kCommandInfo_DialecticRegisterOwnedBridge,
+        &kCommandInfo_DialecticCompleteOwnedCommand,
+        &kCommandInfo_DialecticGetExternalCommandStatus
     };
 
     for (CommandInfo* command : commands) {

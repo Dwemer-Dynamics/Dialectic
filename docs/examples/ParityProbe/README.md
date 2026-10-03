@@ -7,15 +7,17 @@ the bridge `ParityProbe` and handles one server action,
 
 On each new game or loaded save it:
 
-1. registers the `ParityProbe` bridge;
+1. registers the owned bridge `ParityProbe` for owner `ParityProbe.Example`
+   and keeps the returned handle;
 2. compiles `OnExternalCommand.txt` and attaches it to
-   `DialecticExternalCommand`, filtered to bridge `ParityProbe`;
+   `DialecticOwnedExternalCommand`, filtered to that handle;
 3. sends plugin event `state` with data `loaded=1`.
 
-When the server sends `ExtCmdParityProbe_Ping` for an actor, the handler sends
-plugin event `ping` on that actor with the server's parameter. It then completes
-the request with `Pong from <actor> to [<parameter>] talking=<0|1>`. Other
-`ParityProbe` actions complete with a failure result.
+When the server sends `ExtCmdParityProbe_Ping` for an actor, the handler first
+checks that the request is still pending (status `1`). It sends plugin event
+`ping` on that actor with the server's parameter, then completes the request
+with `Pong from <actor> to [<parameter>] talking=<0|1>`. Other `ParityProbe`
+actions complete with a failure result.
 
 ## Files
 
@@ -36,15 +38,22 @@ compilation is needed. Requirements:
   `GetCommandOpcode`, `GetPluginVersion`, `Print`) and Dialectic commands.
 - JIP LN NVSE, only for its script runner, which runs `ln_ParityProbe.txt` on
   each new game or loaded save. Dialectic already requires JIP LN 57 or newer.
-- A Dialectic DLL with the plugin extension commands.
+- A Dialectic DLL with the owned-bridge commands (`DialecticRegisterOwnedBridge`,
+  `DialecticCompleteOwnedCommand`, `DialecticGetExternalCommandStatus`).
 
 The plugin version (`10103`) is not raised for the extension API, so it cannot
 identify a capable DLL. `ln_ParityProbe.txt` therefore also asks xNVSE for the
 opcode of every Dialectic command the compiled scripts use. `GetCommandOpcode`
 returns `0` for an unregistered name, so with an older DLL the runner prints
-one console line and never compiles `Register.txt`. Runtime-compiled scripts
-share load-order index `0xFF`, so bridge ownership cannot tell this addon apart
-from another runtime-compiled addon that registers `ParityProbe`.
+one console line and never compiles `Register.txt`.
+
+Runtime-compiled scripts share load-order index `0xFF`, so the legacy
+`DialecticRegisterExternalBridge` cannot tell this addon apart from another
+runtime-compiled addon that registers `ParityProbe`. The owner name can: a
+second addon that registers `ParityProbe` with a different owner gets `-3` and
+no handle, and its commands never reach this handler. Existing addons that use
+the legacy commands keep working unchanged, but cannot share a bridge name with
+an owned bridge.
 
 ## Paired server package
 
@@ -102,16 +111,22 @@ or `_` in the action part, but the server never emits such a code.
 
 Status: these scripts have not been compiled or run in game. The client
 regression test (`DialecticExternalCommandRegistryTests`) covers bridge parsing,
-ownership, pending bounds, timeouts and envelopes; it does not run xNVSE.
+legacy and owned ownership, distinct runtime owners, duplicate completions,
+request status, pending bounds, timeouts and envelopes; it does not run xNVSE.
 
 To validate in game with a disposable save:
 
 1. Confirm `dialectic.log` contains
-   `[EXTERNAL_COMMAND] register bridge=ParityProbe ... result=registered` (or
-   `already_owned` after a reload) and no compile errors from xNVSE.
+   `[EXTERNAL_COMMAND] register owned bridge=ParityProbe owner=ParityProbe.Example handle=<n> result=registered`
+   (or `already_owned` with the same handle after a reload) and no compile
+   errors from xNVSE.
 2. Trigger the server action for a nearby eligible NPC. The log should show
-   `accepted external command`, `dispatched ... handlers=1` and `completed`, and
-   the server should receive one `funcret` with `status` `completed` and the
-   same `speaker_refid`.
+   `accepted external command`, `dispatched ... handle=<n> ... handlers=1` and
+   `completed`, and the server should receive one `funcret` with `status`
+   `completed` and the same `speaker_refid`.
 3. Start the game without these files and trigger the action again. Expect a
    `funcret` with `status` `failed` and reason `bridge_not_registered`.
+4. Make a copy under another `user_defined_functions` folder and `ln_` file
+   name, update its `CompileScript` paths, and change only the owner name. Expect that copy to print
+   `bridge name unavailable`, the log to show `result=bridge_owned_by_another_plugin`,
+   and each Ping to reach exactly one handler (`handlers=1`).
