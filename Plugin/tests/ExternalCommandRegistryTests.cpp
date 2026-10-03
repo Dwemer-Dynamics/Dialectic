@@ -113,6 +113,61 @@ void TestBoundsTimeoutAndCancellation() {
             CompleteResult::UnknownRequest, "timed-out request cannot report completion");
 }
 
+void TestRuntimeOwnersAndOutcomes() {
+    constexpr std::uint32_t kRuntimeOwner = 0xFF000000;
+    Registry registry;
+    std::uint32_t probe = 0;
+    std::uint32_t other = 0;
+    Expect(registry.RegisterOwnedBridge("ParityProbe", "ParityProbe.Example", probe) == RegisterResult::Registered &&
+            probe != 0, "owned bridge returns a handle");
+    Expect(registry.RegisterOwnedBridge("PARITYPROBE", "parityprobe.example", other) ==
+            RegisterResult::AlreadyOwned && other == probe, "same owner keeps its handle after reload");
+    Expect(registry.RegisterOwnedBridge("ParityProbe", "OtherAddon", other) == RegisterResult::OwnedByOther &&
+            other == 0, "second runtime addon cannot claim an owned bridge");
+    Expect(registry.RegisterBridge("ParityProbe", kRuntimeOwner) == RegisterResult::OwnedByOther,
+        "legacy runtime owner cannot claim an owned bridge");
+    Expect(registry.RegisterBridge("LegacyProbe", kRuntimeOwner) == RegisterResult::Registered &&
+            registry.RegisterOwnedBridge("LegacyProbe", "OtherAddon", other) == RegisterResult::OwnedByOther,
+        "owned registration cannot take a legacy bridge");
+    Expect(registry.RegisterOwnedBridge("OtherBridge", "bad owner", other) == RegisterResult::InvalidOwner,
+        "owner names are bounded identifiers");
+    Expect(registry.RegisterOwnedBridge("OtherBridge", "OtherAddon", other) == RegisterResult::Registered &&
+            other != 0 && other != probe, "distinct runtime owners get distinct handles");
+
+    const auto now = Clock::now();
+    PendingRequest first;
+    PendingRequest second;
+    Expect(registry.Begin("ExtCmdParityProbe_Ping", "a", "Veronica", kVeronica, 9, now, first) ==
+            BeginResult::Accepted && first.handle == probe, "owned request carries its owner handle");
+    Expect(registry.Begin("ExtCmdOtherBridge_Ping", "b", "Veronica", kVeronica, 9, now, second) ==
+            BeginResult::Accepted && second.handle == other, "other owner's request carries its own handle");
+
+    PendingRequest completed;
+    Expect(registry.Complete("ParityProbe", first.requestId, kVeronica, completed) == CompleteResult::OwnerMismatch,
+        "bridge name alone cannot complete an owned request");
+    Expect(registry.CompleteOwned(other, first.requestId, kVeronica, true, completed) ==
+            CompleteResult::OwnerMismatch, "another owner's handle cannot complete the request");
+    Expect(registry.Status(other, first.requestId) == Outcome::Unknown &&
+            registry.Status(probe, first.requestId) == Outcome::Pending, "status is scoped to the owner handle");
+    Expect(registry.CompleteOwned(probe, first.requestId, kVeronica, true, completed) == CompleteResult::Completed,
+        "owner completes on the exact actor");
+    Expect(registry.CompleteOwned(probe, first.requestId, kVeronica, false, completed) ==
+            CompleteResult::UnknownRequest && registry.Status(probe, first.requestId) == Outcome::Completed,
+        "duplicate completion is rejected and the first outcome kept");
+    Expect(registry.CompleteOwned(other, second.requestId, kVeronica, false, completed) ==
+            CompleteResult::Completed && registry.Status(other, second.requestId) == Outcome::Failed,
+        "addon-reported failure is visible to its owner");
+
+    Expect(registry.Begin("ExtCmdParityProbe_Ping", "timeout", "Veronica", kVeronica, 9, now, first) ==
+            BeginResult::Accepted && registry.TakeExpired(now + kRequestTimeout).size() == 1 &&
+            registry.Status(probe, first.requestId) == Outcome::TimedOut, "timeout is reported to the owner");
+    Expect(registry.Begin("ExtCmdParityProbe_Ping", "load", "Veronica", kVeronica, 9, now, first) ==
+            BeginResult::Accepted && registry.TakeStale(10).size() == 1 &&
+            registry.Status(probe, first.requestId) == Outcome::Cancelled, "save/load cancellation is local");
+    Expect(registry.CompleteOwned(probe, first.requestId, kVeronica, true, completed) ==
+            CompleteResult::UnknownRequest, "cancelled request cannot report to the server");
+}
+
 void TestPluginEventEnvelope() {
     Registry registry;
     const auto now = Clock::now();
@@ -140,6 +195,7 @@ int main() {
     TestCommandParsing();
     TestOwnershipAndDispatchEnvelope();
     TestBoundsTimeoutAndCancellation();
+    TestRuntimeOwnersAndOutcomes();
     TestPluginEventEnvelope();
     if (g_failures != 0) {
         std::cerr << g_failures << " external command registry test(s) failed\n";

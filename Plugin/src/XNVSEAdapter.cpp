@@ -1206,7 +1206,9 @@ bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback) {
 namespace {
 
 constexpr const char* kExternalCommandEventName = "DialecticExternalCommand";
+constexpr const char* kOwnedExternalCommandEventName = "DialecticOwnedExternalCommand";
 bool g_externalCommandEventRegistered = false;
+bool g_ownedExternalCommandEventRegistered = false;
 
 bool CountExternalCommandHandler(NVSEArrayVarInterface::Element&, void* data) {
     ++*static_cast<std::size_t*>(data);
@@ -1214,15 +1216,22 @@ bool CountExternalCommandHandler(NVSEArrayVarInterface::Element&, void* data) {
 }
 
 bool DispatchExternalCommandEventGuarded(TESObjectREFR* actor,
+                                         std::uint32_t handle,
                                          const char* bridge,
                                          const char* command,
                                          const char* parameter,
                                          std::uint32_t requestId,
                                          std::size_t* scriptHandlers) {
     __try {
-        const auto result = g_eventManager->DispatchEventAlt(
-            kExternalCommandEventName, CountExternalCommandHandler, scriptHandlers, actor,
-            bridge, command, parameter, static_cast<UInt32>(requestId), actor);
+        // Owned bridges never use the legacy name-filtered event, so a colliding
+        // addon's bridge-name handler cannot receive their commands.
+        const auto result = handle != 0
+            ? g_eventManager->DispatchEventAlt(
+                kOwnedExternalCommandEventName, CountExternalCommandHandler, scriptHandlers, actor,
+                static_cast<UInt32>(handle), bridge, command, parameter, static_cast<UInt32>(requestId), actor)
+            : g_eventManager->DispatchEventAlt(
+                kExternalCommandEventName, CountExternalCommandHandler, scriptHandlers, actor,
+                bridge, command, parameter, static_cast<UInt32>(requestId), actor);
         return result >= NVSEEventManagerInterface::kRetn_Normal;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -1241,7 +1250,7 @@ std::uint32_t FormIdOf(const void* form) {
 }
 
 bool RegisterExternalCommandEvent() {
-    if (g_externalCommandEventRegistered) {
+    if (g_externalCommandEventRegistered && g_ownedExternalCommandEventRegistered) {
         return true;
     }
     if (!g_eventManager || !g_eventManager->RegisterEvent || !g_eventManager->DispatchEventAlt) {
@@ -1256,23 +1265,44 @@ bool RegisterExternalCommandEvent() {
         NVSEEventManagerInterface::eParamType_Int,
         NVSEEventManagerInterface::eParamType_Reference
     };
-    g_externalCommandEventRegistered = g_eventManager->RegisterEvent(
-        kExternalCommandEventName, 5, params, NVSEEventManagerInterface::kFlags_None);
+    // handle, bridge, full command, parameter, request id, actor.
+    static NVSEEventManagerInterface::ParamType ownedParams[] = {
+        NVSEEventManagerInterface::eParamType_Int,
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_String,
+        NVSEEventManagerInterface::eParamType_Int,
+        NVSEEventManagerInterface::eParamType_Reference
+    };
     if (!g_externalCommandEventRegistered) {
-        Logger::LogWarning("XNVSEAdapter: external command event name collision event=%s",
-            kExternalCommandEventName);
+        g_externalCommandEventRegistered = g_eventManager->RegisterEvent(
+            kExternalCommandEventName, 5, params, NVSEEventManagerInterface::kFlags_None);
+        if (!g_externalCommandEventRegistered) {
+            Logger::LogWarning("XNVSEAdapter: external command event name collision event=%s",
+                kExternalCommandEventName);
+        }
     }
-    return g_externalCommandEventRegistered;
+    if (!g_ownedExternalCommandEventRegistered) {
+        g_ownedExternalCommandEventRegistered = g_eventManager->RegisterEvent(
+            kOwnedExternalCommandEventName, 6, ownedParams, NVSEEventManagerInterface::kFlags_None);
+        if (!g_ownedExternalCommandEventRegistered) {
+            Logger::LogWarning("XNVSEAdapter: external command event name collision event=%s",
+                kOwnedExternalCommandEventName);
+        }
+    }
+    return g_externalCommandEventRegistered && g_ownedExternalCommandEventRegistered;
 }
 
 bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
+                                  std::uint32_t handle,
                                   const std::string& bridge,
                                   const std::string& command,
                                   const std::string& parameter,
                                   std::uint32_t requestId,
                                   std::size_t& scriptHandlers) {
     scriptHandlers = 0;
-    if (!g_externalCommandEventRegistered || actorFormId == 0 || !GameThreadDispatcher::IsGameThread()) {
+    const bool registered = handle != 0 ? g_ownedExternalCommandEventRegistered : g_externalCommandEventRegistered;
+    if (!registered || actorFormId == 0 || !GameThreadDispatcher::IsGameThread()) {
         return false;
     }
     auto* player = *reinterpret_cast<PlayerCharacter**>(kPlayerSingletonAddress);
@@ -1281,7 +1311,7 @@ bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
         return false;
     }
     return DispatchExternalCommandEventGuarded(
-        actor, bridge.c_str(), command.c_str(), parameter.c_str(), requestId, &scriptHandlers);
+        actor, handle, bridge.c_str(), command.c_str(), parameter.c_str(), requestId, &scriptHandlers);
 }
 
 void UnregisterPublicDialecticEvents() {

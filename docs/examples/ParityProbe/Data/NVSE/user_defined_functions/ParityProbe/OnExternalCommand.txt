@@ -1,5 +1,6 @@
-; Receives DialecticExternalCommand on the exact speaking actor.
+; Receives DialecticOwnedExternalCommand on the exact speaking actor.
 ; Ping reads actor state only; it changes no game data.
+int iHandle
 string_var sBridge
 string_var sCommand
 string_var sParameter
@@ -8,19 +9,21 @@ ref rActor
 string_var sResult
 int iTalking
 
-begin function {sBridge, sCommand, sParameter, iRequestId, rActor}
-    if eval sBridge != "ParityProbe"
+begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
+    ; 1 means pending. Deferred work should repeat this check before acting,
+    ; because Dialectic may have timed out or cancelled the request meanwhile.
+    if eval (DialecticGetExternalCommandStatus iHandle iRequestId) != 1
         return
     endif
 
     if eval sCommand != "ExtCmdParityProbe_Ping"
         let sResult := "ParityProbe has no action " + sCommand
-        rActor.DialecticCompleteExternalCommand "ParityProbe" iRequestId 0 $sResult
+        rActor.DialecticCompleteOwnedCommand iHandle iRequestId 0 $sResult
         return
     endif
 
     let iTalking := rActor.DialecticIsActorTalking
     rActor.DialecticSendPluginEvent "ParityProbe" "ping" $sParameter
     let sResult := "Pong from " + $rActor + " to [" + sParameter + "] talking=" + $iTalking
-    rActor.DialecticCompleteExternalCommand "ParityProbe" iRequestId 1 $sResult
+    rActor.DialecticCompleteOwnedCommand iHandle iRequestId 1 $sResult
 end

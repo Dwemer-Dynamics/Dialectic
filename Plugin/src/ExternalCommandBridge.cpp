@@ -42,7 +42,7 @@ void ReportFailure(const PendingRequest& request, const std::string& reason) {
 
 void FailPending(std::uint32_t requestId, const char* reason) {
     PendingRequest request;
-    if (g_registry.Cancel(requestId, request)) {
+    if (g_registry.Cancel(requestId, request, ExternalCommandRegistry::Outcome::Failed)) {
         ReportFailure(request, reason);
     }
 }
@@ -79,11 +79,11 @@ void DispatchOnGameThread(std::uint32_t requestId) {
     }
 
     std::size_t scriptHandlers = 0;
-    const bool dispatched = XNVSEAdapter::DispatchExternalCommandEvent(request.actorFormId,
+    const bool dispatched = XNVSEAdapter::DispatchExternalCommandEvent(request.actorFormId, request.handle,
         request.bridge, request.command, request.parameter, request.requestId, scriptHandlers);
-    Logger::LogInfo("[EXTERNAL_COMMAND] dispatched id=%u bridge=%s command=%s actor=0x%08X handlers=%zu ok=%d",
-        request.requestId, request.bridge.c_str(), request.command.c_str(), request.actorFormId,
-        scriptHandlers, dispatched ? 1 : 0);
+    Logger::LogInfo("[EXTERNAL_COMMAND] dispatched id=%u bridge=%s handle=%u command=%s actor=0x%08X "
+        "handlers=%zu ok=%d", request.requestId, request.bridge.c_str(), request.handle,
+        request.command.c_str(), request.actorFormId, scriptHandlers, dispatched ? 1 : 0);
     if (!dispatched) {
         FailPending(request.requestId, "dispatch_failed");
     } else if (scriptHandlers == 0) {
@@ -165,15 +165,37 @@ int RegisterBridge(const std::string& name, std::uint32_t scriptFormId) {
     return accepted ? 1 : 0;
 }
 
-int CompleteRequest(std::uint32_t actorFormId,
-                    const std::string& bridge,
-                    int requestId,
-                    bool succeeded,
-                    const std::string& result) {
-    if (requestId <= 0) return 0;
-    PendingRequest request;
-    const auto completion = g_registry.Complete(Trim(bridge), static_cast<std::uint32_t>(requestId),
-        actorFormId, request);
+int RegisterOwnedBridge(const std::string& name, const std::string& owner) {
+    std::uint32_t handle = 0;
+    const auto result = g_registry.RegisterOwnedBridge(Trim(name), Trim(owner), handle);
+    switch (result) {
+        case ExternalCommandRegistry::RegisterResult::Registered:
+        case ExternalCommandRegistry::RegisterResult::AlreadyOwned:
+            Logger::LogInfo("[EXTERNAL_COMMAND] register owned bridge=%s owner=%s handle=%u result=%s",
+                name.c_str(), owner.c_str(), handle, ExternalCommandRegistry::ToString(result));
+            return static_cast<int>(handle);
+        default:
+            break;
+    }
+    Logger::LogWarning("[EXTERNAL_COMMAND] register owned bridge=%s owner=%s result=%s",
+        name.c_str(), owner.c_str(), ExternalCommandRegistry::ToString(result));
+    switch (result) {
+        case ExternalCommandRegistry::RegisterResult::InvalidName: return -1;
+        case ExternalCommandRegistry::RegisterResult::InvalidOwner: return -2;
+        case ExternalCommandRegistry::RegisterResult::OwnedByOther: return -3;
+        default: return -4;
+    }
+}
+
+namespace {
+
+int FinishCompletion(ExternalCommandRegistry::CompleteResult completion,
+                     const PendingRequest& request,
+                     int requestId,
+                     const std::string& bridge,
+                     std::uint32_t actorFormId,
+                     bool succeeded,
+                     const std::string& result) {
     if (completion != ExternalCommandRegistry::CompleteResult::Completed) {
         Logger::LogWarning("[EXTERNAL_COMMAND] completion rejected id=%d bridge=%s actor=0x%08X reason=%s",
             requestId, bridge.c_str(), actorFormId, ExternalCommandRegistry::ToString(completion));
@@ -198,8 +220,52 @@ int CompleteRequest(std::uint32_t actorFormId,
     return 1;
 }
 
+void CancelStale() {
+    // Save/load cancellation is local: requests from an older runtime generation never reach the server.
+    for (const PendingRequest& stale : g_registry.TakeStale(RuntimeGeneration::Current())) {
+        Logger::LogInfo("[EXTERNAL_COMMAND] cancelled id=%u command=%s reason=runtime_generation_changed",
+            stale.requestId, stale.command.c_str());
+    }
+}
+
+} // namespace
+
+int CompleteRequest(std::uint32_t actorFormId,
+                    const std::string& bridge,
+                    int requestId,
+                    bool succeeded,
+                    const std::string& result) {
+    if (requestId <= 0) return 0;
+    CancelStale();
+    PendingRequest request;
+    const auto completion = g_registry.Complete(Trim(bridge), static_cast<std::uint32_t>(requestId),
+        actorFormId, request, succeeded);
+    return FinishCompletion(completion, request, requestId, bridge, actorFormId, succeeded, result);
+}
+
+int CompleteOwnedRequest(std::uint32_t actorFormId,
+                         int handle,
+                         int requestId,
+                         bool succeeded,
+                         const std::string& result) {
+    if (requestId <= 0 || handle <= 0) return 0;
+    CancelStale();
+    PendingRequest request;
+    const auto completion = g_registry.CompleteOwned(static_cast<std::uint32_t>(handle),
+        static_cast<std::uint32_t>(requestId), actorFormId, succeeded, request);
+    return FinishCompletion(completion, request, requestId, "handle " + std::to_string(handle), actorFormId,
+        succeeded, result);
+}
+
 int IsRequestPending(int requestId) {
     return requestId > 0 && g_registry.IsPending(static_cast<std::uint32_t>(requestId)) ? 1 : 0;
+}
+
+int GetRequestStatus(int handle, int requestId) {
+    if (handle < 0 || requestId <= 0) return 0;
+    CancelStale();
+    return static_cast<int>(g_registry.Status(static_cast<std::uint32_t>(handle),
+        static_cast<std::uint32_t>(requestId)));
 }
 
 int SendPluginEvent(std::uint32_t actorFormId,
@@ -229,10 +295,7 @@ void Update() {
         return;
     }
     g_lastUpdate = now;
-    for (const PendingRequest& stale : g_registry.TakeStale(RuntimeGeneration::Current())) {
-        Logger::LogInfo("[EXTERNAL_COMMAND] cancelled id=%u command=%s reason=runtime_generation_changed",
-            stale.requestId, stale.command.c_str());
-    }
+    CancelStale();
     for (const PendingRequest& expired : g_registry.TakeExpired(now)) {
         ReportFailure(expired, "timed_out");
     }
