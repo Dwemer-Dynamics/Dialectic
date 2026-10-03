@@ -19,6 +19,14 @@ checks that the request is still pending (status `1`). It sends plugin event
 with `Pong from <actor> to [<parameter>] talking=<0|1>`. Other `ParityProbe`
 actions complete with a failure result.
 
+Optional control demo: when the parameter is exactly `hold` and the DLL
+registers `DialecticSetActorTalkLock`, the handler also takes ParityProbe's
+[talk lock](../../XNVSE_EVENT_API.md#addon-control) on that actor for 10
+seconds and appends `hold=<result>` to the result (`1` locked). Later lines for
+that actor are dropped until `ReleaseTalk.txt` runs by `CallAfterSeconds`.
+Every other parameter leaves the actor and the interaction switch untouched,
+and ParityProbe never turns interaction off.
+
 ## Files
 
 Copy the contents of `Data/` into a separate mod; do not add them to
@@ -28,6 +36,8 @@ Dialectic's own package.
 Data/NVSE/Plugins/scripts/ln_ParityProbe.txt
 Data/NVSE/user_defined_functions/ParityProbe/Register.txt
 Data/NVSE/user_defined_functions/ParityProbe/OnExternalCommand.txt
+Data/NVSE/user_defined_functions/ParityProbe/HoldTalk.txt
+Data/NVSE/user_defined_functions/ParityProbe/ReleaseTalk.txt
 ```
 
 The scripts are compiled at runtime by xNVSE `CompileScript`. No ESP or GECK
@@ -35,7 +45,8 @@ compilation is needed. Requirements:
 
 - xNVSE 6.3.3 or newer, which Dialectic already requires. The scripts use
   only xNVSE commands (`CompileScript`, `SetEventHandlerAlt`,
-  `GetCommandOpcode`, `GetPluginVersion`, `Print`) and Dialectic commands.
+  `GetCommandOpcode`, `GetPluginVersion`, `Print`, `CallAfterSeconds`) and
+  Dialectic commands.
 - JIP LN NVSE, only for its script runner, which runs `ln_ParityProbe.txt` on
   each new game or loaded save. Dialectic already requires JIP LN 57 or newer.
 - A Dialectic DLL with the owned-bridge commands (`DialecticRegisterOwnedBridge`,
@@ -45,7 +56,9 @@ The plugin version (`10103`) is not raised for the extension API, so it cannot
 identify a capable DLL. `ln_ParityProbe.txt` therefore also asks xNVSE for the
 opcode of every Dialectic command the compiled scripts use. `GetCommandOpcode`
 returns `0` for an unregistered name, so with an older DLL the runner prints
-one console line and never compiles `Register.txt`.
+one console line and never compiles `Register.txt`. The control demo is
+checked separately in the handler, so a DLL without addon API level `1` still
+runs Ping and only skips `hold`.
 
 Runtime-compiled scripts share load-order index `0xFF`, so the legacy
 `DialecticRegisterExternalBridge` cannot tell this addon apart from another
@@ -112,7 +125,8 @@ or `_` in the action part, but the server never emits such a code.
 Status: these scripts have not been compiled or run in game. The client
 regression test (`DialecticExternalCommandRegistryTests`) covers bridge parsing,
 legacy and owned ownership, distinct runtime owners, duplicate completions,
-request status, pending bounds, timeouts and envelopes; it does not run xNVSE.
+request status, pending bounds, timeouts, envelopes and per-owner actor flag
+claims; it does not run xNVSE.
 
 To validate in game with a disposable save:
 
@@ -130,3 +144,7 @@ To validate in game with a disposable save:
    name, update its `CompileScript` paths, and change only the owner name. Expect that copy to print
    `bridge name unavailable`, the log to show `result=bridge_owned_by_another_plugin`,
    and each Ping to reach exactly one handler (`handlers=1`).
+5. Optional: trigger Ping with parameter `hold`. Expect `hold=1` in the
+   result, `[ADDON_CONTROL] talk_lock=1` in the log, later lines for that actor
+   logged as `Dropping stale queued ...: speaker is talk_locked by an addon`, and
+   `[ADDON_CONTROL] talk_lock=0` about 10 seconds later.

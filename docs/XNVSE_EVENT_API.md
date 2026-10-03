@@ -39,6 +39,9 @@ VeronicaREF.DispatchEventAlt "DialecticResume"
 - The actor must be alive, loaded, eligible, and in the player's current scene.
 - Contextual comment and reaction requests honor menu, dialogue, combat,
   activity, and busy-pipeline gates.
+- Every event is refused for an actor that an addon has
+  [talk-locked or marked animation busy](#addon-control); follower events are
+  refused only for animation busy.
 - `DialecticAsk` and `DialecticOpenPrompt` refuse to replace a conversation
   currently owned by another actor.
 - Follower dismissal, waiting, and resuming require a current teammate.
@@ -74,6 +77,12 @@ Keep the check in a script that calls only xNVSE commands, and call the
 Dialectic commands only in scripts compiled after it passes. A script that
 names an unknown command fails to compile as a whole.
 
+`DialecticGetAddonApiVersion` returns the addon API level, currently `1`.
+Builds without that command predate it; check their commands individually.
+Level `1` adds the [addon control](#addon-control) commands to the owned-bridge
+commands below. New commands are only appended, so existing opcodes and
+compiled scripts keep working; a higher level always includes the lower ones.
+
 | Command | Calling reference | Returns |
 | --- | --- | --- |
 | `DialecticRegisterOwnedBridge "Name", "Owner"` | None | A positive bridge handle when `Owner` owns the bridge name. Repeat calls with the same owner return the same handle for the rest of the game session. Otherwise `-1` invalid bridge name, `-2` invalid owner name, `-3` name owned by another owner or by a legacy registration, `-4` full table (32 bridges). |
@@ -84,9 +93,14 @@ names an unknown command fails to compile as a whole.
 | `DialecticIsExternalCommandPending requestId` | None | `1` while the request can still be completed. |
 | `[actor.]DialecticSendPluginEvent "Name", "event", "data"` | Optional | `1` when one `pluginevent` was queued for the server; `0` if the bridge is unregistered, the event name or data is invalid, the actor is not in the current scene, Dialectic is off, or the bridge exceeded 20 events in 10 seconds. |
 | `actor.DialecticIsActorTalking` | Required | `1` while Dialectic speech plays for this actor. |
-| `actor.DialecticIsActorAvailable` | Required | `1` when this actor passes the same exact scene and eligibility gate as the public events. Busy-pipeline and menu gates are checked only when a request is made. |
+| `actor.DialecticIsActorAvailable` | Required | `1` when this actor passes the same exact scene and eligibility gate as the public events, including addon talk locks and animation-busy flags. Busy-pipeline and menu gates are checked only when a request is made. |
 | `DialecticGetInteractionState` | None | `0` off, `1` on, `2` updating, `3` connection failed. |
 | `DialecticStopAllDialogue` | None | `1` after stopping Dialectic speech and pending replies. Actor actions and conversation history are unchanged. |
+| `DialecticGetAddonApiVersion` | None | The addon API level, currently `1`. |
+| `DialecticSetInteractionEnabled handle, enabled` | None | `1` when interaction is already in the requested state; `2` when the change was accepted or is already synchronizing toward it. `-1` unknown handle, `-2` value other than `0` or `1`. See [addon control](#addon-control). |
+| `actor.DialecticSetActorTalkLock handle, locked` | Required | `1` applied (also when already in that state), `2` released while another addon still holds a lock on the actor, `-1` unknown handle, `-2` not an NPC or creature reference (or the player), `-3` 64 actors already have flags, `-4` value other than `0` or `1`. |
+| `actor.DialecticSetActorAnimationBusy handle, busy` | Required | Same results as `DialecticSetActorTalkLock`, for the animation-busy flag. |
+| `actor.DialecticGetActorControlFlags [handle]` | Required | `1` talk locked plus `2` animation busy, by any addon; with a handle, only that addon's own flags. `0` when none. |
 
 Bridge names are 1 to 32 ASCII letters or digits and start with a letter.
 They are case-insensitive. Event names and owner names are 1 to 64 letters,
@@ -130,6 +144,65 @@ script runs with full game access, an unfiltered handler receives every
 command, plugin-event calls check only the bridge name, and handles are small
 sequential numbers rather than secrets. Only Dialectic can dispatch the two
 command events because they are registered without `kFlag_AllowScriptDispatch`.
+
+### Addon control
+
+These commands take the handle from `DialecticRegisterOwnedBridge`; legacy
+bridges cannot use them. The handle identifies the caller in the log and owns
+the actor flags it sets. As with bridge ownership, this keeps cooperating mods
+apart; it is not a security boundary.
+
+#### Interaction switch
+
+`DialecticSetInteractionEnabled handle, 1` (or `0`) requests the same AI
+interaction switch as the DIALECTIC Control menu, with the same server
+handshake and generation. It sets a value instead of toggling it:
+
+- Asking for the current state returns `1` and changes nothing.
+- Otherwise it returns `2`, and `DialecticGetInteractionState` reads `2`
+  (updating) until the server confirms `1` or `0`, or `3` if the sync failed.
+  After a failure Dialectic retries every 5 seconds toward the last requested
+  value. Asking again for the value already being synchronized also returns
+  `2` and does not restart the sync.
+- A request made while another sync is running replaces its target, so the
+  last request wins and the earlier result is not applied.
+- Like the menu switch, a change discards pending replies, queued speech and
+  queued actions. Neither switch touches the microphone: in every state
+  push-to-talk and open mic still record, upload to speech-to-text and log
+  the transcript. A transcript starts a reply only if interaction reads `1`
+  when it arrives; otherwise it is dropped after logging.
+- `2` is not a promise: poll the state, and act on `1` or `0` only.
+
+Do not turn interaction off when your addon loads; the player controls it in
+the menu, and this command overrides that choice until the player changes it.
+
+#### Actor talk lock and animation busy
+
+| Flag | Dialectic behavior for that actor |
+| --- | --- |
+| Talk lock | Not chosen as a speaker for bored, quest, RPG, combat, auto-greeting or NPC-to-NPC (rechat) events, or as the nearest NPC for a PipVision description. Public events and player conversations are refused, and a player message to that actor is held (the conversation stays open). Speech lines for that actor are dropped before playback and are never moved to another actor. Server Talk instructions for the actor are refused. |
+| Animation busy | Everything a talk lock does, because playback starts lip sync and vanilla dialogue guards. Dialectic actions performed by the actor (for example Follow, Wait, Attack or Trade), the public follower events, and narrator actions targeting it are refused; server actions report `failed because actor_animation_busy`. |
+
+Neither flag affects `ExtCmd` commands for your own bridge, plugin events,
+vanilla dialogue, or a line already playing when the flag is set. An action
+already running continues; the next one is refused.
+
+Each addon holds its own claim on each flag. A flag stays set while any addon
+holds it, and an addon can release only its own claim: a release returns `2`
+when another addon still holds the flag. Up to 64 actors can have flags at once.
+Dialectic drops every flag before a save loads, on return to the main menu,
+on exit and when its event API shuts down; set them again after a load if they
+should persist. Bridges cannot be unregistered, so a flag otherwise lasts until
+its owner releases it. Release flags as soon as the animation or scene ends,
+and use a timer when the end may never be reported.
+
+```geck
+let iHandle := DialecticRegisterOwnedBridge "MyBridge" "MyAddon"
+if eval (VeronicaREF.DialecticSetActorAnimationBusy iHandle 1) == 1
+    ; ... play the animation ...
+    VeronicaREF.DialecticSetActorAnimationBusy iHandle 0
+endif
+```
 
 ### Server actions: `ExtCmd<Bridge>_<Action>`
 
@@ -223,9 +296,10 @@ API and may change.
 | `PostGameData` | `DialecticSendPluginEvent` | Partial: one bounded string (1000 bytes) per event, not arbitrary JSON |
 | `isActorTalking` | `actor.DialecticIsActorTalking` | Equivalent for Dialectic speech only |
 | `getChimInteractionState` | `DialecticGetInteractionState` | Equivalent |
-| `setChimInteractionEnabled` | `DialecticToggleInteraction` (internal) | Partial: toggles instead of setting a value, and does nothing while the state is `2` (updating). There is no deterministic setter |
+| `setChimInteractionEnabled` | `DialecticSetInteractionEnabled` | Equivalent; needs a bridge handle, returns `1` unchanged or `2` accepted; neither it nor the menu switch affects recording |
 | `stopAllDialogue` | `DialecticStopAllDialogue` | Equivalent |
-| `setLocked`, `setAnimationBusy` | Not provided | Gap: no per-actor talk lock or busy flag. `actor.DialecticIsActorAvailable` only reads the request gate |
+| `setLocked` | `actor.DialecticSetActorTalkLock` | Equivalent purpose; per-owner claims on the actor ref instead of an NPC name, cleared on load |
+| `setAnimationBusy` | `actor.DialecticSetActorAnimationBusy` | Equivalent purpose; also blocks Dialectic actions on the actor, cleared on load |
 | `setDrivenByAI`, `setDrivenByAIA`, `addBasicProfile`, `setAIKeyWord` | `DialecticRecruit` event | Partial: Dialectic registers AI agents itself on activation and exposes no command to add one. Recruiting makes the actor a teammate; it does not add a profile |
 | `removeAgentByName` | `DialecticDismiss` event | Partial: dismisses a teammate by ref; it does not remove the actor from Dialectic's agent registry |
 | `getClosestAgent`, `getAgentByName`, `findAllNearbyAgents`, `findAllAgents`, `findAllNearbyNonAgents`, `findAllNearbyActors`, `findAllAgentsFormId`, `getHerikaFormId` | Not provided | Gap: the agent registry is internal and has no read command. Use the game's own actor scans and `DialecticIsActorAvailable` |

@@ -2427,7 +2427,22 @@ bool TranslateRolemasterInstruction(ActionRequest& request, const std::vector<st
     return true;
 }
 
+// An addon animation-busy flag blocks Dialectic actions on that actor; addon ExtCmd requests are not affected.
+static bool RejectAnimationBusyActor(const ActionRequest& request, uint32_t actorFormId, const char* source) {
+    if (!ExternalCommandBridge::IsActorAnimationBusy(actorFormId)) return false;
+    Logger::LogInfo("%s: Action %s rejected; actor 0x%08X is animation busy by an addon",
+        source ? source : "ActionManager", request.action.c_str(), actorFormId);
+    SendFuncretResult(request, request.action + " failed because actor_animation_busy.");
+    return true;
+}
+
 bool SendDirectorTalkInstruction(const ActionRequest& request, const char* source) {
+    if (const char* blocked = ExternalCommandBridge::ActorBlockReason(request.speakerFormId)) {
+        Logger::LogInfo("%s: Director Talk instruction rejected; speaker 0x%08X is %s by an addon",
+            source ? source : "ActionManager", request.speakerFormId, blocked);
+        SendFuncretResult(request, request.action + " failed because speaker_" + blocked + ".");
+        return false;
+    }
     const std::string speaker = Trim(request.speaker);
     const std::string instruction = Trim(request.instruction.empty() ? request.target : request.instruction);
     if (speaker.empty() || instruction.empty()) {
@@ -2792,6 +2807,9 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
             SendFuncretResult(request, request.action + " failed because target_not_in_current_scene.");
             return false;
         }
+        if (RejectAnimationBusyActor(request, request.targetFormId, sourceName.c_str())) {
+            return false;
+        }
     }
 
     if (request.action == "SpawnItem" && request.itemBaseId == 0) {
@@ -2894,6 +2912,9 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             }
         }
     }
+    if (RejectAnimationBusyActor(request, request.speakerFormId, source)) {
+        return false;
+    }
 
     std::string itemResolutionError;
     if (!ResolveInventoryItemBase(request, itemResolutionError)) {
@@ -2941,6 +2962,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
     return GameThreadDispatcher::Enqueue("action", commandKey, generation,
         [request]() {
             if (!Interaction::IsCurrent(request.interactionEpoch)) return;
+            if (RejectAnimationBusyActor(request, request.speakerFormId, "ActionManager")) return;
             const int actionCode = ActionCodeForAction(request.action);
             if (actionCode == 2 || actionCode == 3) {
                 XNVSEAdapter::NativeTradeMenuInfo menuInfo;
@@ -3141,6 +3163,11 @@ bool RequestExternalFollowerAction(ExternalFollowerAction action,
         actor.deleted || actor.dead || !actor.loaded3D ||
         !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
         Logger::LogWarning("%s: external follower action rejected by scene gate actor=0x%08X",
+            sourceName, actorFormId);
+        return false;
+    }
+    if (ExternalCommandBridge::IsActorAnimationBusy(actorFormId)) {
+        Logger::LogInfo("%s: external follower action rejected; actor 0x%08X is animation busy by an addon",
             sourceName, actorFormId);
         return false;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,7 @@ constexpr std::size_t kMaxEventNameLength = 64;
 constexpr std::size_t kMaxOwnerNameLength = 64;
 constexpr std::size_t kMaxRecentOutcomes = 64;
 constexpr std::size_t kMaxPluginEventsPerWindow = 20;
+constexpr std::size_t kMaxControlledActors = 64;
 constexpr auto kRequestTimeout = std::chrono::seconds(30);
 constexpr auto kDuplicateWindow = std::chrono::milliseconds(1500);
 constexpr auto kPluginEventWindow = std::chrono::seconds(10);
@@ -103,6 +105,8 @@ public:
                                  bool succeeded,
                                  PendingRequest& completed);
     bool Get(std::uint32_t requestId, PendingRequest& pending) const;
+    // True for a handle returned by RegisterOwnedBridge this session.
+    bool IsOwnedHandle(std::uint32_t handle) const;
     bool Cancel(std::uint32_t requestId, PendingRequest& cancelled, Outcome outcome = Outcome::Cancelled);
     bool IsPending(std::uint32_t requestId) const;
     std::size_t PendingCount() const;
@@ -143,6 +147,33 @@ private:
     std::deque<RecentOutcome> m_outcomes;
     std::uint32_t m_nextRequestId = 1;
     std::uint32_t m_nextHandle = 1;
+};
+
+// Script-visible actor control flags; values are part of the public API.
+enum ActorFlag : std::uint32_t { kTalkLock = 1, kAnimationBusy = 2 };
+enum class ControlResult { Applied, StillHeldByOther, InvalidHandle, InvalidActor, Full };
+
+// Per-actor flags claimed by owned-bridge handles. Each owner holds its own
+// claim, so one addon cannot release another addon's flag. Handles are at most
+// kMaxBridges, so each flag stores one bit per owner.
+class ActorControlTable {
+public:
+    ControlResult Set(std::uint32_t handle, std::uint32_t actorFormId, ActorFlag flag, bool active);
+    // Flags held by any owner, or only by handle when it is nonzero.
+    std::uint32_t Flags(std::uint32_t actorFormId, std::uint32_t handle = 0) const;
+    // Returns the number of actors whose flags were dropped.
+    std::size_t Clear();
+
+private:
+    struct Claims {
+        std::uint32_t talkLock = 0;
+        std::uint32_t animationBusy = 0;
+    };
+
+    mutable std::mutex m_mutex;
+    std::map<std::uint32_t, Claims> m_actors;
+    // Lets hot-path readers skip the lock while no addon holds a flag.
+    std::atomic<std::size_t> m_count{0};
 };
 
 // JSON body for HTTPManager::SendEvent("pluginevent", ...).

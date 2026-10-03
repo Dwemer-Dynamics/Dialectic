@@ -267,6 +267,14 @@ bool Registry::Cancel(std::uint32_t requestId, PendingRequest& cancelled, Outcom
     return true;
 }
 
+bool Registry::IsOwnedHandle(std::uint32_t handle) const {
+    if (handle == 0) return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return std::any_of(m_bridges.begin(), m_bridges.end(), [handle](const auto& bridge) {
+        return bridge.second.handle == handle;
+    });
+}
+
 bool Registry::IsPending(std::uint32_t requestId) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_pending.count(requestId) != 0;
@@ -342,6 +350,46 @@ bool Registry::AllowPluginEvent(std::string_view bridge, Clock::time_point now) 
     if (sent.size() >= kMaxPluginEventsPerWindow) return false;
     sent.push_back(now);
     return true;
+}
+
+ControlResult ActorControlTable::Set(std::uint32_t handle,
+                                     std::uint32_t actorFormId,
+                                     ActorFlag flag,
+                                     bool active) {
+    if (handle == 0 || handle > kMaxBridges) return ControlResult::InvalidHandle;
+    if (actorFormId == 0 || actorFormId == kPlayerRefId) return ControlResult::InvalidActor;
+    const std::uint32_t bit = 1u << (handle - 1);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto existing = m_actors.find(actorFormId);
+    if (existing == m_actors.end()) {
+        if (!active) return ControlResult::Applied;
+        if (m_actors.size() >= kMaxControlledActors) return ControlResult::Full;
+        existing = m_actors.emplace(actorFormId, Claims{}).first;
+    }
+    std::uint32_t& owners = flag == kTalkLock ? existing->second.talkLock : existing->second.animationBusy;
+    owners = active ? owners | bit : owners & ~bit;
+    const bool stillHeld = !active && owners != 0;
+    if (existing->second.talkLock == 0 && existing->second.animationBusy == 0) m_actors.erase(existing);
+    m_count.store(m_actors.size(), std::memory_order_release);
+    return stillHeld ? ControlResult::StillHeldByOther : ControlResult::Applied;
+}
+
+std::uint32_t ActorControlTable::Flags(std::uint32_t actorFormId, std::uint32_t handle) const {
+    if (actorFormId == 0 || m_count.load(std::memory_order_acquire) == 0) return 0;
+    const std::uint32_t mask = handle == 0 ? ~0u : handle <= kMaxBridges ? 1u << (handle - 1) : 0u;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto existing = m_actors.find(actorFormId);
+    if (existing == m_actors.end()) return 0;
+    return ((existing->second.talkLock & mask) != 0 ? kTalkLock : 0u) |
+        ((existing->second.animationBusy & mask) != 0 ? kAnimationBusy : 0u);
+}
+
+std::size_t ActorControlTable::Clear() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const std::size_t cleared = m_actors.size();
+    m_actors.clear();
+    m_count.store(0, std::memory_order_release);
+    return cleared;
 }
 
 std::string EscapeJson(std::string_view value) {

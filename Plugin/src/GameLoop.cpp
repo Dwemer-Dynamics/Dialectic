@@ -39,6 +39,7 @@
 #include "LoadedPluginsFNV.h"
 #include "WorldDataSyncFNV.h"
 #include "DialecticInitialization.h"
+#include "ExternalCommandBridge.h"
 #include "TradeManager.h"
 #include "RuntimeSnapshot.h"
 #include "RuntimeGeneration.h"
@@ -122,6 +123,9 @@ static bool g_loadedSaveInitBlocked = false;
 
 // Voice input state
 static std::atomic<bool> g_voiceInputActive(false);
+// Identifies the capture that owns g_voiceInputActive, so a late completion of an earlier
+// capture (an upload cancelled by a reset or a newer start) cannot retire a newer one.
+static std::atomic<uint64_t> g_voiceCaptureId(0);
 
 // Update timing
 static std::chrono::steady_clock::time_point g_lastUpdateTime;
@@ -349,6 +353,15 @@ static bool IsConversationTargetEligible(
     if (!ActorEligibilityFNV::IsTargetableActorIdentity(identityMetadata, &identityReason)) {
         Logger::LogInfo("GameLoop: Conversation target rejected: %s (0x%08X): %s",
             name.c_str(), formId, identityReason.c_str());
+        return false;
+    }
+
+    if (const char* blocked = ExternalCommandBridge::ActorBlockReason(formId)) {
+        Logger::LogInfo("GameLoop: Conversation target rejected: %s (0x%08X): %s by addon",
+            name.c_str(), formId, blocked);
+        if (notify) {
+            Console::Print("[DIALECTIC] %s is busy right now.", name.c_str());
+        }
         return false;
     }
 
@@ -2896,14 +2909,16 @@ static bool SelectRpgCommentSpeaker(uint32_t& outFormId, std::string& outName) {
     outFormId = 0;
     outName.clear();
 
-    if (g_conversationActive && !g_conversationIsNarrator && !g_conversationPartner.empty()) {
+    if (g_conversationActive && !g_conversationIsNarrator && !g_conversationPartner.empty() &&
+        !ExternalCommandBridge::IsActorTalkBlocked(g_conversationPartnerFormId)) {
         outFormId = g_conversationPartnerFormId;
         outName = g_conversationPartner;
         return true;
     }
 
     const auto& target = TargetManager::GetCurrentTarget();
-    if (target.isActor && target.isAIAgent && target.formId != 0 && !target.name.empty()) {
+    if (target.isActor && target.isAIAgent && target.formId != 0 && !target.name.empty() &&
+        !ExternalCommandBridge::IsActorTalkBlocked(target.formId)) {
         outFormId = target.formId;
         outName = target.name;
         return true;
@@ -2926,6 +2941,7 @@ static bool IsCombatRpgSpeakerCandidate(
     RuntimeSnapshot::ActorState& outActor) {
     return formId != 0 &&
         AgentManager::IsAIAgent(formId) &&
+        !ExternalCommandBridge::IsActorTalkBlocked(formId) &&
         RuntimeSnapshot::TryGetActor(formId, outActor) &&
         outActor.loaded3D &&
         !outActor.dead &&
@@ -4748,6 +4764,14 @@ void SendPlayerMessage(const std::string& message) {
         return;
     }
 
+    if (!g_conversationIsNarrator && ExternalCommandBridge::IsActorTalkBlocked(g_conversationPartnerFormId)) {
+        Logger::LogInfo("GameLoop: Player message held; %s (0x%08X) is %s by addon",
+            g_conversationPartner.c_str(), g_conversationPartnerFormId.load(),
+            ExternalCommandBridge::ActorBlockReason(g_conversationPartnerFormId));
+        Console::Print("[DIALECTIC] %s is busy right now.", g_conversationPartner.c_str());
+        return;
+    }
+
     if (!g_conversationIsNarrator &&
         !IsConversationTargetEligible(g_conversationPartnerFormId, g_conversationPartner, true)) {
         g_conversationActive = false;
@@ -4894,8 +4918,9 @@ void StartVoiceInput() {
     StartVoiceInputInternal(false);
 }
 
+// The interaction state never blocks capture, upload or transcript delivery; it only decides
+// whether the transcript may start a reply when it arrives.
 static void StartVoiceInputInternal(bool openMicTriggered) {
-    if (!Interaction::Allowed()) { if (!openMicTriggered) Interaction::ManualInputAllowed(); return; }
     if (MultiplayerSharing::IsListener()) return;
     if (g_voiceInputActive) return;
     if (!g_conversationActive) {
@@ -4927,24 +4952,35 @@ static void StartVoiceInputInternal(bool openMicTriggered) {
     // Treat mic input as player interruption: new player intent cancels
     // queued/rechat speech before capture starts instead of after STT returns.
     SpeakManager::CancelDialogueTurn("voice_input_start", true, true);
-    if (!g_conversationIsNarrator) {
+    if (!g_conversationIsNarrator && Interaction::Allowed()) {
         SpeakManager::GuardActorForPendingDialogue(g_conversationPartnerFormId, g_conversationPartner);
     }
 
     g_voiceInputActive = true;
+    const uint64_t captureId = ++g_voiceCaptureId;
     
     // Start recording with callback for when STT completes
     const int openMicSilenceMs = openMicTriggered
         ? static_cast<int>(std::max(0.1f, Config::openMicEndDelaySeconds) * 1000.0f)
         : -1;
 
-    VoiceRecorder::StartRecording(voiceKey, [openMicTriggered](const std::string& transcribedText) {
+    VoiceRecorder::StartRecording(voiceKey, [openMicTriggered, captureId](const std::string& transcribedText) {
+        if (captureId != g_voiceCaptureId.load()) {
+            Log("GameLoop: Ignoring completion of superseded voice capture %llu",
+                static_cast<unsigned long long>(captureId));
+            return;
+        }
         g_voiceInputActive = false;
         ResetBoredEventTimer(openMicTriggered ? "open mic recording end" : "voice recording end");
 
         const std::string cleanedText = TrimInput(transcribedText);
         if (!cleanedText.empty()) {
             Log("GameLoop: STT result: %s", cleanedText.c_str());
+            if (!Interaction::Allowed()) {
+                Log("GameLoop: Interaction state %d; transcript starts no reply", Interaction::Status());
+                if (!openMicTriggered) Interaction::ManualInputAllowed();
+                return;
+            }
             
             // Send the transcribed text as player input
             if (!EqualsIgnoreCase(Config::currentMode, "HYPNOSIS") && ShouldRouteToNarrator(cleanedText, false) &&

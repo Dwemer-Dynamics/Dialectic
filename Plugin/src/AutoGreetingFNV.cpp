@@ -1,6 +1,7 @@
 #include "AutoGreetingFNV.h"
 
 #include "ActorPositionResolverFNV.h"
+#include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "HTTPManager.h"
 #include "Logger.h"
@@ -161,6 +162,7 @@ void Update() {
         !ActorPositionResolverFNV::IsActorPositionFresh(pending.npcFormId, 3000) ||
         (actor.deadKnown && actor.isDead) || (actor.disabledKnown && actor.isDisabled) ||
         (actor.sceneBusyKnown && actor.sceneBusy) ||
+        ExternalCommandBridge::IsActorTalkBlocked(pending.npcFormId) ||
         (RuntimeSnapshot::TryGetActor(pending.npcFormId, actorState) &&
          (actorState.inCombat || actorState.hostileToPlayer || actorState.dead))) {
         cancel("actor_not_available");

@@ -30,6 +30,9 @@ struct ServiceStatus {
 // Parameters:
 //   boundKey - Virtual key code to monitor for release
 //   callback - Function to call with transcribed text
+// Independent of the interaction state. The callback runs once, with empty text when nothing
+// was transcribed, the upload failed or was cancelled, or the start was rejected because a
+// capture is already running. Only a save/load drops it; runtime reset clears the owner then.
 void StartRecording(int boundKey, STTCallback callback, int silenceStopMs = -1);
 
 // Check if currently recording

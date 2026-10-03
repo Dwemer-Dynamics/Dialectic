@@ -8,6 +8,7 @@ int iRequestId
 ref rActor
 string_var sResult
 int iTalking
+int iHold
 
 begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
     ; 1 means pending. Deferred work should repeat this check before acting,
@@ -25,5 +26,14 @@ begin function {iHandle, sBridge, sCommand, sParameter, iRequestId, rActor}
     let iTalking := rActor.DialecticIsActorTalking
     rActor.DialecticSendPluginEvent "ParityProbe" "ping" $sParameter
     let sResult := "Pong from " + $rActor + " to [" + sParameter + "] talking=" + $iTalking
+
+    ; Optional control demo: only an explicit "hold" parameter locks the actor, and only
+    ; for 10 seconds. Older Dialectic builds without the command skip it.
+    if eval sParameter == "hold"
+        if eval (GetCommandOpcode "DialecticSetActorTalkLock") != 0
+            let iHold := call (CompileScript "ParityProbe/HoldTalk.txt") iHandle rActor
+            let sResult += " hold=" + $iHold
+        endif
+    endif
     rActor.DialecticCompleteOwnedCommand iHandle iRequestId 1 $sResult
 end
