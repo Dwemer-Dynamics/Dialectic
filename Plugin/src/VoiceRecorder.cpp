@@ -1,4 +1,3 @@
-#include "Interaction.h"
 // VoiceRecorder.cpp - Voice recording implementation for Dialectic
 
 #include "VoiceRecorder.h"
@@ -598,13 +597,18 @@ std::string GetCurrentRecordingDeviceDisplayName() {
     return "Current Device: " + GetCurrentRecordingDeviceName();
 }
 
-static void FinishWithCallback(const STTCallback& callback, const std::string& text,
-                               std::uint64_t generation) {
-    g_isRecording = false;
+static void DeliverCompletion(const STTCallback& callback, const std::string& text,
+                              std::uint64_t generation) {
     if (!callback) return;
     auto complete = [callback, text]() { callback(text); };
     if (GameThreadDispatcher::IsGameThread()) complete();
     else GameThreadDispatcher::Enqueue("voice_input", "stt_completion", generation, std::move(complete));
+}
+
+static void FinishWithCallback(const STTCallback& callback, const std::string& text,
+                               std::uint64_t generation) {
+    g_isRecording = false;
+    DeliverCompletion(callback, text, generation);
 }
 
 static void SubmitSttUpload(std::string wavData, STTCallback callback, std::uint64_t generation) {
@@ -1002,15 +1006,12 @@ static void OpenMicMonitoringThreadFunc(OpenMicCallback onVoiceDetected) {
     Log("VoiceRecorder: Open mic monitoring thread ended");
 }
 
+// Capture does not depend on the interaction state; the owner decides what a transcript may
+// start. Every accepted or rejected start completes its callback once (empty when no speech).
 void StartRecording(int boundKey, STTCallback callback, int silenceStopMs) {
-    if (!Interaction::Allowed()) return;
-    const auto interactionEpoch = Interaction::Epoch();
-    const auto originalCallback = callback;
-    callback = [originalCallback, interactionEpoch](const std::string& text) {
-        if (Interaction::IsCurrent(interactionEpoch)) originalCallback(text);
-    };
     if (g_isRecording) {
         Log("VoiceRecorder: Already recording, ignoring start request");
+        DeliverCompletion(callback, "", RuntimeGeneration::Current());
         return;
     }
 
@@ -1071,7 +1072,6 @@ ServiceStatus GetServiceStatus() {
 }
 
 void StartOpenMicMonitoring(OpenMicCallback onVoiceDetected) {
-    if (!Interaction::Allowed()) return;
     if (g_openMicMonitoringActive || g_isRecording) {
         return;
     }

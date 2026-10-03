@@ -168,6 +168,47 @@ void TestRuntimeOwnersAndOutcomes() {
             CompleteResult::UnknownRequest, "cancelled request cannot report to the server");
 }
 
+void TestActorControlClaims() {
+    Registry registry;
+    std::uint32_t probe = 0;
+    std::uint32_t other = 0;
+    registry.RegisterOwnedBridge("ParityProbe", "ParityProbe.Example", probe);
+    registry.RegisterOwnedBridge("OtherBridge", "OtherAddon", other);
+    registry.RegisterBridge("LegacyProbe", kProbeOwner);
+    Expect(registry.IsOwnedHandle(probe) && registry.IsOwnedHandle(other) && !registry.IsOwnedHandle(0) &&
+            !registry.IsOwnedHandle(other + 1), "only issued owned-bridge handles control actors");
+
+    ActorControlTable table;
+    Expect(table.Flags(kVeronica) == 0, "no flags before any claim");
+    Expect(table.Set(probe, kVeronica, kTalkLock, true) == ControlResult::Applied &&
+            table.Set(probe, kVeronica, kTalkLock, true) == ControlResult::Applied &&
+            table.Flags(kVeronica) == kTalkLock, "talk lock is idempotent");
+    Expect(table.Set(other, kVeronica, kTalkLock, false) == ControlResult::StillHeldByOther &&
+            table.Flags(kVeronica) == kTalkLock, "another owner cannot release a lock");
+    Expect(table.Set(other, kVeronica, kAnimationBusy, true) == ControlResult::Applied &&
+            table.Flags(kVeronica) == (kTalkLock | kAnimationBusy) &&
+            table.Flags(kVeronica, other) == kAnimationBusy && table.Flags(kVeronica, probe) == kTalkLock,
+        "flags combine across owners and read per owner");
+    Expect(table.Set(other, kVeronica, kTalkLock, true) == ControlResult::Applied &&
+            table.Set(probe, kVeronica, kTalkLock, false) == ControlResult::StillHeldByOther &&
+            table.Set(other, kVeronica, kTalkLock, false) == ControlResult::Applied &&
+            table.Flags(kVeronica) == kAnimationBusy, "a shared lock ends when its last owner releases it");
+    Expect(table.Set(0, kBoone, kTalkLock, true) == ControlResult::InvalidHandle &&
+            table.Set(kMaxBridges + 1, kBoone, kTalkLock, true) == ControlResult::InvalidHandle &&
+            table.Set(probe, 0x00000014, kTalkLock, true) == ControlResult::InvalidActor &&
+            table.Set(probe, 0, kTalkLock, true) == ControlResult::InvalidActor, "handle and actor are validated");
+    Expect(table.Set(probe, kBoone, kAnimationBusy, false) == ControlResult::Applied && table.Flags(kBoone) == 0,
+        "releasing an unclaimed flag adds no entry");
+
+    for (std::uint32_t actor = 0x00100000; table.Flags(actor) == 0; ++actor) {
+        if (table.Set(probe, actor, kTalkLock, true) == ControlResult::Full) break;
+    }
+    Expect(table.Set(probe, kBoone, kTalkLock, true) == ControlResult::Full &&
+            table.Set(probe, kVeronica, kTalkLock, true) == ControlResult::Applied,
+        "table is bounded but existing actors can still change");
+    Expect(table.Clear() == kMaxControlledActors && table.Flags(kVeronica) == 0, "load clears every flag");
+}
+
 void TestPluginEventEnvelope() {
     Registry registry;
     const auto now = Clock::now();
@@ -196,6 +237,7 @@ int main() {
     TestOwnershipAndDispatchEnvelope();
     TestBoundsTimeoutAndCancellation();
     TestRuntimeOwnersAndOutcomes();
+    TestActorControlClaims();
     TestPluginEventEnvelope();
     if (g_failures != 0) {
         std::cerr << g_failures << " external command registry test(s) failed\n";

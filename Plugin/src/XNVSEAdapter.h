@@ -323,6 +323,8 @@ bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
 void UnregisterPublicDialecticEvents();
 // Reads TESForm::refID from a script command reference or Script, or 0.
 std::uint32_t FormIdOf(const void* form);
+// Reads refID only for an NPC or creature reference other than the player, or 0.
+std::uint32_t ActorFormIdOf(const void* reference);
 // Registers the Dialectic-only DialecticExternalCommand and DialecticOwnedExternalCommand
 // events (not script-dispatchable).
 bool RegisterExternalCommandEvent();

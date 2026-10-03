@@ -23,6 +23,7 @@ using ExternalCommandRegistry::PendingRequest;
 constexpr const char* kDispatchType = "external_command";
 
 ExternalCommandRegistry::Registry g_registry;
+ExternalCommandRegistry::ActorControlTable g_actorControl;
 std::chrono::steady_clock::time_point g_lastUpdate;
 
 std::string Trim(const std::string& value) {
@@ -287,6 +288,73 @@ int SendPluginEvent(std::uint32_t actorFormId,
     HTTPManager::SendEvent("pluginevent", ExternalCommandRegistry::BuildPluginEventPayload(
         registered, eventName, data, actorName, actorFormId));
     return 1;
+}
+
+int SetActorFlag(std::uint32_t actorFormId, int handle, std::uint32_t flag, int active) {
+    const char* flagName = flag == ExternalCommandRegistry::kTalkLock ? "talk_lock" : "animation_busy";
+    int code = 1;
+    if (active != 0 && active != 1) {
+        code = -4;
+    } else if (handle <= 0 || !g_registry.IsOwnedHandle(static_cast<std::uint32_t>(handle))) {
+        code = -1;
+    } else {
+        switch (g_actorControl.Set(static_cast<std::uint32_t>(handle), actorFormId,
+            static_cast<ExternalCommandRegistry::ActorFlag>(flag), active != 0)) {
+            case ExternalCommandRegistry::ControlResult::Applied: code = 1; break;
+            case ExternalCommandRegistry::ControlResult::StillHeldByOther: code = 2; break;
+            case ExternalCommandRegistry::ControlResult::InvalidHandle: code = -1; break;
+            case ExternalCommandRegistry::ControlResult::InvalidActor: code = -2; break;
+            case ExternalCommandRegistry::ControlResult::Full: code = -3; break;
+        }
+    }
+    if (code > 0) {
+        Logger::LogInfo("[ADDON_CONTROL] %s=%d actor=0x%08X handle=%d result=%d",
+            flagName, active, actorFormId, handle, code);
+    } else {
+        Logger::LogWarning("[ADDON_CONTROL] %s=%d rejected actor=0x%08X handle=%d result=%d",
+            flagName, active, actorFormId, handle, code);
+    }
+    return code;
+}
+
+int GetActorFlags(std::uint32_t actorFormId, int handle) {
+    return handle < 0 ? 0 : static_cast<int>(g_actorControl.Flags(actorFormId, static_cast<std::uint32_t>(handle)));
+}
+
+bool IsActorTalkBlocked(std::uint32_t actorFormId) {
+    return g_actorControl.Flags(actorFormId) != 0;
+}
+
+bool IsActorAnimationBusy(std::uint32_t actorFormId) {
+    return (g_actorControl.Flags(actorFormId) & ExternalCommandRegistry::kAnimationBusy) != 0;
+}
+
+const char* ActorBlockReason(std::uint32_t actorFormId) {
+    const std::uint32_t flags = g_actorControl.Flags(actorFormId);
+    if ((flags & ExternalCommandRegistry::kAnimationBusy) != 0) return "animation_busy";
+    return (flags & ExternalCommandRegistry::kTalkLock) != 0 ? "talk_locked" : nullptr;
+}
+
+int SetInteractionEnabled(int handle, int enabled) {
+    if (handle <= 0 || !g_registry.IsOwnedHandle(static_cast<std::uint32_t>(handle))) {
+        Logger::LogWarning("[ADDON_CONTROL] interaction=%d rejected handle=%d reason=unknown_handle", enabled, handle);
+        return -1;
+    }
+    if (enabled != 0 && enabled != 1) {
+        Logger::LogWarning("[ADDON_CONTROL] interaction=%d rejected handle=%d reason=invalid_value", enabled, handle);
+        return -2;
+    }
+    const int result = Interaction::Request(enabled == 1);
+    Logger::LogInfo("[ADDON_CONTROL] interaction=%d handle=%d result=%s state=%d",
+        enabled, handle, result == 1 ? "unchanged" : "accepted", Interaction::Status());
+    return result;
+}
+
+void ClearActorFlags(const char* reason) {
+    const std::size_t cleared = g_actorControl.Clear();
+    if (cleared != 0) {
+        Logger::LogInfo("[ADDON_CONTROL] cleared flags actors=%zu reason=%s", cleared, reason ? reason : "unknown");
+    }
 }
 
 void Update() {

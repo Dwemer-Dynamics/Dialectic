@@ -1249,6 +1249,17 @@ std::uint32_t FormIdOf(const void* form) {
     }
 }
 
+std::uint32_t ActorFormIdOf(const void* reference) {
+    if (!reference) return 0;
+    __try {
+        const auto* actor = static_cast<const TESObjectREFR*>(reference);
+        const bool isActor = actor->typeID == kFormType_Character || actor->typeID == kFormType_Creature;
+        return isActor && actor->refID != 0x00000014 ? actor->refID : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 bool RegisterExternalCommandEvent() {
     if (g_externalCommandEventRegistered && g_ownedExternalCommandEventRegistered) {
         return true;

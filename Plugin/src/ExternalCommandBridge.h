@@ -42,6 +42,23 @@ int SendPluginEvent(std::uint32_t actorFormId,
                     const std::string& name,
                     const std::string& data);
 
+// Addon control (game thread). SetActorFlag returns 1 applied, 2 released while another
+// owner still holds the flag, -1 unknown handle, -2 invalid actor, -3 full (64 actors),
+// -4 value other than 0 or 1. flag is an ExternalCommandRegistry::ActorFlag.
+int SetActorFlag(std::uint32_t actorFormId, int handle, std::uint32_t flag, int active);
+// Bitmask of ExternalCommandRegistry::ActorFlag values; handle 0 reads every owner.
+int GetActorFlags(std::uint32_t actorFormId, int handle);
+// Hot-path gates; a lock-free load while no addon holds a flag. Either flag blocks
+// Dialectic speech; only animation busy also blocks Dialectic actions on the actor.
+bool IsActorTalkBlocked(std::uint32_t actorFormId);
+bool IsActorAnimationBusy(std::uint32_t actorFormId);
+// "talk_locked", "animation_busy" or nullptr.
+const char* ActorBlockReason(std::uint32_t actorFormId);
+// 1 already in that state, 2 change accepted (synchronizing), -1 unknown handle, -2 bad value.
+int SetInteractionEnabled(int handle, int enabled);
+// Drops every actor flag (save load, main menu, exit, API shutdown).
+void ClearActorFlags(const char* reason);
+
 // Expires timed-out requests and silently drops requests from older runtime generations.
 void Update();
 // Drops pending requests without a server result (halt, save/load, shutdown).

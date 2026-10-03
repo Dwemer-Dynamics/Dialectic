@@ -12,6 +12,7 @@
 #include "HeadVoiceVolumeUtils.h"
 #include "HTTPManager.h"
 #include "Config.h"
+#include "ExternalCommandBridge.h"
 #include "Misc.h"
 #include "SpatialAwarenessFNV.h"
 #include "TargetManager.h"
@@ -992,6 +993,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static bool IsRechatAgentEligible(uint32_t formId, const std::string& name, std::string* reason = nullptr) {
+        if (const char* blocked = ExternalCommandBridge::ActorBlockReason(formId)) {
+            if (reason) {
+                *reason = blocked;
+            }
+            return false;
+        }
         if (formId == 0) {
             if (reason) {
                 *reason = RechatNameHintAllowed(name)
@@ -3886,7 +3893,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         for (const Candidate& candidate : candidates) {
-            if (candidate.formId == 0 || candidate.formId == rejectedFormId) {
+            if (candidate.formId == 0 || candidate.formId == rejectedFormId ||
+                ExternalCommandBridge::IsActorTalkBlocked(candidate.formId)) {
                 continue;
             }
             if (!IsLivePlaybackSpeaker(candidate.formId, line.actor)) {
@@ -3929,6 +3937,13 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         const uint32_t speakerFormId = ResolveSpeakerFormId(line);
+        // An addon talk lock or animation-busy flag drops the line; never rebind it to another actor.
+        if (const char* blocked = ExternalCommandBridge::ActorBlockReason(speakerFormId)) {
+            if (reason) {
+                *reason = std::string("speaker is ") + blocked + " by an addon";
+            }
+            return true;
+        }
         std::string speakerReason;
         if (!IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
             if (TryRebindSpeakerForPlayback(line, speakerFormId, speakerReason)) {

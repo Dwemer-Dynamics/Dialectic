@@ -121,6 +121,7 @@ void Shutdown() {
     XNVSEAdapter::UnregisterPublicDialecticEvents();
     GameThreadDispatcher::CancelByType("public_event", "public_event_api_shutdown");
     ExternalCommandBridge::CancelAll("public_event_api_shutdown");
+    ExternalCommandBridge::ClearActorFlags("public_event_api_shutdown");
 }
 
 } // namespace ExternalEventAPI

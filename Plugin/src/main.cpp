@@ -61,6 +61,7 @@
 #include "TaskManager.h"
 #include "ExternalEventAPI.h"
 #include "ExternalCommandBridge.h"
+#include "ExternalCommandRegistry.h"
 #include "VoiceRecorder.h"
 #include "Console.h"
 #include "DialecticInitialization.h"
@@ -1409,6 +1410,15 @@ static ParamInfo kParams_OwnedCommandStatus[2] = {
     { "request id", kParamType_Integer, 0 }
 };
 
+static ParamInfo kParams_HandleValue[2] = {
+    { "handle", kParamType_Integer, 0 },
+    { "value", kParamType_Integer, 0 }
+};
+
+static ParamInfo kParams_OptionalHandle[1] = {
+    { "handle", kParamType_Integer, 1 }
+};
+
 static ParamInfo kParams_PluginEvent[3] = {
     { "bridge", kParamType_String, 0 },
     { "event name", kParamType_String, 0 },
@@ -1543,6 +1553,77 @@ static bool Cmd_DialecticStopAllDialogue_Execute(COMMAND_ARGS) {
     *result = 1;
     return true;
 }
+
+// Addon API level for capability checks; raise it whenever addon-facing commands are appended.
+constexpr int kAddonApiVersion = 1;
+
+static bool Cmd_DialecticGetAddonApiVersion_Execute(COMMAND_ARGS) {
+    *result = kAddonApiVersion;
+    return true;
+}
+
+static bool Cmd_DialecticSetInteractionEnabled_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    int enabled = -1;
+    *result = 0;
+    if (ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &handle, &enabled)) {
+        if (!g_subsystemsInitialized) InitializeSubsystems();
+        *result = ExternalCommandBridge::SetInteractionEnabled(handle, enabled);
+    }
+    return true;
+}
+
+static bool ExecuteSetActorFlag(COMMAND_ARGS, std::uint32_t flag) {
+    int handle = 0;
+    int active = -1;
+    *result = 0;
+    if (ExtractTwoIntegerArgs(PASS_COMMAND_ARGS, &handle, &active)) {
+        *result = ExternalCommandBridge::SetActorFlag(XNVSEAdapter::ActorFormIdOf(thisObj), handle, flag, active);
+    }
+    return true;
+}
+
+static bool Cmd_DialecticSetActorTalkLock_Execute(COMMAND_ARGS) {
+    return ExecuteSetActorFlag(PASS_COMMAND_ARGS, ExternalCommandRegistry::kTalkLock);
+}
+
+static bool Cmd_DialecticSetActorAnimationBusy_Execute(COMMAND_ARGS) {
+    return ExecuteSetActorFlag(PASS_COMMAND_ARGS, ExternalCommandRegistry::kAnimationBusy);
+}
+
+static bool Cmd_DialecticGetActorControlFlags_Execute(COMMAND_ARGS) {
+    int handle = 0;
+    *result = 0;
+    if (ExtractIntegerArgs(PASS_COMMAND_ARGS, &handle)) {
+        *result = ExternalCommandBridge::GetActorFlags(XNVSEAdapter::ActorFormIdOf(thisObj), handle);
+    }
+    return true;
+}
+
+static CommandInfo kCommandInfo_DialecticGetAddonApiVersion = {
+    "DialecticGetAddonApiVersion", "", 0, "Returns the Dialectic addon API level.", 0, 0,
+    nullptr, Cmd_DialecticGetAddonApiVersion_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSetInteractionEnabled = {
+    "DialecticSetInteractionEnabled", "", 0, "Requests AI interaction on or off for a bridge handle.", 0, 2,
+    kParams_HandleValue, Cmd_DialecticSetInteractionEnabled_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSetActorTalkLock = {
+    "DialecticSetActorTalkLock", "", 0, "Sets or releases this handle's talk lock on the calling actor.", 1, 2,
+    kParams_HandleValue, Cmd_DialecticSetActorTalkLock_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticSetActorAnimationBusy = {
+    "DialecticSetActorAnimationBusy", "", 0, "Sets or releases this handle's animation-busy flag on the calling actor.",
+    1, 2, kParams_HandleValue, Cmd_DialecticSetActorAnimationBusy_Execute, nullptr, nullptr, 0
+};
+
+static CommandInfo kCommandInfo_DialecticGetActorControlFlags = {
+    "DialecticGetActorControlFlags", "", 0, "Returns 1 talk locked plus 2 animation busy for the calling actor.", 1, 1,
+    kParams_OptionalHandle, Cmd_DialecticGetActorControlFlags_Execute, nullptr, nullptr, 0
+};
 
 static CommandInfo kCommandInfo_DialecticRegisterExternalBridge = {
     "DialecticRegisterExternalBridge", "", 0, "Claims an ExtCmd bridge name for the calling plugin.", 0, 1,
@@ -1802,7 +1883,12 @@ static void RegisterDialecticScriptCommands(const NVSEInterface* nvse) {
         &kCommandInfo_DialecticStopAllDialogue,
         &kCommandInfo_DialecticRegisterOwnedBridge,
         &kCommandInfo_DialecticCompleteOwnedCommand,
-        &kCommandInfo_DialecticGetExternalCommandStatus
+        &kCommandInfo_DialecticGetExternalCommandStatus,
+        &kCommandInfo_DialecticGetAddonApiVersion,
+        &kCommandInfo_DialecticSetInteractionEnabled,
+        &kCommandInfo_DialecticSetActorTalkLock,
+        &kCommandInfo_DialecticSetActorAnimationBusy,
+        &kCommandInfo_DialecticGetActorControlFlags
     };
 
     for (CommandInfo* command : commands) {
