@@ -1,0 +1,29 @@
+; ParityProbe example: JIP LN runs this once for each new game or loaded save.
+; Owned-bridge registration is idempotent for the same owner, so repeating it per load is expected.
+
+if GetPluginVersion "Dialectic" < 10103
+    Print "[ParityProbe] Dialectic is not loaded."
+    return
+endif
+
+; The plugin version does not identify the extension API, so look up every
+; Dialectic command the compiled scripts use. GetCommandOpcode returns 0 for an
+; unknown name, which keeps an older Dialectic DLL from compiling them.
+if GetCommandOpcode "DialecticRegisterOwnedBridge" == 0
+    Print "[ParityProbe] This Dialectic build has no owned-bridge API."
+    return
+elseif GetCommandOpcode "DialecticCompleteOwnedCommand" == 0
+    Print "[ParityProbe] This Dialectic build has no owned-bridge API."
+    return
+elseif GetCommandOpcode "DialecticGetExternalCommandStatus" == 0
+    Print "[ParityProbe] This Dialectic build has no owned-bridge API."
+    return
+elseif GetCommandOpcode "DialecticSendPluginEvent" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
+    return
+elseif GetCommandOpcode "DialecticIsActorTalking" == 0
+    Print "[ParityProbe] This Dialectic build has no plugin extension API."
+    return
+endif
+
+call (CompileScript "ParityProbe/Register.txt")

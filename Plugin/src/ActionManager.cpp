@@ -6,6 +6,7 @@
 #include "AgentManager.h"
 #include "Config.h"
 #include "Console.h"
+#include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
@@ -74,6 +75,10 @@ struct ActionRequest {
     bool narratorAuthority = false;
     bool emitFuncret = true;
     bool directorScene = false;
+    // ExtCmd results identify their request separately from the CHIM command string.
+    std::string resultStatus;
+    std::string externalBridge;
+    uint32_t externalRequestId = 0;
 };
 
 struct NativePackageState {
@@ -913,8 +918,13 @@ void SendFuncretResult(const ActionRequest& request, const std::string& result) 
     }
     payload
             << "\"target\":\"" << HTTPManager::EscapeJson(target.empty() ? "result" : target) << "\","
-            << "\"result\":\"" << HTTPManager::EscapeJson(cleanResult) << "\""
-            << "}";
+            << "\"result\":\"" << HTTPManager::EscapeJson(cleanResult) << "\"";
+    if (!request.resultStatus.empty()) {
+        payload << ",\"status\":\"" << HTTPManager::EscapeJson(request.resultStatus) << "\","
+                << "\"bridge\":\"" << HTTPManager::EscapeJson(request.externalBridge) << "\","
+                << "\"request_id\":" << request.externalRequestId;
+    }
+    payload << "}";
 
     Logger::LogInfo("ActionManager: Sending funcret for %s speaker=[%s] target=[%s] result=[%s]",
         request.action.c_str(),
@@ -2417,7 +2427,22 @@ bool TranslateRolemasterInstruction(ActionRequest& request, const std::vector<st
     return true;
 }
 
+// An addon animation-busy flag blocks Dialectic actions on that actor; addon ExtCmd requests are not affected.
+static bool RejectAnimationBusyActor(const ActionRequest& request, uint32_t actorFormId, const char* source) {
+    if (!ExternalCommandBridge::IsActorAnimationBusy(actorFormId)) return false;
+    Logger::LogInfo("%s: Action %s rejected; actor 0x%08X is animation busy by an addon",
+        source ? source : "ActionManager", request.action.c_str(), actorFormId);
+    SendFuncretResult(request, request.action + " failed because actor_animation_busy.");
+    return true;
+}
+
 bool SendDirectorTalkInstruction(const ActionRequest& request, const char* source) {
+    if (const char* blocked = ExternalCommandBridge::ActorBlockReason(request.speakerFormId)) {
+        Logger::LogInfo("%s: Director Talk instruction rejected; speaker 0x%08X is %s by an addon",
+            source ? source : "ActionManager", request.speakerFormId, blocked);
+        SendFuncretResult(request, request.action + " failed because speaker_" + blocked + ".");
+        return false;
+    }
     const std::string speaker = Trim(request.speaker);
     const std::string instruction = Trim(request.instruction.empty() ? request.target : request.instruction);
     if (speaker.empty() || instruction.empty()) {
@@ -2782,6 +2807,9 @@ bool ExecuteNarratorAction(ActionRequest request, const char* source) {
             SendFuncretResult(request, request.action + " failed because target_not_in_current_scene.");
             return false;
         }
+        if (RejectAnimationBusyActor(request, request.targetFormId, sourceName.c_str())) {
+            return false;
+        }
     }
 
     if (request.action == "SpawnItem" && request.itemBaseId == 0) {
@@ -2884,6 +2912,9 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
             }
         }
     }
+    if (RejectAnimationBusyActor(request, request.speakerFormId, source)) {
+        return false;
+    }
 
     std::string itemResolutionError;
     if (!ResolveInventoryItemBase(request, itemResolutionError)) {
@@ -2931,6 +2962,7 @@ bool ExecuteActionRequest(ActionRequest request, const char* source) {
     return GameThreadDispatcher::Enqueue("action", commandKey, generation,
         [request]() {
             if (!Interaction::IsCurrent(request.interactionEpoch)) return;
+            if (RejectAnimationBusyActor(request, request.speakerFormId, "ActionManager")) return;
             const int actionCode = ActionCodeForAction(request.action);
             if (actionCode == 2 || actionCode == 3) {
                 XNVSEAdapter::NativeTradeMenuInfo menuInfo;
@@ -3134,6 +3166,11 @@ bool RequestExternalFollowerAction(ExternalFollowerAction action,
             sourceName, actorFormId);
         return false;
     }
+    if (ExternalCommandBridge::IsActorAnimationBusy(actorFormId)) {
+        Logger::LogInfo("%s: external follower action rejected; actor 0x%08X is animation busy by an addon",
+            sourceName, actorFormId);
+        return false;
+    }
 
     if (action != ExternalFollowerAction::Recruit && !actor.playerTeammate) {
         Logger::LogWarning("%s: external follower action rejected because actor is not a teammate actor=0x%08X",
@@ -3207,6 +3244,24 @@ bool HandleRoleCommandJson(const std::string& lineObject,
 
     const std::vector<std::string> commandArgs = ExtractJsonStringArrayValue(lineObject, "command_args");
 
+    if (command.rfind("ExtCmd", 0) == 0 &&
+        Trim(ExtractJsonStringValue(lineObject, "action_source")) != "director_scene") {
+        // CHIM passes one parameter string; the exact speaker ref is required separately.
+        // Director scenes keep their catalog-only action gate below.
+        std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
+        if (speaker.empty()) {
+            speaker = Trim(ExtractJsonStringValue(lineObject, "character"));
+        }
+        uint32_t speakerFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "speaker_refid"));
+        if (speakerFormId == 0) {
+            speakerFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "speaker_formid"));
+        }
+        const std::string parameter = commandArgs.empty() ? std::string() : commandArgs[0];
+        return ExternalCommandBridge::HandleServerCommand(command, parameter, speaker, speakerFormId,
+            runtimeGeneration != 0 ? runtimeGeneration : RuntimeGeneration::Current(),
+            source ? source : "ActionManager");
+    }
+
     if (command == "DebugNotification") {
         std::string notification;
         if (!commandArgs.empty()) {
@@ -3243,8 +3298,28 @@ bool HandleRoleCommandJson(const std::string& lineObject,
     return ExecuteActionRequest(request, source);
 }
 
+void SendExternalCommandResult(const std::string& command,
+                               const std::string& speaker,
+                               uint32_t speakerFormId,
+                               const std::string& parameter,
+                               const std::string& bridge,
+                               uint32_t requestId,
+                               bool completed,
+                               const std::string& result) {
+    ActionRequest request;
+    request.action = command;
+    request.speaker = speaker;
+    request.speakerFormId = speakerFormId;
+    request.target = parameter;
+    request.resultStatus = completed ? "completed" : "failed";
+    request.externalBridge = bridge;
+    request.externalRequestId = requestId;
+    SendFuncretResult(request, result);
+}
+
 int HaltAIActions(const char* source) {
     const std::vector<std::pair<uint32_t, std::string>> targets = BuildHaltTargetSnapshot();
+    ExternalCommandBridge::CancelAll(source ? source : "halt_ai_actions");
     ClearAllNativePackageStates();
     RequestNativeAttackCleanup("halt_ai_actions");
     CancelNativePickups("halt_ai_actions");
@@ -3598,6 +3673,7 @@ static bool HasActiveWork() {
 }
 
 void Update() {
+    ExternalCommandBridge::Update();
     const auto now = std::chrono::steady_clock::now();
     const auto interval = HasActiveWork()
         ? std::chrono::milliseconds(50)

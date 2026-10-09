@@ -12,6 +12,7 @@
 #include "HeadVoiceVolumeUtils.h"
 #include "HTTPManager.h"
 #include "Config.h"
+#include "ExternalCommandBridge.h"
 #include "Misc.h"
 #include "SpatialAwarenessFNV.h"
 #include "TargetManager.h"
@@ -992,6 +993,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
     }
 
     static bool IsRechatAgentEligible(uint32_t formId, const std::string& name, std::string* reason = nullptr) {
+        if (const char* blocked = ExternalCommandBridge::ActorBlockReason(formId)) {
+            if (reason) {
+                *reason = blocked;
+            }
+            return false;
+        }
         if (formId == 0) {
             if (reason) {
                 *reason = RechatNameHintAllowed(name)
@@ -2864,6 +2871,29 @@ static uint32_t g_faceTargetTargetFormId = 0;
         g_pendingRechatNextCheck = {};
     }
 
+    // One slot packing (generation << 2) | mode: only the latest player turn generation can still
+    // produce rechat-eligible lines, so a new turn or generation change retires the previous value.
+    static constexpr const char* kAddonTurnModes[] = { "", "STANDARD", "WHISPER", "SHOUT" };
+    static std::atomic<std::uint64_t> g_addonTurnMode{0};
+
+    void SetAddonTurnMode(std::uint64_t generation, const char* mode) {
+        std::uint64_t index = 0;
+        for (std::uint64_t i = 1; mode && i < 4; ++i) {
+            if (std::strcmp(mode, kAddonTurnModes[i]) == 0) index = i;
+        }
+        g_addonTurnMode.store(index ? ((generation << 2) | index) : 0);
+    }
+
+    // Mode for rechat from the current turn: the addon request mode when that turn was an addon
+    // message, otherwise the configured global mode.
+    static std::string CurrentTurnMode() {
+        const std::uint64_t packed = g_addonTurnMode.load();
+        if (packed != 0 && (packed >> 2) == RuntimeGeneration::Current()) {
+            return kAddonTurnModes[packed & 3];
+        }
+        return Config::currentMode;
+    }
+
     void SetPlayerTurnAudience(const std::string& peoplePipe) {
         std::vector<std::string> names;
         std::set<std::string> seen;
@@ -2938,9 +2968,12 @@ static uint32_t g_faceTargetTargetFormId = 0;
             WriteRechatStatus("skipped", cleanSpeaker, "request", "plugin_rechat_disabled", cleanTarget);
             return 0;
         }
-        if (EqualsIgnoreCase(Config::currentMode, "WHISPER")) {
+        // A whisper addon turn stays private like a global Whisper turn. A global Whisper still
+        // suppresses rechat after an addon Standard/Shout turn, matching the server rechat gate.
+        const std::string turnMode = CurrentTurnMode();
+        if (EqualsIgnoreCase(Config::currentMode, "WHISPER") || EqualsIgnoreCase(turnMode, "WHISPER")) {
             Log("SpeakManager: Rechat skipped for %s because %s mode is private",
-                cleanSpeaker.c_str(), Config::currentMode.c_str());
+                cleanSpeaker.c_str(), EqualsIgnoreCase(turnMode, "WHISPER") ? turnMode.c_str() : Config::currentMode.c_str());
             WriteRechatStatus("skipped", cleanSpeaker, "request", "private_mode", cleanTarget);
             return 0;
         }
@@ -3037,7 +3070,7 @@ static uint32_t g_faceTargetTargetFormId = 0;
         const std::string chainId = EnsureRechatChainId(cleanSpeaker, cleanListener, cleanTarget);
         const std::string resolvedTarget = cleanTarget.empty() ? cleanListener : cleanTarget;
         std::vector<std::string> audienceNames;
-        if (EqualsIgnoreCase(Config::currentMode, "CLOSE")) {
+        if (EqualsIgnoreCase(turnMode, "CLOSE")) {
             std::lock_guard<std::mutex> lock(g_rechatMutex);
             audienceNames = g_playerTurnAudience;
         } else {
@@ -3173,6 +3206,10 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         return false;
+    }
+
+    uint32_t GetActivePlaybackSpeakerFormId() {
+        return g_currentPlaybackLineActive ? g_currentSpeakerFormId : 0;
     }
 
     QueueStatus GetQueueStatus() {
@@ -3882,7 +3919,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         for (const Candidate& candidate : candidates) {
-            if (candidate.formId == 0 || candidate.formId == rejectedFormId) {
+            if (candidate.formId == 0 || candidate.formId == rejectedFormId ||
+                ExternalCommandBridge::IsActorTalkBlocked(candidate.formId)) {
                 continue;
             }
             if (!IsLivePlaybackSpeaker(candidate.formId, line.actor)) {
@@ -3925,6 +3963,13 @@ static uint32_t g_faceTargetTargetFormId = 0;
         }
 
         const uint32_t speakerFormId = ResolveSpeakerFormId(line);
+        // An addon talk lock or animation-busy flag drops the line; never rebind it to another actor.
+        if (const char* blocked = ExternalCommandBridge::ActorBlockReason(speakerFormId)) {
+            if (reason) {
+                *reason = std::string("speaker is ") + blocked + " by an addon";
+            }
+            return true;
+        }
         std::string speakerReason;
         if (!IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
             if (TryRebindSpeakerForPlayback(line, speakerFormId, speakerReason)) {

@@ -25,6 +25,16 @@ bool RequestExternalFollowerAction(ExternalFollowerAction action,
 bool HandleRoleCommandJson(const std::string& lineObject,
                            const char* source = "ActionManager",
                            uint64_t runtimeGeneration = 0);
+// Reports an ExtCmd outcome through the existing funcret path. Never call this
+// when a request is merely accepted or dispatched.
+void SendExternalCommandResult(const std::string& command,
+                               const std::string& speaker,
+                               uint32_t speakerFormId,
+                               const std::string& parameter,
+                               const std::string& bridge,
+                               uint32_t requestId,
+                               bool completed,
+                               const std::string& result);
 void Update();
 
 // Clears native package overrides during save/load, cell, and runtime generation

@@ -2,6 +2,7 @@
 
 #include "TargetManager.h"
 #include "ActorEligibilityFNV.h"
+#include "ExternalCommandBridge.h"
 #include "RuntimeSnapshot.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -164,7 +165,8 @@ bool FindNearestNPC(float maxDistance) {
         if (nativeRegistryAvailable && !RuntimeSnapshot::IsActorInScene(actor, gameState)) {
             continue;
         }
-        if (!ActorEligibilityFNV::IsAutoActivationAllowed(EligibilityMetadata(actor))) {
+        if (!ActorEligibilityFNV::IsAutoActivationAllowed(EligibilityMetadata(actor)) ||
+            ExternalCommandBridge::IsActorTalkBlocked(actor.formId)) {
             continue;
         }
         if (!nearest || actor.distanceToPlayer < nearest->distanceToPlayer) {
@@ -193,7 +195,7 @@ bool FindNearestNPC(float maxDistance) {
     float closestDist = maxDistance;
     
     for (auto& npc : g_nearbyNPCs) {
-        if (npc.distance < closestDist) {
+        if (npc.distance < closestDist && !ExternalCommandBridge::IsActorTalkBlocked(npc.formId)) {
             closest = &npc;
             closestDist = npc.distance;
         }

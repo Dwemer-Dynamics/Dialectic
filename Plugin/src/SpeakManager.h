@@ -76,6 +76,9 @@ void GuardActorForPendingDialogue(uint32_t actorFormId, const std::string& actor
 
 // Preserve the player-centered audience for later rechat requests.
 void SetPlayerTurnAudience(const std::string& peoplePipe);
+// Records the request-scoped addon mode (STANDARD/WHISPER/SHOUT) for one turn generation, or
+// clears it when mode is nullptr. Rechat for that generation follows it; a new turn replaces it.
+void SetAddonTurnMode(std::uint64_t generation, const char* mode);
 
 // Rechat chain state
 bool BeginRechatAttempt(const std::string& speaker);
@@ -142,6 +145,8 @@ void UpdatePlaybackFrame();
 
 // Check if currently speaking
 bool IsSpeaking();
+// Exact actor whose Dialectic line is playing now, or 0.
+uint32_t GetActivePlaybackSpeakerFormId();
 QueueStatus GetQueueStatus();
 SpeechDiagnostics GetDiagnostics();
 
