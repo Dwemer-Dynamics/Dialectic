@@ -1,6 +1,7 @@
 #include "AutoGreetingFNV.h"
 
 #include "ActorPositionResolverFNV.h"
+#include "AgentManager.h"
 #include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "HTTPManager.h"
@@ -153,6 +154,12 @@ void Update() {
     if (GameLoop::IsConversationActive() || SpeakManager::IsSpeaking() ||
         HTTPManager::IsStreamInProgress() || HTTPManager::HasPendingResponse()) {
         cancel("dialogue_or_input_active");
+        return;
+    }
+
+    // The server picks greeters from nearby-actor context; only registered agents may greet.
+    if (!AgentManager::IsAIAgent(pending.npcFormId)) {
+        cancel("actor_not_registered");
         return;
     }
 

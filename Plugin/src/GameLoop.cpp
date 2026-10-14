@@ -108,6 +108,26 @@ static std::atomic<bool> g_conversationActive{false};
 static bool g_conversationIsNarrator = false;
 static std::string g_conversationPartner;
 static std::atomic<uint32_t> g_conversationPartnerFormId{0};
+// Actor bound by the latest accepted external speech request; valid only for its runtime generation.
+static std::atomic<uint32_t> g_externalSpeechActorFormId{0};
+static std::atomic<std::uint64_t> g_externalSpeechGeneration{0};
+// Partner of a conversation started or taken over by the documented actor-bound API (Ask, OpenPrompt,
+// addon message). Every partner change resets it, so ordinary conversations never inherit it.
+static std::atomic<uint32_t> g_externalConversationActorFormId{0};
+
+static bool IsExternalConversationPartner(uint32_t formId) {
+    // A narrator conversation keeps partner form id 0, so this never matches the Narrator.
+    return formId != 0 && g_conversationActive &&
+        g_conversationPartnerFormId.load() == formId &&
+        g_externalConversationActorFormId.load() == formId;
+}
+
+static void MarkExternalConversation(uint32_t formId) {
+    if (g_conversationActive && !g_conversationIsNarrator && g_conversationPartnerFormId.load() == formId) {
+        g_externalConversationActorFormId.store(formId);
+    }
+}
+
 struct ConversationCooldownEntry {
     std::string name;
     std::chrono::steady_clock::time_point until;
@@ -422,6 +442,17 @@ static bool IsConversationTargetEligible(
     return false;
 }
 
+// Automatic target selection (crosshair, remembered or nearest actor) only picks registered agents,
+// like CHIM. Explicit Manual Activate and the actor-bound external API remain the ways to add one.
+static bool IsRegisteredConversationTarget(uint32_t formId, const std::string& name, const char* source) {
+    if (AgentManager::IsAIAgent(formId)) {
+        return true;
+    }
+    Logger::LogInfo("GameLoop: Skipping %s target %s (0x%08X): not a registered AI agent",
+        source ? source : "conversation", name.c_str(), formId);
+    return false;
+}
+
 static bool AudiencePositionEligible(const ActorPositionResolverFNV::PositionResult& position) {
     if (!position.resolved || position.formId == 0) {
         return false;
@@ -472,6 +503,12 @@ static void AppendConversationPartnerAudienceName(
     std::set<std::string>& seen) {
     if (g_conversationPartnerFormId != 0 &&
         !ActorPositionResolverFNV::IsActorInPlayerScene(g_conversationPartnerFormId)) {
+        return;
+    }
+    // A deregistered partner leaves the audience unless the actor-bound API started the conversation.
+    if (g_conversationPartnerFormId != 0 &&
+        !AgentManager::IsAIAgent(g_conversationPartnerFormId) &&
+        !IsExternalConversationPartner(g_conversationPartnerFormId)) {
         return;
     }
 
@@ -530,7 +567,10 @@ static bool IsPrivateConversationMode() {
         EqualsIgnoreCase(EffectiveMode(), "CLOSE");
 }
 
-static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
+// Speaking audience is the conversation partner, the player, an explicitly bound actor and nearby
+// registered agents. Unregistered nearby actors stay in nearby-actor context only, matching CHIM.
+static std::string BuildAudienceSnapshotJson(const std::string& source = "",
+                                             const std::string& boundActorName = "") {
     std::vector<std::string> names;
     std::set<std::string> seen;
     const float playerSpeechDistanceMultiplier = GetPlayerSpeechDistanceMultiplier();
@@ -538,6 +578,7 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
     const float closeRadius = closeMode ? GetConversationTargetRadius() : 0.0f;
 
     AppendConversationPartnerAudienceName(names, seen);
+    AppendUniqueAudienceName(names, seen, boundActorName);
     AppendUniqueAudienceName(names, seen, Config::playerName.empty() ? "Player" : Config::playerName);
 
     const auto player = ActorPositionResolverFNV::ResolvePlayer();
@@ -557,7 +598,8 @@ static std::string BuildAudienceSnapshotJson(const std::string& source = "") {
                 position.formId == 0 ||
                 position.formId == 0x00000014 ||
                 position.actorName.empty() ||
-                position.actorName == "<no name>") {
+                position.actorName == "<no name>" ||
+                !AgentManager::IsAIAgent(position.formId)) {
                 continue;
             }
 
@@ -901,6 +943,7 @@ static bool ShouldRouteToNarrator(const std::string& message, bool allowPitchRou
 }
 
 static void StartNarratorConversation(const char* reason) {
+    g_externalConversationActorFormId = 0;
     g_conversationActive = true;
     g_conversationIsNarrator = true;
     g_conversationPartner = kNarratorName;
@@ -939,6 +982,8 @@ struct PreparedTextInputTarget {
     uint32_t formId = 0;
     std::string name;
     std::uint64_t runtimeGeneration = 0;
+    // Prepared by the actor-bound OpenPrompt request rather than automatic target selection.
+    bool external = false;
 };
 
 static PreparedTextInputTarget g_preparedTextInputTarget;
@@ -2388,6 +2433,10 @@ static FreshTargetResult TrySetCurrentTargetFromCrosshair(bool announceTarget) {
         return FreshTargetResult::Blocked;
     }
 
+    if (!IsRegisteredConversationTarget(npc.formId, npc.name, "crosshair")) {
+        return FreshTargetResult::NoTarget;
+    }
+
     if (!IsConversationTargetEligible(npc.formId, npc.name, true, true, npc.isCreature)) {
         return FreshTargetResult::Blocked;
     }
@@ -2423,6 +2472,9 @@ static bool UpdateConversationPartnerFromCurrentTarget(const char* reason) {
     const bool changed = g_conversationPartnerFormId != currentTarget.formId ||
         !EqualsIgnoreCase(g_conversationPartner, currentTarget.name);
 
+    if (changed || !g_conversationActive || g_conversationIsNarrator) {
+        g_externalConversationActorFormId = 0;
+    }
     g_conversationActive = true;
     g_conversationIsNarrator = false;
     g_conversationPartner = currentTarget.name;
@@ -2454,6 +2506,9 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         (!currentTarget.isActor || !currentTarget.isAlive)) {
         Logger::LogInfo("GameLoop: Remembered target %s (0x%08X) has stale actor state; continuing target fallback",
             currentTarget.name.c_str(), currentTarget.formId);
+    } else if (currentTarget.formId != 0 && !currentTarget.name.empty() &&
+               !IsRegisteredConversationTarget(currentTarget.formId, currentTarget.name, "remembered")) {
+        // Continue with the registered-agent fallback below.
     } else if (currentTarget.formId != 0 && !currentTarget.name.empty()) {
         if (NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name)) {
             Console::Print("[DIALECTIC] Cannot talk to %s (excluded)", currentTarget.name.c_str());
@@ -2475,10 +2530,13 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
             : ConversationStartResult::Blocked;
     }
 
-    NPCDetector::NPCInfo npc = NPCDetector::GetCrosshairNPC();
+    const NPCDetector::NPCInfo crosshairNpc = NPCDetector::GetCrosshairNPC();
     Logger::LogInfo("GameLoop: No crosshair target, finding closest NPC...");
     const float targetRadius = GetConversationTargetRadius();
-    npc = NPCDetector::GetClosestNPC(targetRadius);
+    NPCDetector::NPCInfo npc = NPCDetector::GetClosestNPC(targetRadius);
+    if (npc.isValid && !IsRegisteredConversationTarget(npc.formId, npc.name, "nearest npc")) {
+        npc = NPCDetector::NPCInfo{};
+    }
 
     if (!npc.isValid) {
         Logger::LogInfo("GameLoop: No NPCDetector target, finding closest spatial actor...");
@@ -2490,7 +2548,8 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         if (player.resolved) {
             for (const auto& position : positions) {
                 if (!position.resolved || position.formId == 0 || position.formId == 0x00000014 ||
-                    position.actorName.empty() || position.actorName == "<no name>") {
+                    position.actorName.empty() || position.actorName == "<no name>" ||
+                    !AgentManager::IsAIAgent(position.formId)) {
                     continue;
                 }
 
@@ -2512,6 +2571,12 @@ static ConversationStartResult TryStartConversationFromCurrentTarget() {
         }
 
         if (!bestPosition.resolved) {
+            if (crosshairNpc.isValid && !crosshairNpc.isDead &&
+                !AgentManager::IsAIAgent(crosshairNpc.formId)) {
+                Console::Print("[DIALECTIC] Manually activate %s before talking.", crosshairNpc.name.c_str());
+                Logger::LogInfo("GameLoop: No registered AI agent found for conversation");
+                return ConversationStartResult::Blocked;
+            }
             Console::Print("[DIALECTIC] No NPC found nearby");
             Logger::LogInfo("GameLoop: No valid NPC found for conversation");
             return ConversationStartResult::NoTarget;
@@ -2575,6 +2640,7 @@ static bool WriteTextInputTargetHint(uint32_t formId, const std::string& targetN
     g_preparedTextInputTarget.formId = formId;
     g_preparedTextInputTarget.name = targetName;
     g_preparedTextInputTarget.runtimeGeneration = RuntimeGeneration::Current();
+    g_preparedTextInputTarget.external = false;
     Logger::LogInfo("[TEXT_INPUT_TARGET] retained form=0x%08X name=%s generation=%llu",
         formId,
         targetName.c_str(),
@@ -2592,6 +2658,9 @@ static bool PrepareTargetFromNpcInfo(const NPCDetector::NPCInfo& npc, const char
             npc.name.c_str(),
             NPCDetector::IsExcluded(npc.formId, npc.name) ? 1 : 0,
             npc.isDead ? 1 : 0);
+        return false;
+    }
+    if (!IsRegisteredConversationTarget(npc.formId, npc.name, source)) {
         return false;
     }
     if (!IsConversationTargetEligible(npc.formId, npc.name, false, true, npc.isCreature)) {
@@ -2632,7 +2701,8 @@ static bool PrepareNearestSpatialTextInputTarget(float maxDistance) {
             position.formId == 0 ||
             position.formId == 0x00000014 ||
             position.actorName.empty() ||
-            position.actorName == "<no name>") {
+            position.actorName == "<no name>" ||
+            !AgentManager::IsAIAgent(position.formId)) {
             continue;
         }
         if (NPCDetector::IsExcluded(position.formId, position.actorName)) {
@@ -2716,6 +2786,7 @@ static void PrepareTextInputTargetHint() {
 
     if (currentTarget.formId != 0 &&
         !currentTarget.name.empty() &&
+        AgentManager::IsAIAgent(currentTarget.formId) &&
         !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
         IsConversationTargetEligible(currentTarget.formId, currentTarget.name, false) &&
         !IsConversationTargetOnCooldown(currentTarget.formId, currentTarget.name, false)) {
@@ -2732,6 +2803,8 @@ static void PrepareTextInputTargetHint() {
 
     if (g_conversationActive && !g_conversationIsNarrator &&
         g_conversationPartnerFormId != 0 && !g_conversationPartner.empty() &&
+        (AgentManager::IsAIAgent(g_conversationPartnerFormId) ||
+         IsExternalConversationPartner(g_conversationPartnerFormId)) &&
         IsConversationTargetEligible(g_conversationPartnerFormId, g_conversationPartner, false)) {
         WriteTextInputTargetHint(g_conversationPartnerFormId, g_conversationPartner);
         Logger::LogInfo("GameLoop: Prepared active conversation chatbox target %s (0x%08X)",
@@ -2858,6 +2931,9 @@ static void ProcessTextInputBridge() {
                     failedTarget.isAlive ? 1 : 0);
                 return;
             }
+            if (preparedTarget.external) {
+                MarkExternalConversation(preparedTarget.formId);
+            }
         } else {
             Logger::LogInfo("GameLoop: No active conversation for typed message, trying current target");
             const ConversationStartResult startResult = TryStartConversationFromCurrentTarget();
@@ -2890,6 +2966,9 @@ static void ProcessTextInputBridge() {
                     failedTarget.isAlive ? 1 : 0);
                 return;
             }
+            if (preparedTarget.external) {
+                MarkExternalConversation(preparedTarget.formId);
+            }
             SendPlayerMessage(message);
             return;
         }
@@ -2908,6 +2987,7 @@ static void ProcessTextInputBridge() {
                 currentTarget.isActor &&
                 currentTarget.isAlive &&
                 !currentTarget.name.empty() &&
+                AgentManager::IsAIAgent(currentTarget.formId) &&
                 !NPCDetector::IsExcluded(currentTarget.formId, currentTarget.name) &&
                 !IsConversationTargetOnCooldown(currentTarget.formId, currentTarget.name, true)) {
                 UpdateConversationPartnerFromCurrentTarget("typed input prepared target");
@@ -4470,6 +4550,7 @@ static bool BeginConversationWithActor(uint32_t actorFormId,
     }
 
     TargetManager::SetCurrentTarget(actorFormId, actorName, true);
+    g_externalConversationActorFormId = 0;
     g_conversationPartner = actorName;
     g_conversationPartnerFormId = actorFormId;
     g_conversationActive = true;
@@ -4553,6 +4634,28 @@ static bool ResolveExternalEventActor(uint32_t actorFormId,
     return true;
 }
 
+// The documented actor-bound API does not require registration, so its exact actor may answer
+// the accepted request until the next runtime generation.
+static void BindExternalSpeechActor(uint32_t actorFormId) {
+    g_externalSpeechGeneration.store(RuntimeGeneration::Current());
+    g_externalSpeechActorFormId.store(actorFormId);
+}
+
+bool IsResponseSpeakerAllowed(uint32_t actorFormId) {
+    if (actorFormId == 0) {
+        return false;
+    }
+    if (AgentManager::IsAIAgent(actorFormId)) {
+        return true;
+    }
+    // Ordinary conversations drop a deregistered partner; only an actor-bound API conversation keeps it.
+    if (IsExternalConversationPartner(actorFormId)) {
+        return true;
+    }
+    return g_externalSpeechActorFormId.load() == actorFormId &&
+        RuntimeGeneration::IsCurrent(g_externalSpeechGeneration.load());
+}
+
 bool IsExternalActorAvailable(uint32_t actorFormId) {
     if (MultiplayerSharing::IsListener() || !Interaction::Allowed()) return false;
     RuntimeSnapshot::ActorState actor;
@@ -4630,7 +4733,18 @@ bool RequestExternalExactSpeech(uint32_t actorFormId, const std::string& text) {
             actorFormId, exactText.size());
         return false;
     }
-    return HTTPManager::QueueNpcTtsPlay(actorFormId, actor.name, exactText);
+    // Bind before the HTTP task can run so a fast response is not rejected; restore the prior
+    // binding if nothing was queued. Clearing the actor first keeps every intermediate state closed.
+    const uint32_t previousActorFormId = g_externalSpeechActorFormId.load();
+    const std::uint64_t previousGeneration = g_externalSpeechGeneration.load();
+    BindExternalSpeechActor(actorFormId);
+    if (!HTTPManager::QueueNpcTtsPlay(actorFormId, actor.name, exactText)) {
+        g_externalSpeechActorFormId.store(0);
+        g_externalSpeechGeneration.store(previousGeneration);
+        g_externalSpeechActorFormId.store(previousActorFormId);
+        return false;
+    }
+    return true;
 }
 
 bool RequestExternalComment(uint32_t actorFormId) {
@@ -4641,7 +4755,8 @@ bool RequestExternalComment(uint32_t actorFormId) {
         !ExternalGeneratedSpeechAllowed(actorFormId, gameState)) {
         return false;
     }
-    const std::string audience = BuildAudienceSnapshotJson("external_comment");
+    const std::string audience = BuildAudienceSnapshotJson("external_comment", actor.name);
+    BindExternalSpeechActor(actorFormId);
     HTTPManager::SendEvent("external_comment",
         BuildExternalSpeechPayload(actor, "comment", "", audience), audience);
     return true;
@@ -4659,7 +4774,8 @@ bool RequestExternalReaction(uint32_t actorFormId, const std::string& instructio
             actorFormId, cleanInstruction.size());
         return false;
     }
-    const std::string audience = BuildAudienceSnapshotJson("external_reaction");
+    const std::string audience = BuildAudienceSnapshotJson("external_reaction", actor.name);
+    BindExternalSpeechActor(actorFormId);
     HTTPManager::SendEvent("external_reaction",
         BuildExternalSpeechPayload(actor, "reaction", cleanInstruction, audience), audience);
     return true;
@@ -4685,6 +4801,7 @@ bool RequestExternalQuestion(uint32_t actorFormId, const std::string& question) 
     if (!g_conversationActive && !StartConversationForActor(actorFormId, actor.name, false)) {
         return false;
     }
+    MarkExternalConversation(actorFormId);
     SendPlayerMessage(cleanQuestion);
     return true;
 }
@@ -4718,6 +4835,7 @@ bool RequestTextInputMenuOpenForActor(uint32_t actorFormId, const std::string& a
     if (!WriteTextInputTargetHint(actorFormId, actor.name.empty() ? actorName : actor.name)) {
         return false;
     }
+    g_preparedTextInputTarget.external = true;
     WriteToolBridgeSignal(kOpenTextInputMenuPath, "text_input");
     g_textInputMenuPending.store(true);
     g_textInputMenuRequestTick.store(now);
@@ -4759,7 +4877,8 @@ void StopConversation() {
             << "}";
     HTTPManager::SendEvent("conversation_end", payload.str());
     ResetBoredEventTimer("conversation end");
-    
+
+    g_externalConversationActorFormId = 0;
     g_conversationActive = false;
     g_conversationIsNarrator = false;
     g_conversationPartner.clear();
@@ -4955,6 +5074,7 @@ int RequestAddonMessage(uint32_t actorFormId, int mode, const std::string& text)
     if (!g_conversationActive && !StartConversationForActor(actorFormId, actor.name, false)) {
         return -3;
     }
+    MarkExternalConversation(actorFormId);
     return SendPlayerMessageImpl(cleanText, kAddonModes[mode]) ? 1 : -3;
 }
 
@@ -4974,7 +5094,8 @@ int RequestAddonReaction(uint32_t actorFormId, bool eligibleOnly, const std::str
         return -3;
     }
     if (!ExternalGeneratedSpeechAllowed(actorFormId, gameState, !eligibleOnly)) return -3;
-    const std::string audience = BuildAudienceSnapshotJson("external_reaction");
+    const std::string audience = BuildAudienceSnapshotJson("external_reaction", actor.name);
+    BindExternalSpeechActor(actorFormId);
     HTTPManager::SendEvent("external_reaction",
         BuildExternalSpeechPayload(actor, "reaction", cleanInstruction, audience), audience);
     return 1;

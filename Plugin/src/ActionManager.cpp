@@ -2711,6 +2711,18 @@ bool BuildActionRequestFromRoleCommandJson(const std::string& lineObject,
     }
     if (request.speakerFormId == 0 && !request.narratorAuthority) {
         request.speakerFormId = ResolveSpeakerFormId(request.speaker);
+        // Name and current-target fallback may pick an unregistered actor; only the actors that may
+        // speak in responses may act. A line with no resolvable actor still runs speakerless.
+        const uint32_t playerFormId = Misc::GetPlayerFormId() != 0 ? Misc::GetPlayerFormId() : 0x00000014;
+        if (request.speakerFormId != 0 && request.speakerFormId != playerFormId &&
+            !GameLoop::IsResponseSpeakerAllowed(request.speakerFormId)) {
+            Logger::LogInfo("%s: Rejected action %s for unregistered resolved speaker [%s] (0x%08X)",
+                source ? source : "ActionManager",
+                request.action.c_str(),
+                request.speaker.c_str(),
+                request.speakerFormId);
+            return false;
+        }
     }
 
     request.targetFormId = ParseActionFormId(ExtractJsonStringValue(lineObject, "target_refid"));

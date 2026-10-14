@@ -3920,7 +3920,8 @@ static uint32_t g_faceTargetTargetFormId = 0;
 
         for (const Candidate& candidate : candidates) {
             if (candidate.formId == 0 || candidate.formId == rejectedFormId ||
-                ExternalCommandBridge::IsActorTalkBlocked(candidate.formId)) {
+                ExternalCommandBridge::IsActorTalkBlocked(candidate.formId) ||
+                !GameLoop::IsResponseSpeakerAllowed(candidate.formId)) {
                 continue;
             }
             if (!IsLivePlaybackSpeaker(candidate.formId, line.actor)) {
@@ -3971,7 +3972,11 @@ static uint32_t g_faceTargetTargetFormId = 0;
             return true;
         }
         std::string speakerReason;
-        if (!IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
+        const bool speakerAllowed = GameLoop::IsResponseSpeakerAllowed(speakerFormId);
+        if (!speakerAllowed) {
+            speakerReason = "speaker is not a registered AI agent";
+        }
+        if (!speakerAllowed || !IsLivePlaybackSpeaker(speakerFormId, line.actor, &speakerReason)) {
             if (TryRebindSpeakerForPlayback(line, speakerFormId, speakerReason)) {
                 return false;
             }
