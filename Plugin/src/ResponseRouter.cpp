@@ -489,6 +489,36 @@ uint32_t ResolveResponseSpeakerFormId(const std::string& speaker) {
     return 0;
 }
 
+// Player and Narrator keep their special handling; NPC lines need a registered or bound actor.
+bool IsAllowedResponseSpeaker(const std::string& speaker, uint32_t formId) {
+    return IsPlayerSpeakerName(speaker) ||
+        EqualsIgnoreCase(speaker, "The Narrator") ||
+        GameLoop::IsResponseSpeakerAllowed(formId);
+}
+
+bool IsActionLineSpeakerAllowed(const std::string& lineObject, const char* source) {
+    std::string speaker = Trim(ExtractJsonStringValue(lineObject, "speaker"));
+    if (speaker.empty()) {
+        speaker = Trim(ExtractJsonStringValue(lineObject, "character"));
+    }
+    uint32_t formId = ParseFormIdString(ExtractJsonStringValue(lineObject, "speaker_refid"));
+    if (formId == 0) {
+        formId = ParseFormIdString(ExtractJsonStringValue(lineObject, "speaker_formid"));
+    }
+    if (speaker.empty() && formId == 0) {
+        return true;
+    }
+    if (formId == 0 && !IsPlayerSpeakerName(speaker) && !EqualsIgnoreCase(speaker, "The Narrator")) {
+        formId = ResolveResponseSpeakerFormId(speaker);
+    }
+    if (IsAllowedResponseSpeaker(speaker, formId)) {
+        return true;
+    }
+    Logger::LogInfo("%s: Rejected action for unregistered speaker [%s] (0x%08X)",
+        source ? source : "ResponseRouter", speaker.c_str(), formId);
+    return false;
+}
+
 // A scene is accepted once across streaming and the final action-only pass.
 // Validate the entire cast before queueing speech; ordinary response routing stays unchanged.
 bool QueueDirectorScene(const std::string& lineObject, const char* source, uint64_t generation) {
@@ -522,7 +552,7 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
         queued.directorScene = true;
         const auto actor = ActorPositionResolverFNV::ResolveActor(queued.actorFormId);
         if (queued.utteranceId.empty() || std::find(utteranceIds.begin(), utteranceIds.end(), queued.utteranceId) != utteranceIds.end()
-            || queued.actorFormId == 0 || IsPlayerSpeakerName(queued.speaker) || queued.text.empty()
+            || !GameLoop::IsResponseSpeakerAllowed(queued.actorFormId) || IsPlayerSpeakerName(queued.speaker) || queued.text.empty()
             || queued.text.size() > 2400 || queued.ttsCacheKey.empty() || queued.listenerFormId == 0
             || !actor.resolved || !ActorPositionResolverFNV::IsPositionInPlayerScene(actor)) {
             Logger::LogWarning("DirectorScene: unavailable speaker/listener or invalid line in scene %s", id.c_str());
@@ -539,7 +569,7 @@ bool QueueDirectorScene(const std::string& lineObject, const char* source, uint6
         // Older scenes retain their closing actions; v2 attaches actions to a spoken line.
         const int afterLine = attachedActions ? ExtractJsonIntValue(action, "after_line", 0) : static_cast<int>(lines.size());
         if (!ActionManager::IsDirectorSceneAction(command, narrator)
-            || (!narrator && (ResolveResponseSpeakerFormId(speaker) == 0 || IsPlayerSpeakerName(speaker)))
+            || (!narrator && (!GameLoop::IsResponseSpeakerAllowed(ResolveResponseSpeakerFormId(speaker)) || IsPlayerSpeakerName(speaker)))
             || (!authority.empty() && !narrator)
             || afterLine < 1 || afterLine > static_cast<int>(lines.size())
             || (attachedActions && !narrator && speaker != dialogue[afterLine - 1].speaker)) {
@@ -671,6 +701,14 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
         }
 
         if (action.empty() || action == "say") {
+            const uint32_t actorFormId = speakerFormId != 0 ? speakerFormId : ResolveResponseSpeakerFormId(speaker);
+            if (!IsAllowedResponseSpeaker(speaker, actorFormId)) {
+                Logger::LogInfo("%s: Rejected dialogue line for unregistered speaker [%s] (0x%08X)",
+                    source ? source : "ResponseRouter",
+                    speaker.c_str(),
+                    actorFormId);
+                continue;
+            }
             const std::string queuedSpeaker = NormalizePlayerSpeakerForDisplay(speaker);
             if (displayName.empty()) {
                 displayName = queuedSpeaker;
@@ -696,7 +734,7 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
                 listenerFormId,
                 rechatTargetFormId,
                 responseRechatDepth,
-                speakerFormId != 0 ? speakerFormId : ResolveResponseSpeakerFormId(speaker)
+                actorFormId
             });
 
             if (!isPlayerTextOnly) {
@@ -704,7 +742,9 @@ bool ProcessJsonResponse(const std::string& response, const char* source, uint64
                 Console::Print(subtitle.c_str());
             }
         } else if (isActionCommand) {
-            actionLines.push_back(lineObject);
+            if (IsActionLineSpeakerAllowed(lineObject, source)) {
+                actionLines.push_back(lineObject);
+            }
         } else {
             Logger::LogInfo("%s: Ignoring non-dialogue JSON action: [%s]",
                 source ? source : "ResponseRouter",
@@ -767,7 +807,7 @@ bool ProcessJsonActionsOnly(const std::string& response, const char* source, uin
         }
         const std::string action = Trim(ExtractJsonStringValue(lineObject, "action"));
         const bool isActionCommand = action == "rolecommand" || ActionManager::IsActionCommand(action);
-        if (!isActionCommand) {
+        if (!isActionCommand || !IsActionLineSpeakerAllowed(lineObject, source)) {
             continue;
         }
 
