@@ -225,6 +225,18 @@ registered actor does not become a teammate, and `DialecticRecruit` does not
 register one. These commands read and change that registry and request
 context uploads through the same managers as the hotkeys and MCM.
 
+As in CHIM, only registered agents are picked automatically as conversation
+targets, join the speaking audience, give auto greetings, or speak and act in
+ordinary server responses. Unregistered nearby actors remain nearby-actor
+context. Turning automatic activation off stops new automatic registrations;
+existing agents stay usable. The actor-bound events and addon requests do not
+need registration. The exact actor may answer an accepted request until the
+next player message, cell change or runtime reset. A conversation that
+`DialecticAsk`, `DialecticOpenPrompt` or `DialecticSendAddonMessage` starts or
+continues with its exact actor keeps that actor speaking, and in the audience,
+until the conversation ends or moves to another partner. An ordinary
+conversation stops admitting its partner once the partner is deregistered.
+
 Queries need no handle and change nothing. They read Dialectic's existing
 native snapshot of nearby actors, so they see only actors that are loaded,
 alive, not excluded in Dialectic's settings and in the player's current cell or

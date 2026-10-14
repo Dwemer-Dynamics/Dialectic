@@ -76,6 +76,10 @@ int RequestAddonMessage(uint32_t actorFormId, int mode, const std::string& text)
 int RequestAddonReaction(uint32_t actorFormId, bool eligibleOnly, const std::string& instruction);
 // Quiet form of the exact scene/eligibility gate used by the public event API.
 bool IsExternalActorAvailable(uint32_t actorFormId);
+// NPC speech and actions are accepted only from registered agents, the partner of a conversation
+// started through the actor-bound API, or the exact actor of the latest external request in the
+// current runtime generation.
+bool IsResponseSpeakerAllowed(uint32_t actorFormId);
 bool IsTextInputMenuActiveOrRecentlyClosed();
 void MarkRuntimeConfigDirty();
 void RequestDialecticControlMenuOpen();
