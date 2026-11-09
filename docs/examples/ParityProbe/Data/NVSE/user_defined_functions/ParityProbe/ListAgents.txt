@@ -1,0 +1,19 @@
+; Optional read-only agent demo. OnExternalCommand compiles this only for Ping parameter
+; "agents" and only when Dialectic registers DialecticGetNearbyActors.
+; It reads at most 4 nearby agents and the closest one; it registers, unregisters
+; and refreshes nothing.
+array_var aAgents
+ref rClosest
+string_var sResult
+int iCount
+
+begin function {}
+    let aAgents := DialecticGetNearbyActors 0 4
+    let iCount := ar_Size aAgents
+    let rClosest := DialecticGetClosestAgent
+    let sResult := "agents=" + $iCount
+    if eval rClosest
+        let sResult += " closest=" + $rClosest
+    endif
+    SetFunctionValue sResult
+end

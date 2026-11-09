@@ -7,11 +7,11 @@
 #include "ResponseQueueFNV.h"
 #include "SpeakManager.h"
 #include "TaskManager.h"
-#include "VoiceRecorder.h"
 #include "XNVSEAdapter.h"
 #include "RuntimeGeneration.h"
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <regex>
 
 namespace Interaction {
@@ -19,6 +19,10 @@ namespace {
 std::atomic<int> status{2}, desired{-1};
 std::atomic<bool> busy{false};
 std::atomic<uint64_t> epoch{1}, generation{0};
+// Changes whenever desired changes, so an in-flight sync cannot commit a stale target.
+std::atomic<uint64_t> syncEpoch{1};
+// Orders desired/syncEpoch changes on the game thread against sync-task commits.
+std::mutex commitMutex;
 bool listener = false;
 auto nextAttempt = std::chrono::steady_clock::time_point{};
 
@@ -34,6 +38,14 @@ bool Decode(const std::string& body, bool& enabled, uint64_t& version) {
     return true;
 }
 
+void SetDesired(int target) {
+    std::lock_guard<std::mutex> lock(commitMutex);
+    desired = target;
+    ++syncEpoch;
+}
+
+// Interaction gates replies, never the microphone: a capture keeps recording, uploads and
+// delivers its transcript, and the player-input path decides whether it may start a reply.
 void DiscardPending() {
     ++epoch;
     HTTPManager::DiscardInteractionResponses();
@@ -41,8 +53,6 @@ void DiscardPending() {
     GameThreadDispatcher::CancelByType("action", "interaction_off");
     GameThreadDispatcher::CancelByType("narrator_action", "interaction_off");
     SpeakManager::DiscardPendingInteraction();
-    VoiceRecorder::StopRecording();
-    VoiceRecorder::StopOpenMicMonitoring();
 }
 }
 int Status() { return status.load(); }
@@ -68,7 +78,7 @@ void Toggle() {
         XNVSEAdapter::UpdateInteractionMenuState(Status());
         return;
     }
-    if (Status() != 3) desired = Allowed() ? 0 : 1;
+    if (Status() != 3) SetDesired(Allowed() ? 0 : 1);
     status = 2;
     DiscardPending();
     if (MultiplayerSharing::IsListener()) {
@@ -77,6 +87,21 @@ void Toggle() {
     }
     nextAttempt = {};
     Update();
+}
+int Request(bool enabled) {
+    const int target = enabled ? 1 : 0;
+    const int current = Status();
+    if (current == target || (current == 2 && desired == target)) return current == target ? 1 : 2;
+    SetDesired(target);
+    status = 2;
+    DiscardPending();
+    if (MultiplayerSharing::IsListener()) {
+        const bool saved = Config::WriteCustomINIValue("Interaction", "ListenerEnabled", enabled ? "1" : "0");
+        status = saved ? target : 3;
+    }
+    nextAttempt = {};
+    Update();
+    return 2;
 }
 void Update() {
     static int lastStatus = 2;
@@ -98,7 +123,7 @@ void Update() {
         listener = nowListener;
         status = 2;
         DiscardPending();
-        desired = -1;
+        SetDesired(-1);
         nextAttempt = {};
     }
     if (nowListener) {
@@ -108,8 +133,13 @@ void Update() {
     if ((Status() != 2 && Status() != 3) || busy || std::chrono::steady_clock::now() < nextAttempt) return;
     busy = true;
     nextAttempt = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    const auto requestEpoch = Epoch();
-    const int target = desired.load();
+    uint64_t requestEpoch = 0;
+    int target = -1;
+    {
+        std::lock_guard<std::mutex> lock(commitMutex);
+        requestEpoch = syncEpoch.load();
+        target = desired.load();
+    }
     TaskManager::Options options;
     options.type = "interaction_sync";
     options.lane = TaskManager::Lane::Background;
@@ -123,12 +153,16 @@ void Update() {
                 + (target ? "true" : "false") + ",\"generation\":" + std::to_string(version) + "}"), enabled, version)
                 && enabled == (target == 1);
         }
-        if (Epoch() == requestEpoch) {
+        std::lock_guard<std::mutex> lock(commitMutex);
+        if (syncEpoch == requestEpoch) {
             if (valid) { generation = version; desired = enabled ? 1 : 0; status = enabled ? 1 : 0; }
             else status = 3;
         }
     }, [requestEpoch](bool, const char*) {
-        if (Epoch() == requestEpoch && Status() == 2) status = 3;
+        {
+            std::lock_guard<std::mutex> lock(commitMutex);
+            if (syncEpoch == requestEpoch && Status() == 2) status = 3;
+        }
         busy = false;
     });
     if (!task) { busy = false; status = 3; }

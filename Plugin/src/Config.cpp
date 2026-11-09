@@ -908,7 +908,8 @@ namespace Config {
             "DIRECTOR",
             "INJECTION_LOG",
             "INJECTION_CHAT",
-            "CHEATMODE"
+            "CHEATMODE",
+            "HYPNOSIS"
         };
         spatialAudioEnabled = true;
         worldContextEnabled = true;

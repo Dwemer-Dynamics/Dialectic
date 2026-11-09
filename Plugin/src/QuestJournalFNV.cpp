@@ -44,6 +44,8 @@ static std::chrono::steady_clock::time_point g_lastSendTime;
 static std::chrono::steady_clock::time_point g_lastCheckTime;
 static std::vector<QuestEntry> g_quests;
 static std::string g_lastSentSignature;
+static uint64_t g_snapshotGeneration = 0;
+static bool g_hasSnapshot = false;
 static std::mutex g_mutex;
 static std::string g_lastStatus;
 static std::chrono::steady_clock::time_point g_lastStatusLogTime;
@@ -97,7 +99,7 @@ std::string FallbackQuestName(const QuestEntry& quest) {
 
 bool RefreshFromNative() {
     const RuntimeSnapshot::QuestState native = RuntimeSnapshot::GetQuest();
-    if (native.capturedAt.time_since_epoch().count() == 0) {
+    if (native.capturedAt.time_since_epoch().count() == 0 || !RuntimeGeneration::IsCurrent(native.generation)) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_quests.clear();
         return false;
@@ -261,7 +263,7 @@ void SendQuests(std::vector<QuestEntry> quests) {
 } // namespace
 
 void SendNow(bool force) {
-    RefreshFromNative();
+    if (!RefreshFromNative()) return;
 
     std::vector<QuestEntry> quests;
     {
@@ -274,14 +276,17 @@ void SendNow(bool force) {
     bool hadPreviousSnapshot = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        changed = signature != g_lastSentSignature;
-        hadPreviousSnapshot = !g_lastSentSignature.empty();
+        const auto generation = RuntimeGeneration::Current();
+        hadPreviousSnapshot = g_hasSnapshot && g_snapshotGeneration == generation;
+        changed = !hadPreviousSnapshot || signature != g_lastSentSignature;
         if (!force && !changed) {
             return;
         }
 
         g_lastSendTime = std::chrono::steady_clock::now();
         g_lastSentSignature = signature;
+        g_snapshotGeneration = generation;
+        g_hasSnapshot = true;
     }
 
     SendQuests(quests);
@@ -290,7 +295,7 @@ void SendNow(bool force) {
             [](const QuestEntry& quest) { return quest.selected; });
         if (selected != quests.end() && !selected->name.empty()) {
             const std::string briefing = BuildBriefing(*selected);
-            std::string text = "The active quest changed to " + selected->name;
+            std::string text = "Active quest update: " + selected->name;
             if (!briefing.empty() && briefing != selected->name) {
                 text += ": " + briefing;
             }
