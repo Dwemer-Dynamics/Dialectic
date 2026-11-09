@@ -1,0 +1,9 @@
+; Releases only ParityProbe's own talk lock; another addon's lock on the same actor stays.
+int iHandle
+ref rActor
+
+begin function {iHandle, rActor}
+    if eval rActor
+        rActor.DialecticSetActorTalkLock iHandle 0
+    endif
+end

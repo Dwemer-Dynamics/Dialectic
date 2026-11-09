@@ -1,6 +1,7 @@
 #include "ExternalEventAPI.h"
 
 #include "ActionManager.h"
+#include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "GameThreadDispatcher.h"
 #include "Logger.h"
@@ -107,6 +108,9 @@ bool Initialize() {
     if (!registered) {
         Logger::LogWarning("[xNVSE event API] one or more events unavailable; inspect collision/interface logs");
     }
+    if (!ExternalCommandBridge::Initialize()) {
+        Logger::LogWarning("[xNVSE event API] external command bridge unavailable");
+    }
     return registered;
 }
 
@@ -116,6 +120,8 @@ void Shutdown() {
     }
     XNVSEAdapter::UnregisterPublicDialecticEvents();
     GameThreadDispatcher::CancelByType("public_event", "public_event_api_shutdown");
+    ExternalCommandBridge::CancelAll("public_event_api_shutdown");
+    ExternalCommandBridge::ClearActorFlags("public_event_api_shutdown");
 }
 
 } // namespace ExternalEventAPI

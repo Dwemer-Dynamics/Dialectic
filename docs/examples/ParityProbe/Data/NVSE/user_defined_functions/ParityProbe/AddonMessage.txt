@@ -1,0 +1,21 @@
+; Optional addon API level 3 message demo. AddonLevel3.txt schedules this 10 seconds after a
+; Ping with parameter "whisper" or "react"; nothing else runs it.
+; iKind 1 sends one whisper addon message; iKind 2 requests one explicit reaction.
+; Results: 1 queued, -2 invalid input, -3 refused by a gate (reason in dialectic.log).
+int iHandle
+ref rActor
+int iKind
+int iResult
+
+begin function {iHandle, rActor, iKind}
+    if eval !rActor
+        return
+    endif
+    if eval iKind == 1
+        let iResult := rActor.DialecticSendAddonMessage iHandle 1 "ParityProbe whisper check. Reply quietly."
+        Print "[ParityProbe] whisper message result=" + $iResult
+    elseif eval iKind == 2
+        let iResult := rActor.DialecticRequestAddonReaction iHandle 0 "React briefly to the ParityProbe check."
+        Print "[ParityProbe] explicit reaction result=" + $iResult
+    endif
+end

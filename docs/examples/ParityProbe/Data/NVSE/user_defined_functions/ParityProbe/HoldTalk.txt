@@ -1,0 +1,24 @@
+; Optional addon-control demo. OnExternalCommand compiles this only for Ping parameter
+; "hold" and only when Dialectic registers DialecticSetActorTalkLock.
+; It takes this handle's talk lock for 10 seconds and schedules its own release, so it
+; never locks an actor indefinitely. Dialectic also drops every flag before a save loads.
+int iHandle
+ref rActor
+ref rRelease
+int iResult
+
+begin function {iHandle, rActor}
+    ; Compile the release first so the lock is never taken without a way to drop it.
+    let rRelease := CompileScript "ParityProbe/ReleaseTalk.txt"
+    if eval !rRelease
+        SetFunctionValue 0
+        return
+    endif
+
+    ; 1 applied; negative values are rejections, explained in dialectic.log.
+    let iResult := rActor.DialecticSetActorTalkLock iHandle 1
+    if eval iResult == 1
+        CallAfterSeconds 10 rRelease 0 iHandle rActor
+    endif
+    SetFunctionValue iResult
+end

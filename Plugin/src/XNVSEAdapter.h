@@ -321,6 +321,24 @@ bool Initialize(const void* nvseInterface, std::uint32_t pluginHandle, MessageCa
 void Shutdown();
 bool RegisterPublicDialecticEvents(PublicDialecticEventCallback callback);
 void UnregisterPublicDialecticEvents();
+// Reads TESForm::refID from a script command reference or Script, or 0.
+std::uint32_t FormIdOf(const void* form);
+// Reads refID only for an NPC or creature reference other than the player, or 0.
+std::uint32_t ActorFormIdOf(const void* reference);
+// Game thread only. The loaded TESObjectREFR for an actor form ID, or nullptr.
+void* FindLoadedActorReference(std::uint32_t actorFormId);
+// Registers the Dialectic-only DialecticExternalCommand and DialecticOwnedExternalCommand
+// events (not script-dispatchable).
+bool RegisterExternalCommandEvent();
+// Game thread only. Dispatches on the exact loaded reference; never substitutes another actor.
+// A nonzero owned-bridge handle selects DialecticOwnedExternalCommand.
+bool DispatchExternalCommandEvent(std::uint32_t actorFormId,
+                                  std::uint32_t handle,
+                                  const std::string& bridge,
+                                  const std::string& command,
+                                  const std::string& parameter,
+                                  std::uint32_t requestId,
+                                  std::size_t& scriptHandlers);
 bool IsInitialized();
 bool HasMessaging();
 void SetPlayerInventoryChangeCallback(PlayerInventoryChangeCallback callback);

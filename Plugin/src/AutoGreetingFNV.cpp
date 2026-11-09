@@ -1,6 +1,8 @@
 #include "AutoGreetingFNV.h"
 
 #include "ActorPositionResolverFNV.h"
+#include "AgentManager.h"
+#include "ExternalCommandBridge.h"
 #include "GameLoop.h"
 #include "HTTPManager.h"
 #include "Logger.h"
@@ -155,12 +157,19 @@ void Update() {
         return;
     }
 
+    // The server picks greeters from nearby-actor context; only registered agents may greet.
+    if (!AgentManager::IsAIAgent(pending.npcFormId)) {
+        cancel("actor_not_registered");
+        return;
+    }
+
     const auto actor = ActorPositionResolverFNV::ResolveActor(pending.npcFormId);
     RuntimeSnapshot::ActorState actorState;
     if (!actor.resolved || !ActorPositionResolverFNV::IsPositionInPlayerScene(actor) ||
         !ActorPositionResolverFNV::IsActorPositionFresh(pending.npcFormId, 3000) ||
         (actor.deadKnown && actor.isDead) || (actor.disabledKnown && actor.isDisabled) ||
         (actor.sceneBusyKnown && actor.sceneBusy) ||
+        ExternalCommandBridge::IsActorTalkBlocked(pending.npcFormId) ||
         (RuntimeSnapshot::TryGetActor(pending.npcFormId, actorState) &&
          (actorState.inCombat || actorState.hostileToPlayer || actorState.dead))) {
         cancel("actor_not_available");

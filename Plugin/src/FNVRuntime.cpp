@@ -3,6 +3,7 @@
 #include "ActionManager.h"
 #include "ActorPositionResolverFNV.h"
 #include "Config.h"
+#include "ExternalCommandBridge.h"
 #include "GameThreadDispatcher.h"
 #include "HTTPManager.h"
 #include "Logger.h"
@@ -1021,6 +1022,14 @@ void OnMessage(const XNVSEAdapter::Message& message) {
         WorldContextFNV::BeginSaveLoad();
     } else if (message.event == Event::PostLoadGame) {
         WorldContextFNV::CompleteSaveLoad(message.flag);
+    }
+
+    // Addon actor flags belong to one playthrough. Clear before a save loads rather than
+    // on LoadGame/NewGame, so flags re-applied by addon load scripts are not dropped.
+    if (message.event == Event::PreLoadGame || message.event == Event::ExitToMainMenu ||
+        message.event == Event::ExitGame) {
+        ExternalCommandBridge::ClearActorFlags(message.event == Event::PreLoadGame ? "pre_load_game" :
+            message.event == Event::ExitToMainMenu ? "exit_to_main_menu" : "exit_game");
     }
 
     if (InvalidatesGeneration(message.event)) {

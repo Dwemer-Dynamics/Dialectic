@@ -3,6 +3,7 @@
 #include "ActivityStatusFNV.h"
 
 #include "Config.h"
+#include "ExternalCommandBridge.h"
 #include "HTTPManager.h"
 #include "Logger.h"
 #include "Misc.h"
@@ -401,6 +402,12 @@ void Update() {
 bool IsAutomaticDialogueAllowed(std::uint32_t formId, std::string* reason) {
     if (formId == 0) {
         return true;
+    }
+    if (const char* blocked = ExternalCommandBridge::ActorBlockReason(formId)) {
+        if (reason) {
+            *reason = blocked;
+        }
+        return false;
     }
 
     AutomaticDialogueState state;

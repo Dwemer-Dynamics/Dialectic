@@ -1,0 +1,30 @@
+; Optional addon API level 3 demos. OnExternalCommand compiles this only for Ping parameter
+; "context", "whisper" or "react", and only when Dialectic registers the level 3 commands.
+; "context" sends one namespaced context line, never player speech. "whisper" and "react"
+; schedule AddonMessage.txt 10 seconds later, because the actor's reply to this action is
+; still being spoken and a message or reaction is refused (-3) while dialogue is busy.
+int iHandle
+ref rActor
+string_var sParameter
+ref rLater
+int iResult
+int iKind
+
+begin function {iHandle, rActor, sParameter}
+    if eval sParameter == "context"
+        let iResult := rActor.DialecticSendAddonContext iHandle "state" "parity.check" "ParityProbe context check"
+        SetFunctionValue ("context=" + $iResult)
+        return
+    endif
+    let rLater := CompileScript "ParityProbe/AddonMessage.txt"
+    if eval !rLater
+        SetFunctionValue "scheduled=0"
+        return
+    endif
+    let iKind := 2
+    if eval sParameter == "whisper"
+        let iKind := 1
+    endif
+    CallAfterSeconds 10 rLater 0 iHandle rActor iKind
+    SetFunctionValue ("scheduled=" + sParameter)
+end
